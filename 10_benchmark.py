@@ -43,7 +43,6 @@ def save_output(data, folder_name, run_num, runtime):
 
 # Running algorithms
 for i in range(1, 11):
-    """
     # PCA
     start_time = time.time()
     pca = PCA(n_components=10)
@@ -116,7 +115,7 @@ for i in range(1, 11):
     runtime = time.time() - start_time
     boruta_df = pd.DataFrame(X_combined.columns[boruta.support_], columns=["Selected_Features"])
     save_output(boruta_df, "Boruta", i, runtime)
-
+    """
     # RFECV - Standard RFECV with RandomForest
     start_time = time.time()
     rf = RandomForestClassifier(n_estimators=100, random_state=1)
@@ -125,7 +124,7 @@ for i in range(1, 11):
     runtime = time.time() - start_time
     rfecv_df = pd.DataFrame(X_combined.columns[rfecv.support_], columns=["Selected_Features"])
     save_output(rfecv_df, "RFECV_RandomForest", i, runtime)
-"""
+    """
     # RFECV - Alternative with Logistic Regression for faster results
     start_time = time.time()
     log_reg = LogisticRegression(max_iter=1000)
