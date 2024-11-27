@@ -1,0 +1,197 @@
+import os
+import time
+import pandas as pd
+import numpy as np
+from sklearn.decomposition import PCA, NMF, FastICA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.manifold import TSNE
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.linear_model import LogisticRegression, Lasso
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import mutual_info_classif
+from boruta import BorutaPy
+from skrebate import ReliefF
+from sklearn.model_selection import StratifiedKFold
+
+# Load datasets
+exp_df = pd.read_csv('sarcoma/exp', sep=None, engine='python', index_col=0)
+methy_df = pd.read_csv('sarcoma/methy', sep=None, engine='python', index_col=0)
+mirna_df = pd.read_csv('sarcoma/mirna', sep=None, engine='python', index_col=0)
+survival_df = pd.read_csv('sarcoma/survival', sep=None, engine='python')
+
+# Prepare data
+survival_df['PatientID'] = survival_df['PatientID'].str.replace('-', '.')
+data_modalities = {'Gene Expression': exp_df, 'Methylation': methy_df, 'miRNA': mirna_df}
+results_list = []
+
+# Find common patients across all datasets
+common_patients = set(survival_df['PatientID'])
+for modality_name, modality_df in data_modalities.items():
+    modality_patients = set(modality_df.columns)
+    common_patients = common_patients.intersection(modality_patients)
+common_patients = list(common_patients)
+
+# Filter survival data to include only common patients
+survival_filtered = survival_df[survival_df['PatientID'].isin(common_patients)]
+survival_filtered = survival_filtered.sort_values('PatientID').reset_index(drop=True)
+
+# Target variable
+y = survival_filtered['Death'].astype(int)
+
+# Initialize algorithms
+dim_reduction_algorithms = {
+    'PCA': PCA(n_components=10),
+    'NMF': NMF(n_components=10, max_iter=1000, init='nndsvda', random_state=None),
+    'LDA': LDA(),
+    'ICA': FastICA(n_components=10, max_iter=2000, tol=0.001, random_state=None),
+    't-SNE': TSNE(n_components=2, perplexity=30, random_state=None)
+}
+
+feature_selection_algorithms = {
+    'MRMR': 'mutual_info',
+    'LASSO': 'lasso',
+    'Logistic_L1': 'logistic_l1',
+    'ReliefF': 'relieff',
+    'Boruta': 'boruta',
+    # 'RFECV_LogisticRegression': 'rfecv'  # Commented out due to long runtime
+}
+
+# Function to apply algorithms
+def apply_algorithms(modality_name, X, y, results_list):
+    print(f"\nProcessing modality: {modality_name}")
+    modality_results = []
+    for alg_name, alg in dim_reduction_algorithms.items():
+        runtimes = []
+        selected_features_list = []
+        print(f"Running {alg_name}")
+        for i in range(1, 11):
+            start_time = time.time()
+            # Set random state if applicable
+            if hasattr(alg, 'random_state'):
+                alg.random_state = i
+            # NMF requires non-negative data
+            if alg_name == 'NMF':
+                scaler = MinMaxScaler()
+                X_scaled = scaler.fit_transform(X)
+            else:
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(X)
+            if alg_name == 'LDA':
+                # For LDA, adjust n_components
+                n_components = min(len(np.unique(y)) - 1, X_scaled.shape[1])
+                alg.n_components = n_components
+                X_transformed = alg.fit_transform(X_scaled, y)
+                # Extract top features based on absolute values of coefficients
+                feature_importances = np.abs(alg.coef_).flatten()
+                top_features = X.columns[np.argsort(feature_importances)[-10:]].tolist()
+                selected_features_list.extend(top_features)
+            elif alg_name == 't-SNE':
+                X_transformed = alg.fit_transform(X_scaled)
+                # t-SNE does not provide feature importances
+            else:
+                X_transformed = alg.fit_transform(X_scaled)
+                # Extract top features based on components
+                if alg_name == 'PCA' or alg_name == 'ICA':
+                    components = alg.components_
+                    # Sum the absolute values of component loadings for each feature
+                    feature_importances = np.sum(np.abs(components), axis=0)
+                    top_features = X.columns[np.argsort(feature_importances)[-10:]].tolist()
+                    selected_features_list.extend(top_features)
+                elif alg_name == 'NMF':
+                    components = alg.components_
+                    # Sum the component weights for each feature
+                    feature_importances = np.sum(components, axis=0)
+                    top_features = X.columns[np.argsort(feature_importances)[-10:]].tolist()
+                    selected_features_list.extend(top_features)
+            runtime = time.time() - start_time
+            runtimes.append(runtime)
+            print(f"{alg_name} run {i}/10 done: time {runtime:.2f} seconds")
+        avg_runtime = np.mean(runtimes)
+        print(f"{alg_name} run 10/10 done: average time {avg_runtime:.2f} seconds")
+        # Get the most frequently selected features across runs
+        if selected_features_list:
+            feature_counts = pd.Series(selected_features_list).value_counts()
+            top_features_overall = feature_counts.head(10).index.tolist()
+        else:
+            top_features_overall = []
+        # Save results
+        modality_results.append({
+            'Modality': modality_name,
+            'Algorithm': alg_name,
+            'Average_Runtime': avg_runtime,
+            'Selected_Features': top_features_overall
+        })
+    # Feature Selection Algorithms
+    for alg_name, method in feature_selection_algorithms.items():
+        runtimes = []
+        print(f"Running {alg_name}")
+        selected_features_list = []
+        for i in range(1, 11):
+            start_time = time.time()
+            # Scaling data
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+            if method == 'mutual_info':
+                mi = mutual_info_classif(X_scaled, y)
+                selected_features = X.columns[np.argsort(mi)[-10:]].tolist()
+            elif method == 'lasso':
+                lasso = Lasso(alpha=0.01, max_iter=10000, random_state=i)
+                lasso.fit(X_scaled, y)
+                coef = lasso.coef_
+                selected_features = X.columns[coef != 0].tolist()
+            elif method == 'logistic_l1':
+                log_reg = LogisticRegression(
+                    penalty='l1',
+                    solver='liblinear',
+                    C=0.1,
+                    max_iter=10000,
+                    random_state=i
+                )
+                log_reg.fit(X_scaled, y)
+                coef = log_reg.coef_.flatten()
+                selected_features = X.columns[coef != 0].tolist()
+            elif method == 'relieff':
+                relief = ReliefF(n_neighbors=10)
+                relief.fit(X_scaled, y)
+                selected_features = X.columns[np.argsort(relief.feature_importances_)[-10:]].tolist()
+            elif method == 'boruta':
+                rf = RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=i)
+                boruta = BorutaPy(rf, n_estimators='auto', random_state=i)
+                boruta.fit(X_scaled, y)
+                selected_features = X.columns[boruta.support_].tolist()
+            # RFECV_LogisticRegression is commented out
+            runtime = time.time() - start_time
+            runtimes.append(runtime)
+            selected_features_list.extend(selected_features)
+            print(f"{alg_name} run {i}/10 done: time {runtime:.2f} seconds")
+        avg_runtime = np.mean(runtimes)
+        print(f"{alg_name} run 10/10 done: average time {avg_runtime:.2f} seconds")
+        # Get the most frequently selected features across runs
+        if selected_features_list:
+            feature_counts = pd.Series(selected_features_list).value_counts()
+            top_features = feature_counts.head(10).index.tolist()
+        else:
+            top_features = []
+        # Save results
+        modality_results.append({
+            'Modality': modality_name,
+            'Algorithm': alg_name,
+            'Average_Runtime': avg_runtime,
+            'Selected_Features': top_features
+        })
+    results_list.extend(modality_results)
+
+# Apply algorithms to each data modality
+for modality_name, modality_df in data_modalities.items():
+    # Filter modality data to include only common patients
+    modality_df = modality_df[common_patients]
+    modality_df = modality_df.loc[:, sorted(modality_df.columns)]
+    X = modality_df.transpose()
+    X = X.reset_index(drop=True)
+    X.columns = X.columns.astype(str)  # Ensure feature names are strings
+    apply_algorithms(modality_name, X, y, results_list)
+
+# Save all results to one CSV file
+results_df = pd.DataFrame(results_list)
+results_df.to_csv('algorithm_results.csv', index=False)
+print("\nAll results have been saved to 'algorithm_results.csv'.")
