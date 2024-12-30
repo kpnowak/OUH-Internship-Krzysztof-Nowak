@@ -1,2 +1,0 @@
-Average ROC-AUC: 0.7377
-Average Accuracy: 0.7096
