@@ -14,3 +14,8 @@ OR
 
 To install all packages, you can use the following command in your terminal:
 pip install -r requirements.txt
+
+*Open final_algorithm.py and run it to compute Task 1*
+
+In the old1_algorithmoutput you can find first algorithms written for the purpuse of first task
+In the old2_algorithmoutput you can find second algorithms and combination of the first ones written for the purpuse of first task
