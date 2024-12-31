@@ -9,6 +9,8 @@ It is a part of my Bachelor's Thesis and Internship at the Institute for Cancer 
 
 Run the following command in your terminal to create the environment:
 conda env create -f environment.yml
+conda activate OUH_Task1
+
 
 OR
 
