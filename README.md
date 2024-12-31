@@ -15,7 +15,8 @@ OR
 To install all packages, you can use the following command in your terminal:
 pip install -r requirements.txt
 
-*Open final_algorithm.py and run it to compute Task 1*
+*Open final_algorithm.py and run it to compute Task 1 on a single core (can take a lot of time)*
+*Open final_algorithm_multicore.py and run it to compute Task 1 on multiple CPU cores*
 
 In the old1_algorithmoutput you can find first algorithms written for the purpuse of first task
 In the old2_algorithmoutput you can find second algorithms and combination of the first ones written for the purpuse of first task
