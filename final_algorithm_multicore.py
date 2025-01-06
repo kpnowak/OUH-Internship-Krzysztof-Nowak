@@ -84,6 +84,13 @@ DATASETS = [
         "omics_dir": "melanoma",
         "id_col": "sampleID",
         "outcome_col": "pathologic_T"
+    },
+    {
+        "name": "Sarcoma",
+        "clinical_file": "clinical/sarcoma.csv",
+        "omics_dir": "sarcoma",
+        "id_col": "metsampleID",
+        "outcome_col": "pathologic_tumor_length"
     }
 ]
 
@@ -128,9 +135,7 @@ def load_dataset(ds_config):
     mirna_df = pd.read_csv(f"{omics_dir}/mirna.csv",  sep=None, engine='python', index_col=0)
 
     clinical_df = pd.read_csv(ds_config["clinical_file"], sep=None, engine='python')
-
     return exp_df, methy_df, mirna_df, clinical_df
-
 
 def prepare_data(ds_config, exp_df, methy_df, mirna_df, clinical_df):
     """
@@ -243,7 +248,6 @@ def apply_extraction(alg_name, alg_obj, X, y=None, n_components=8, random_state=
     else:
         X_reduced = alg_obj.fit_transform(X_scaled)
 
-    # If the estimator returns a tuple instead of a 2D array
     if isinstance(X_reduced, tuple):
         X_reduced = X_reduced[0]
 
@@ -258,14 +262,12 @@ def run_extraction_workflow(modality_name, mod_df, y, dataset_name, output_dir,
     n_comps_list = [8,16,32,64,128]
     reg_models = ['LinearRegression','RandomForest','SVR']
 
-    # Build all combos
     combos = []
     for ext_name, ext_obj in extr_algos.items():
         for n_comp in n_comps_list:
             combos.append((ext_name, ext_obj, n_comp))
 
     def process_extraction_combo(ext_name, ext_obj, n_comp):
-        # Increment the shared counter to track total progress (non-threadsafe, but works in practice)
         progress_counter[0] += 1
         current_run = progress_counter[0]
         print(f"[EXTRACTION] Running {current_run}/{total_runs} => "
@@ -276,14 +278,10 @@ def run_extraction_workflow(modality_name, mod_df, y, dataset_name, output_dir,
             X_reduced = apply_extraction(ext_name, ext_obj, mod_df, y, n_components=n_comp)
         except Exception as e:
             print(f"Skipping {dataset_name} -> {modality_name}-{ext_name}-{n_comp} due to error: {e}")
-            return combo_results  # empty
+            return combo_results
 
         for model_name in reg_models:
             model, metrics_dict = train_and_evaluate_regression(X_reduced, y, model_name)
-            model_fname = f"{dataset_name}_EXTRACT_{modality_name}_{ext_name}_{n_comp}_{model_name}.pkl"
-            model_path = os.path.join(output_dir, "models", model_fname)
-            joblib.dump(model, model_path)
-
             result_entry = {
                 'Dataset': dataset_name,
                 'Workflow': 'Extraction',
@@ -293,17 +291,18 @@ def run_extraction_workflow(modality_name, mod_df, y, dataset_name, output_dir,
                 'Model': model_name,
                 **metrics_dict
             }
-            combo_results.append(result_entry)
+            model_fname = f"{dataset_name}_EXTRACT_{modality_name}_{ext_name}_{n_comp}_{model_name}.pkl"
+            model_path = os.path.join(output_dir, "models", model_fname)
+            joblib.dump(model, model_path)
 
+            combo_results.append(result_entry)
         return combo_results
 
-    # Parallelize the extraction combos
     parallel_results = Parallel(n_jobs=-1)(
         delayed(process_extraction_combo)(ext_name, ext_obj, n_comp)
         for (ext_name, ext_obj, n_comp) in combos
     )
 
-    # Flatten results
     for rlist in parallel_results:
         results.extend(rlist)
 
@@ -327,52 +326,46 @@ def apply_selection_with_n(method, X, y, n_features=8, random_state=0):
         return X
 
     method = method.lower()
-    try:
-        if method == 'mrmr':
-            mi = mutual_info_regression(X, y, random_state=random_state)
-            top_idx = np.argsort(mi)[-n_features:]
-            return X.iloc[:, top_idx]
+    if method == 'mrmr':
+        mi = mutual_info_regression(X, y, random_state=random_state)
+        top_idx = np.argsort(mi)[-n_features:]
+        return X.iloc[:, top_idx]
 
-        elif method == 'lasso':
-            lasso = Lasso(alpha=0.01, max_iter=10000, random_state=random_state)
-            lasso.fit(X, y)
-            coefs = lasso.coef_
-            rank_idx = np.argsort(np.abs(coefs))[-n_features:]
-            return X.iloc[:, rank_idx]
+    elif method == 'lasso':
+        lasso = Lasso(alpha=0.01, max_iter=10000, random_state=random_state)
+        lasso.fit(X, y)
+        coefs = lasso.coef_
+        rank_idx = np.argsort(np.abs(coefs))[-n_features:]
+        return X.iloc[:, rank_idx]
 
-        elif method == 'enet':
-            enet = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=10000, random_state=random_state)
-            enet.fit(X, y)
-            coefs = enet.coef_
-            rank_idx = np.argsort(np.abs(coefs))[-n_features:]
-            return X.iloc[:, rank_idx]
+    elif method == 'enet':
+        enet = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=10000, random_state=random_state)
+        enet.fit(X, y)
+        coefs = enet.coef_
+        rank_idx = np.argsort(np.abs(coefs))[-n_features:]
+        return X.iloc[:, rank_idx]
 
-        elif method == 'freg':
-            Fvals, pvals = f_regression(X, y)
-            rank_idx = np.argsort(Fvals)[-n_features:]
-            return X.iloc[:, rank_idx]
+    elif method == 'freg':
+        Fvals, pvals = f_regression(X, y)
+        rank_idx = np.argsort(Fvals)[-n_features:]
+        return X.iloc[:, rank_idx]
 
-        elif method == 'boruta':
-            rf_est = RF_for_Boruta(n_estimators=100, random_state=random_state)
-            bor = BorutaPy(rf_est, n_estimators='auto', random_state=random_state)
-            bor.fit(X.values, y.values.astype(float))
-            mask = bor.support_
-            chosen_cols = X.columns[mask]
-            # If Boruta returns more than n_features, pick top N by rank
-            if len(chosen_cols) > n_features:
-                ranks = bor.ranking_
-                chosen_ranks = [(c, ranks[X.columns.get_loc(c)]) for c in chosen_cols]
-                sorted_cols = sorted(chosen_ranks, key=lambda x: x[1])
-                final_cols = [sc[0] for sc in sorted_cols[:n_features]]
-                return X[final_cols]
-            else:
-                return X[chosen_cols]
+    elif method == 'boruta':
+        rf_est = RF_for_Boruta(n_estimators=100, random_state=random_state)
+        bor = BorutaPy(rf_est, n_estimators='auto', random_state=random_state)
+        bor.fit(X.values, y.values.astype(float))
+        mask = bor.support_
+        chosen_cols = X.columns[mask]
+        if len(chosen_cols) > n_features:
+            ranks = bor.ranking_
+            chosen_ranks = [(c, ranks[X.columns.get_loc(c)]) for c in chosen_cols]
+            sorted_cols = sorted(chosen_ranks, key=lambda x: x[1])
+            final_cols = [sc[0] for sc in sorted_cols[:n_features]]
+            return X[final_cols]
         else:
-            print(f"Unknown FS method: {method}")
-            return X
-
-    except Exception as e:
-        print(f"{method} FS failed: {e}")
+            return X[chosen_cols]
+    else:
+        print(f"Unknown FS method: {method}")
         return X
 
 def run_selection_workflow(modality_name, mod_df, y, dataset_name, output_dir,
@@ -382,14 +375,12 @@ def run_selection_workflow(modality_name, mod_df, y, dataset_name, output_dir,
     n_feats_list = [8,16,32,64,128]
     reg_models = ['LinearRegression','RandomForest','SVR']
 
-    # Build combos
     combos = []
     for sel_name, sel_method in sel_algos.items():
         for n_feat in n_feats_list:
             combos.append((sel_name, sel_method, n_feat))
 
     def process_selection_combo(sel_name, sel_method, n_feat):
-        # Increment shared counter
         progress_counter[0] += 1
         current_run = progress_counter[0]
         print(f"[SELECTION] Running {current_run}/{total_runs} => "
@@ -397,16 +388,12 @@ def run_selection_workflow(modality_name, mod_df, y, dataset_name, output_dir,
 
         combo_results = []
         X_selected = apply_selection_with_n(sel_method, mod_df, y, n_features=n_feat)
-        if X_selected.shape[1] == 0:
-            print(f"Skipping {dataset_name} -> {modality_name}-{sel_name}-{n_feat}: No features selected.")
-            return combo_results  # empty
+        if X_selected.shape[0] == 0:
+            print(f"Skipping {dataset_name} -> {modality_name}-{sel_name}-{n_feat}: No rows after selection.")
+            return combo_results
 
         for model_name in reg_models:
             model, metrics_dict = train_and_evaluate_regression(X_selected, y, model_name)
-            model_fname = f"{dataset_name}_SELECT_{modality_name}_{sel_name}_{n_feat}_{model_name}.pkl"
-            model_path = os.path.join(output_dir, "models", model_fname)
-            joblib.dump(model, model_path)
-
             result_entry = {
                 'Dataset': dataset_name,
                 'Workflow': 'Selection',
@@ -416,17 +403,18 @@ def run_selection_workflow(modality_name, mod_df, y, dataset_name, output_dir,
                 'Model': model_name,
                 **metrics_dict
             }
-            combo_results.append(result_entry)
+            model_fname = f"{dataset_name}_SELECT_{modality_name}_{sel_name}_{n_feat}_{model_name}.pkl"
+            model_path = os.path.join(output_dir, "models", model_fname)
+            joblib.dump(model, model_path)
 
+            combo_results.append(result_entry)
         return combo_results
 
-    # Parallelize selection combos
     parallel_results = Parallel(n_jobs=-1)(
         delayed(process_selection_combo)(sel_name, sel_method, n_feat)
         for (sel_name, sel_method, n_feat) in combos
     )
 
-    # Flatten
     for rlist in parallel_results:
         results.extend(rlist)
 
@@ -441,12 +429,12 @@ def main():
     Two separate workflows for each dataset:
       - Extraction => regression
       - Selection => regression
-    We will print progress like '25/300' to inform the user which run is occurring.
+    We'll rely on method #3 "common_patients intersection" to skip entire dataset 
+    if no overlap. Additionally, we save a 'skipped.txt' file to logs/ if we skip.
     """
 
     # -------------------------------------------------------------------------
     # 1) Compute the TOTAL number of runs across all datasets
-    #    so we can do "current_run / total_runs" in prints.
     # -------------------------------------------------------------------------
     extraction_algos = list(get_extraction_algos().keys())
     selection_algos = list(get_selection_algos().keys())
@@ -454,29 +442,14 @@ def main():
     n_feats_list = [8,16,32,64,128]
     reg_models = ['LinearRegression','RandomForest','SVR']
 
-    # We need the total # of extraction combos for a single dataset & single modality:
-    #    (#extr_algos) * (#n_comps_list) * (#reg_models)
-    # and the total # of selection combos for a single dataset & single modality:
-    #    (#sel_algos) * (#n_feats_list) * (#reg_models).
-    # Then multiply each by (# of modalities) and sum for (# of datasets).
+    # 3 modalities
+    n_modalities = 3
+    single_dataset_extraction = len(extraction_algos)*len(n_comps_list)*len(reg_models)*n_modalities
+    single_dataset_selection  = len(selection_algos)*len(n_feats_list)*len(reg_models)*n_modalities
+    total_runs = (single_dataset_extraction + single_dataset_selection)*len(DATASETS)
 
-    # For simplicity, let's assume each dataset has the same 3 modalities:
-    #    "Gene Expression", "Methylation", "miRNA"
-    # If you have a variable # of modalities per dataset, you'd just compute that inside the loop.
-    n_modalities = 3  # "Gene Expression", "Methylation", "miRNA"
-
-    single_dataset_extraction = len(extraction_algos) * len(n_comps_list) * len(reg_models) * n_modalities
-    single_dataset_selection  = len(selection_algos)   * len(n_feats_list)  * len(reg_models) * n_modalities
-
-    total_runs = (single_dataset_extraction + single_dataset_selection) * len(DATASETS)
-
-    # We'll store the current progress in a single-element list so it can be mutated
-    # by parallel processes. This is not strictly thread-safe, but works OK in practice.
     progress_counter = [0]
 
-    # -------------------------------------------------------------------------
-    # 2) Main Loop
-    # -------------------------------------------------------------------------
     for ds_idx, ds in enumerate(DATASETS, start=1):
         dataset_name = ds["name"]
 
@@ -493,31 +466,49 @@ def main():
         exp_df, methy_df, mirna_df, clinical_df = load_dataset(ds)
 
         # 2) Prepare data
-        data_modalities, common_ids, y, clinical_filtered = prepare_data(
-            ds, exp_df, methy_df, mirna_df, clinical_df
-        )
+        try:
+            data_modalities, common_ids, y, clinical_filtered = prepare_data(
+                ds, exp_df, methy_df, mirna_df, clinical_df
+            )
+        except ValueError as ve:
+            # If outcome col not found or other error
+            skip_file = os.path.join(base_out_dir, "logs", "skipped.txt")
+            with open(skip_file, "w") as f:
+                f.write(f"Skipped dataset {dataset_name} due to error: {ve}\n")
+            print(f"Skipping dataset {dataset_name}: {ve}")
+            continue
+
+        # If no overlap => skip
+        if len(common_ids) == 0 or y.shape[0] == 0:
+            reason = f"No overlapping IDs or no valid samples in dataset {dataset_name}.\n"
+            skip_file = os.path.join(base_out_dir, "logs", "skipped.txt")
+            with open(skip_file, "w") as f:
+                f.write(reason)
+            print(reason)
+            continue
 
         extraction_results = []
         selection_results = []
 
         # Loop over each modality
         for modality_name, df_modality in data_modalities.items():
-            # Filter columns by common_ids
             df_modality_filtered = df_modality[common_ids].copy()
             df_modality_filtered = df_modality_filtered.loc[:, sorted(df_modality_filtered.columns)]
             X_modality = df_modality_filtered.transpose().reset_index(drop=True)
             X_modality = X_modality.apply(pd.to_numeric, errors='coerce')
 
-            # A) EXTRACT WORKFLOW
+            # EXTRACT
             ext_res = run_extraction_workflow(
-                modality_name, X_modality, y, dataset_name, base_out_dir,
+                modality_name, X_modality, y,
+                dataset_name, base_out_dir,
                 progress_counter, total_runs
             )
             extraction_results.extend(ext_res)
 
-            # B) SELECT WORKFLOW
+            # SELECT
             sel_res = run_selection_workflow(
-                modality_name, X_modality, y, dataset_name, base_out_dir,
+                modality_name, X_modality, y,
+                dataset_name, base_out_dir,
                 progress_counter, total_runs
             )
             selection_results.extend(sel_res)
