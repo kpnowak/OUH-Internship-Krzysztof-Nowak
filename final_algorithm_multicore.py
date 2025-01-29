@@ -192,7 +192,50 @@ def prepare_data(ds_config, exp_df, methy_df, mirna_df, is_regression=True):
     id_col = ds_config["id_col"]
     out_col= ds_config["outcome_col"]
 
-    # Fix columns
+    # --- ONLY FOR KIDNEY: strip trailing 'A' from the ID column in memory ---
+    if ds_config["name"] == "Kidney":
+        ### NEW FOR KIDNEY ###
+        # If the last character is 'A', remove it 
+        # (no writeback to CSV; just fix in-memory).
+        def remove_trailing_A(s):
+            if isinstance(s, str) and s.endswith('A'):
+                return s[:-1]
+            return s
+        
+        # Apply this only to the ID column:
+        # e.g. "TCGA-6D-AA2E-01A" => "TCGA-6D-AA2E-01"
+        # so that fix_tcga_id_slicing() becomes "TCGA.6D.AA2E.01"
+        clinical_df_raw = pd.read_csv(ds_config["clinical_file"], sep=None, engine='python')
+        clinical_df_raw[id_col] = clinical_df_raw[id_col].apply(remove_trailing_A)
+    else:
+        # If it's not Kidney, load normally
+        clinical_df_raw = pd.read_csv(ds_config["clinical_file"], sep=None, engine='python')
+
+    # Now proceed as usual with fix_tcga_id_slicing on clinical_df_raw
+    if id_col not in clinical_df_raw.columns:
+        raise ValueError(f"ID col '{id_col}' not found in {ds_config['clinical_file']}.")
+
+    # Use the same variable name as before
+    clinical_df = clinical_df_raw.copy()
+    clinical_df[id_col] = clinical_df[id_col].apply(fix_tcga_id_slicing)
+
+    if out_col not in clinical_df.columns:
+        raise ValueError(f"Outcome col '{out_col}' not found in {ds_config['clinical_file']}.")
+
+    # Regression vs classification logic remains the same:
+    if is_regression:
+        clinical_df[out_col] = clinical_df[out_col].apply(custom_parse_outcome)
+        clinical_df = clinical_df.dropna(subset=[out_col]).copy()
+        y = clinical_df[out_col].astype(float)
+    else:
+        raw_labels = clinical_df[out_col].astype(str).str.strip().str.replace('"','')
+        raw_labels = raw_labels.replace(['','NA','NaN','nan'], np.nan)
+        clinical_df[out_col] = raw_labels
+        clinical_df = clinical_df.dropna(subset=[out_col]).copy()
+        clinical_df[out_col] = clinical_df[out_col].astype('category')
+        y = clinical_df[out_col].cat.codes
+
+    # Next, fix columns in expression, methylation, mirna data
     exp_df.columns   = strip_and_slice_columns(exp_df.columns)
     methy_df.columns = strip_and_slice_columns(methy_df.columns)
     mirna_df.columns = strip_and_slice_columns(mirna_df.columns)
@@ -203,30 +246,7 @@ def prepare_data(ds_config, exp_df, methy_df, mirna_df, is_regression=True):
         "miRNA": mirna_df
     }
 
-    clinical_file = ds_config["clinical_file"]
-    clinical_df = pd.read_csv(clinical_file, sep=None, engine='python')
-
-    if id_col not in clinical_df.columns:
-        raise ValueError(f"ID col '{id_col}' not found in {clinical_file}.")
-    clinical_df[id_col] = clinical_df[id_col].apply(fix_tcga_id_slicing)
-
-    if out_col not in clinical_df.columns:
-        raise ValueError(f"Outcome col '{out_col}' not found in {clinical_file}.")
-
-    if is_regression:
-        clinical_df[out_col] = clinical_df[out_col].apply(custom_parse_outcome)
-        clinical_df = clinical_df.dropna(subset=[out_col]).copy()
-        y = clinical_df[out_col].astype(float)
-    else:
-        # classification => factorize
-        raw_labels = clinical_df[out_col].astype(str).str.strip().str.replace('"','')
-        raw_labels = raw_labels.replace(['','NA','NaN','nan'], np.nan)
-        clinical_df[out_col] = raw_labels
-        clinical_df = clinical_df.dropna(subset=[out_col]).copy()
-        clinical_df[out_col] = clinical_df[out_col].astype('category')
-        y = clinical_df[out_col].cat.codes
-
-    # intersection
+    # Intersection and final Y
     common_ids = set(clinical_df[id_col])
     for df_mod in data_modalities.values():
         common_ids = common_ids.intersection(df_mod.columns)
@@ -235,13 +255,12 @@ def prepare_data(ds_config, exp_df, methy_df, mirna_df, is_regression=True):
     clinical_filtered = clinical_df[clinical_df[id_col].isin(common_ids)].copy()
     clinical_filtered = clinical_filtered.sort_values(id_col).reset_index(drop=True)
 
-    # Rebuild y in that exact order
     sub_mapping = {}
     for i, row in clinical_filtered.iterrows():
         sid = row[id_col]
         sub_mapping[sid] = row[out_col]
 
-    final_y_vals=[]
+    final_y_vals = []
     for sid in common_ids:
         final_y_vals.append(sub_mapping[sid])
     y_series = pd.Series(final_y_vals, name="TARGET").reset_index(drop=True)
