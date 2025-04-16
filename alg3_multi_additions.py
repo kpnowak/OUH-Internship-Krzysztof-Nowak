@@ -186,15 +186,23 @@ def custom_parse_outcome(val):
 
 def load_omics_and_clinical(ds_config):
     odir = ds_config["omics_dir"]
-    exp_df   = pd.read_csv(os.path.join(odir,"exp.csv"),   sep=None, engine='python', index_col=0)
-    methy_df = pd.read_csv(os.path.join(odir,"methy.csv"), sep=None, engine='python', index_col=0)
-    mirna_df = pd.read_csv(os.path.join(odir,"mirna.csv"), sep=None, engine='python', index_col=0)
+    # Read the omics CSV files without specifying an index column,
+    # so that the first row is used as the header.
+    exp_df   = pd.read_csv(os.path.join(odir, "exp.csv"), sep=None, engine='python')
+    methy_df = pd.read_csv(os.path.join(odir, "methy.csv"), sep=None, engine='python')
+    mirna_df = pd.read_csv(os.path.join(odir, "mirna.csv"), sep=None, engine='python')
+
+    # Delete the first column from each DataFrame.
+    # The header row remains unchanged.
+    exp_df   = exp_df.iloc[:, 1:]
+    methy_df = methy_df.iloc[:, 1:]
+    mirna_df = mirna_df.iloc[:, 1:]
 
     clinical_df = pd.read_csv(ds_config["clinical_file"], sep=None, engine='python')
     return exp_df, methy_df, mirna_df, clinical_df
 
 def strip_and_slice_columns(col_list):
-    newcols=[]
+    newcols = []
     for c in col_list:
         s2 = c.strip().strip('"')
         s3 = fix_tcga_id_slicing(s2)
@@ -216,10 +224,8 @@ def prepare_data(ds_config, exp_df, methy_df, mirna_df, is_regression=True):
         if id_col not in clinical_df_raw.columns:
             raise ValueError(f"ID col '{id_col}' not found in {ds_config['clinical_file']}.")
         clinical_df_raw[id_col] = clinical_df_raw[id_col].apply(remove_trailing_A)
-        # Now fix the ID slicing
         clinical_df_raw[id_col] = clinical_df_raw[id_col].apply(fix_tcga_id_slicing)
     else:
-        # Normal load
         clinical_df_raw = pd.read_csv(ds_config["clinical_file"], sep=None, engine='python')
         if id_col not in clinical_df_raw.columns:
             raise ValueError(f"ID col '{id_col}' not found in {ds_config['clinical_file']}.")
@@ -230,20 +236,20 @@ def prepare_data(ds_config, exp_df, methy_df, mirna_df, is_regression=True):
 
     clinical_df = clinical_df_raw.copy()
 
-    # If regression, parse numeric outcomes
+    # Parse outcomes depending on whether this is a regression or classification task.
     if is_regression:
         clinical_df[out_col] = clinical_df[out_col].apply(custom_parse_outcome)
         clinical_df = clinical_df.dropna(subset=[out_col]).copy()
         y = clinical_df[out_col].astype(float)
     else:
-        raw_labels = clinical_df[out_col].astype(str).str.strip().str.replace('"','')
-        raw_labels = raw_labels.replace(['','NA','NaN','nan'], np.nan)
+        raw_labels = clinical_df[out_col].astype(str).str.strip().str.replace('"', '')
+        raw_labels = raw_labels.replace(['', 'NA', 'NaN', 'nan'], np.nan)
         clinical_df[out_col] = raw_labels
         clinical_df = clinical_df.dropna(subset=[out_col]).copy()
         clinical_df[out_col] = clinical_df[out_col].astype('category')
         y = clinical_df[out_col].cat.codes
 
-    # Fix columns in omics data
+    # Clean up column names in each omics dataset.
     exp_df.columns   = strip_and_slice_columns(exp_df.columns)
     methy_df.columns = strip_and_slice_columns(methy_df.columns)
     mirna_df.columns = strip_and_slice_columns(mirna_df.columns)
@@ -283,7 +289,7 @@ def prepare_data(ds_config, exp_df, methy_df, mirna_df, is_regression=True):
 def get_regression_extractors():
     return {
         "PCA": PCA(),
-        #"NMF": NMF(max_iter=10000, init='nndsvda'),
+        "NMF": NMF(max_iter=10000, init='nndsvda'),
         "ICA": FastICA(max_iter=10000, tol=1e-2),
         "FA": FactorAnalysis(),
         "PLS": PLSRegression()
@@ -468,7 +474,7 @@ def train_classification_model(X_train, y_train, X_test, y_test,
 def fit_transform_extractor_regression(X_train, y_train, extractor, n_components):
     # Some extractors (NMF) want non-negative => scale with MinMax
     if extractor.__class__.__name__ == "NMF":
-        scl = MinMaxScaler()
+        scl = MinMaxScaler(clip=True)
     else:
         scl = StandardScaler()
 
@@ -557,7 +563,7 @@ def transform_selector_regression(X_test, chosen_cols):
 def fit_transform_extractor_classification(X_train, y_train, extractor, n_components):
     # scaling
     if extractor.__class__.__name__ == "NMF":
-        scl = MinMaxScaler()
+        scl = MinMaxScaler(clip=True)
     else:
         scl = StandardScaler()
 
