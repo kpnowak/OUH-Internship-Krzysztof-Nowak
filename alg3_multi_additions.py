@@ -688,8 +688,9 @@ def merge_modalities(mod1, mod2, mod3, strategy="concat"):
         else:
             raise ValueError(f"Unknown merging strategy {strategy}")
 
+
 ###############################################################################
-# K) HIGH-LEVEL PROCESS FUNCTIONS (REGRESSION) WITH CROSS-VALIDATION
+# K) HIGH‑LEVEL PROCESS FUNCTIONS (REGRESSION) WITH CROSS‑VALIDATION
 ###############################################################################
 
 def process_reg_extraction_combo_cv(
@@ -704,132 +705,95 @@ def process_reg_extraction_combo_cv(
     all_ids_arr = np.array(all_ids)
     y_arr = np.array(y)
 
-    # Outer split: hold-out test set and temporary set for CV
     id_temp, id_test, y_temp, y_test = train_test_split(
         all_ids_arr, y_arr, test_size=test_size, random_state=0
     )
 
     cv = KFold(n_splits=n_splits, shuffle=True, random_state=0)
-    cv_metrics = {}  # key: (merge_strategy, model_name) -> list of metric dicts
+    cv_metrics = {}
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(id_temp)):
         id_train = id_temp[train_idx]
         id_val   = id_temp[val_idx]
-        y_train = y_temp[train_idx]
-        y_val   = y_temp[val_idx]
+        y_train  = y_temp[train_idx]
+        y_val    = y_temp[val_idx]
 
-        train_transformed_list = []
-        val_transformed_list = []
-        for mod_name, df_mod in data_modalities.items():
-            # Process training set for this fold
-            df_train = df_mod.loc[:, id_train].transpose()
-            df_train = df_train.apply(pd.to_numeric, errors='coerce').fillna(0)
+        train_transformed_list, val_transformed_list = [], []
+        for _, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_train].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
             fitted_extr, X_train_mod = fit_transform_extractor_regression(
                 df_train, pd.Series(y_train), extr_obj, ncomps
             )
-            # Process validation set for this fold
-            df_val = df_mod.loc[:, id_val].transpose()
-            df_val = df_val.apply(pd.to_numeric, errors='coerce').fillna(0)
+            df_val = df_mod.loc[:, id_val].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
             X_val_mod = transform_extractor_regression(df_val, fitted_extr)
             train_transformed_list.append(X_train_mod)
             val_transformed_list.append(X_val_mod)
 
-        if len(train_transformed_list)==0:
+        if not train_transformed_list:
             continue
 
-        merging_strategies = ["concat", "average", "sum", "max"]
-        for merge_str in merging_strategies:
+        for merge_str in ["concat", "average", "sum", "max"]:
             try:
-                X_train_merged = merge_modalities(
-                    train_transformed_list[0],
-                    train_transformed_list[1],
-                    train_transformed_list[2],
-                    merge_str
-                )
-                X_val_merged = merge_modalities(
-                    val_transformed_list[0],
-                    val_transformed_list[1],
-                    val_transformed_list[2],
-                    merge_str
-                )
+                X_train_merged = merge_modalities(*train_transformed_list, strategy=merge_str)
+                X_val_merged   = merge_modalities(*val_transformed_list,   strategy=merge_str)
             except Exception as e:
-                print(f"Skipping merging strategy '{merge_str}' in fold {fold_idx} due to error: {e}")
+                print(f"Skipping merge '{merge_str}' fold {fold_idx}: {e}")
                 continue
 
             for model_name in reg_models:
-                plot_prefix = f"{ds_name}_EXTRACT_{extr_name}_{ncomps}_{merge_str}_{model_name}_fold{fold_idx}"
-                model, mets = train_regression_model(
+                # ►► Skip plots during folds ◄◄
+                model, mets = train_regression_model(          # <-- edited
                     X_train_merged, y_train, X_val_merged, y_val,
                     model_name,
-                    out_dir=os.path.join(base_out, "plots"),
-                    plot_prefix=plot_prefix
+                    out_dir=None,          # no per‑fold plot directory   <-- edited
+                    plot_prefix=""          # empty prefix disables plotting <-- edited
                 )
                 key = (merge_str, model_name)
                 cv_metrics.setdefault(key, []).append(mets)
 
-    # Average the CV metrics over folds and perform final evaluation on the hold-out test set
+    # ---------------- final model training & evaluation (unchanged) ----------------
     avg_cv_results = []
     for (merge_str, model_name), mets_list in cv_metrics.items():
-        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0].keys()}
+        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0]}
         avg_mets.update({
-            "Dataset": ds_name,
-            "Workflow": "Extraction-CV",
-            "Extractor": extr_name,
-            "n_components": ncomps,
-            "MergeStrategy": merge_str,
-            "Model": model_name
+            "Dataset": ds_name, "Workflow": "Extraction-CV",
+            "Extractor": extr_name, "n_components": ncomps,
+            "MergeStrategy": merge_str, "Model": model_name
         })
-        # Final evaluation on hold-out test set using full temp set (id_temp)
-        train_transformed_list = []
-        test_transformed_list = []
-        for mod_name, df_mod in data_modalities.items():
-            df_train = df_mod.loc[:, id_temp].transpose()
-            df_train = df_train.apply(pd.to_numeric, errors='coerce').fillna(0)
+
+        train_mods, test_mods = [], []
+        for _, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_temp].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
             fitted_extr, X_train_mod = fit_transform_extractor_regression(
                 df_train, pd.Series(y_temp), extr_obj, ncomps
             )
-            df_test = df_mod.loc[:, id_test].transpose()
-            df_test = df_test.apply(pd.to_numeric, errors='coerce').fillna(0)
+            df_test  = df_mod.loc[:, id_test].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
             X_test_mod = transform_extractor_regression(df_test, fitted_extr)
-            train_transformed_list.append(X_train_mod)
-            test_transformed_list.append(X_test_mod)
-        try:
-            X_train_merged = merge_modalities(
-                train_transformed_list[0],
-                train_transformed_list[1],
-                train_transformed_list[2],
-                merge_str
-            )
-            X_test_merged = merge_modalities(
-                test_transformed_list[0],
-                test_transformed_list[1],
-                test_transformed_list[2],
-                merge_str
-            )
-        except Exception as e:
-            print(f"Skipping final test evaluation for merging strategy '{merge_str}' due to error: {e}")
-            continue
+            train_mods.append(X_train_mod)
+            test_mods.append(X_test_mod)
 
+        X_train_merged = merge_modalities(*train_mods, strategy=merge_str)
+        X_test_merged  = merge_modalities(*test_mods,  strategy=merge_str)
+
+        final_prefix = f"{ds_name}_FINAL_EXTRACT_{extr_name}_{ncomps}_{merge_str}_{model_name}"
         final_model, test_mets = train_regression_model(
             X_train_merged, y_temp, X_test_merged, y_test,
             model_name,
-            out_dir=os.path.join(base_out, "plots"),
-            plot_prefix=f"{ds_name}_FINAL_EXTRACT_{extr_name}_{ncomps}_{merge_str}_{model_name}"
+            out_dir=os.path.join(base_out, "plots"),   # keep final plots
+            plot_prefix=final_prefix
         )
-        for k, v in test_mets.items():
-            avg_mets[f"Test_{k}"] = v
+        avg_mets.update({f"Test_{k}": v for k, v in test_mets.items()})
         avg_cv_results.append(avg_mets)
 
-        # Optionally save the final model
-        mfname = f"{ds_name}_FINAL_EXTRACT_{extr_name}_{ncomps}_{merge_str}_{model_name}.pkl"
-        mp = os.path.join(base_out, "models", mfname)
-        joblib.dump(final_model, mp)
+        joblib.dump(final_model,
+                    os.path.join(base_out, "models", f"{final_prefix}.pkl"))
 
-    df_avg = pd.DataFrame(avg_cv_results)
-    metrics_file = os.path.join(base_out, "metrics", f"{ds_name}_extraction_cv_metrics.csv")
-    df_avg.to_csv(metrics_file, index=False)
-
+    pd.DataFrame(avg_cv_results).to_csv(
+        os.path.join(base_out, "metrics", f"{ds_name}_extraction_cv_metrics.csv"),
+        index=False
+    )
     return avg_cv_results
+
 
 def process_reg_selection_combo_cv(
     ds_name, sel_name, sel_code, n_feats, reg_models,
@@ -841,7 +805,7 @@ def process_reg_selection_combo_cv(
     print(f"[SELECT-REG CV] {run_idx}/{reg_total_runs} => {ds_name} | {sel_name}-{n_feats}")
 
     all_ids_arr = np.array(all_ids)
-    y_arr = np.array(y)
+    y_arr       = np.array(y)
 
     id_temp, id_test, y_temp, y_test = train_test_split(
         all_ids_arr, y_arr, test_size=test_size, random_state=0
@@ -851,119 +815,79 @@ def process_reg_selection_combo_cv(
     cv_metrics = {}
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(id_temp)):
-        id_train = id_temp[train_idx]
-        id_val   = id_temp[val_idx]
-        y_train = y_temp[train_idx]
-        y_val   = y_temp[val_idx]
+        id_train, id_val = id_temp[train_idx], id_temp[val_idx]
+        y_train,  y_val  = y_temp[train_idx],  y_temp[val_idx]
 
-        train_transformed_list = []
-        val_transformed_list = []
-        for mod_name, df_mod in data_modalities.items():
-            df_train = df_mod.loc[:, id_train].transpose()
-            df_train = df_train.apply(pd.to_numeric, errors='coerce').fillna(0)
-            chosen_cols, X_train_mod = fit_transform_selector_regression(
-                df_train, pd.Series(y_train), sel_code, n_feats
-            )
-            df_val = df_mod.loc[:, id_val].transpose()
-            df_val = df_val.apply(pd.to_numeric, errors='coerce').fillna(0)
-            X_val_mod = transform_selector_regression(df_val, chosen_cols)
-            train_transformed_list.append(np.array(X_train_mod))
-            val_transformed_list.append(np.array(X_val_mod))
+        train_list, val_list = [], []
+        for _, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_train].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            chosen, X_tr = fit_transform_selector_regression(df_train, pd.Series(y_train), sel_code, n_feats)
+            df_val   = df_mod.loc[:, id_val].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            X_va     = transform_selector_regression(df_val, chosen)
+            train_list.append(np.array(X_tr))
+            val_list.append(np.array(X_va))
 
-        merging_strategies = ["concat", "average", "sum", "max"]
-        for merge_str in merging_strategies:
+        for merge_str in ["concat", "average", "sum", "max"]:
             try:
-                X_train_merged = merge_modalities(
-                    train_transformed_list[0],
-                    train_transformed_list[1],
-                    train_transformed_list[2],
-                    merge_str
-                )
-                X_val_merged = merge_modalities(
-                    val_transformed_list[0],
-                    val_transformed_list[1],
-                    val_transformed_list[2],
-                    merge_str
-                )
+                X_tr_m = merge_modalities(*train_list, strategy=merge_str)
+                X_va_m = merge_modalities(*val_list,   strategy=merge_str)
             except Exception as e:
-                print(f"Skipping merging strategy '{merge_str}' in fold {fold_idx} due to error: {e}")
+                print(f"Skipping merge '{merge_str}' fold {fold_idx}: {e}")
                 continue
 
             for model_name in reg_models:
-                plot_prefix = f"{ds_name}_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}_fold{fold_idx}"
-                model, mets = train_regression_model(
-                    X_train_merged, y_train, X_val_merged, y_val,
+                model, mets = train_regression_model(      # <-- edited (no plots per fold)
+                    X_tr_m, y_train, X_va_m, y_val,
                     model_name,
-                    out_dir=os.path.join(base_out, "plots"),
-                    plot_prefix=plot_prefix
+                    out_dir=None, plot_prefix=""           # disable
                 )
                 key = (merge_str, model_name)
                 cv_metrics.setdefault(key, []).append(mets)
 
+    # -------- final evaluation (unchanged except comments) --------
     avg_cv_results = []
     for (merge_str, model_name), mets_list in cv_metrics.items():
-        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0].keys()}
+        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0]}
         avg_mets.update({
-            "Dataset": ds_name,
-            "Workflow": "Selection-CV",
-            "Selector": sel_name,
-            "n_features": n_feats,
-            "MergeStrategy": merge_str,
-            "Model": model_name
+            "Dataset": ds_name, "Workflow": "Selection-CV",
+            "Selector": sel_name, "n_features": n_feats,
+            "MergeStrategy": merge_str, "Model": model_name
         })
-        # Final evaluation on hold-out test set
-        train_transformed_list = []
-        test_transformed_list = []
-        for mod_name, df_mod in data_modalities.items():
-            df_train = df_mod.loc[:, id_temp].transpose()
-            df_train = df_train.apply(pd.to_numeric, errors='coerce').fillna(0)
-            chosen_cols, X_train_mod = fit_transform_selector_regression(
-                df_train, pd.Series(y_temp), sel_code, n_feats
-            )
-            df_test = df_mod.loc[:, id_test].transpose()
-            df_test = df_test.apply(pd.to_numeric, errors='coerce').fillna(0)
-            X_test_mod = transform_selector_regression(df_test, chosen_cols)
-            train_transformed_list.append(np.array(X_train_mod))
-            test_transformed_list.append(np.array(X_test_mod))
-        try:
-            X_train_merged = merge_modalities(
-                train_transformed_list[0],
-                train_transformed_list[1],
-                train_transformed_list[2],
-                merge_str
-            )
-            X_test_merged = merge_modalities(
-                test_transformed_list[0],
-                test_transformed_list[1],
-                test_transformed_list[2],
-                merge_str
-            )
-        except Exception as e:
-            print(f"Skipping final test evaluation for merging strategy '{merge_str}' due to error: {e}")
-            continue
 
+        train_list, test_list = [], []
+        for _, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_temp].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            chosen_cols, X_tr = fit_transform_selector_regression(df_train, pd.Series(y_temp), sel_code, n_feats)
+            df_test  = df_mod.loc[:, id_test].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            X_te     = transform_selector_regression(df_test, chosen_cols)
+            train_list.append(np.array(X_tr))
+            test_list.append(np.array(X_te))
+
+        X_tr_m = merge_modalities(*train_list, strategy=merge_str)
+        X_te_m = merge_modalities(*test_list,  strategy=merge_str)
+
+        final_prefix = f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}"
         final_model, test_mets = train_regression_model(
-            X_train_merged, y_temp, X_test_merged, y_test,
+            X_tr_m, y_temp, X_te_m, y_test,
             model_name,
-            out_dir=os.path.join(base_out, "plots"),
-            plot_prefix=f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}"
+            out_dir=os.path.join(base_out, "plots"),  # keep final plots
+            plot_prefix=final_prefix
         )
-        for k, v in test_mets.items():
-            avg_mets[f"Test_{k}"] = v
+        avg_mets.update({f"Test_{k}": v for k, v in test_mets.items()})
         avg_cv_results.append(avg_mets)
 
-        mfname = f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}.pkl"
-        mp = os.path.join(base_out, "models", mfname)
-        joblib.dump(final_model, mp)
+        joblib.dump(final_model,
+                    os.path.join(base_out, "models", f"{final_prefix}.pkl"))
 
-    df_avg = pd.DataFrame(avg_cv_results)
-    metrics_file = os.path.join(base_out, "metrics", f"{ds_name}_selection_cv_metrics.csv")
-    df_avg.to_csv(metrics_file, index=False)
-
+    pd.DataFrame(avg_cv_results).to_csv(
+        os.path.join(base_out, "metrics", f"{ds_name}_selection_cv_metrics.csv"),
+        index=False
+    )
     return avg_cv_results
 
+
 ###############################################################################
-# L) HIGH-LEVEL PROCESS FUNCTIONS (CLASSIFICATION) WITH CROSS-VALIDATION
+# L) HIGH‑LEVEL PROCESS FUNCTIONS (CLASSIFICATION) WITH CROSS‑VALIDATION
 ###############################################################################
 
 def process_clf_extraction_combo_cv(
@@ -975,9 +899,7 @@ def process_clf_extraction_combo_cv(
     run_idx = progress_count[0]
     print(f"[EXTRACT-CLF CV] {run_idx}/{clf_total_runs} => {ds_name} | {extr_name}-{ncomps}")
 
-    all_ids_arr = np.array(all_ids)
-    y_arr = np.array(y)
-
+    all_ids_arr = np.array(all_ids); y_arr = np.array(y)
     id_temp, id_test, y_temp, y_test = train_test_split(
         all_ids_arr, y_arr, test_size=test_size, random_state=0
     )
@@ -986,119 +908,78 @@ def process_clf_extraction_combo_cv(
     cv_metrics = {}
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(id_temp)):
-        id_train = id_temp[train_idx]
-        id_val   = id_temp[val_idx]
-        y_train = y_temp[train_idx]
-        y_val   = y_temp[val_idx]
+        id_train, id_val = id_temp[train_idx], id_temp[val_idx]
+        y_train,  y_val  = y_temp[train_idx],  y_temp[val_idx]
 
-        train_transformed_list = []
-        val_transformed_list = []
-        for mod_name, df_mod in data_modalities.items():
-            df_train = df_mod.loc[:, id_train].transpose()
-            df_train = df_train.apply(pd.to_numeric, errors='coerce').fillna(0)
-            fitted_extr, X_train_mod = fit_transform_extractor_classification(
+        train_list, val_list = [], []
+        for _, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_train].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            fitted_extr, X_tr = fit_transform_extractor_classification(
                 df_train, y_train, extr_obj, ncomps
             )
-            df_val = df_mod.loc[:, id_val].transpose()
-            df_val = df_val.apply(pd.to_numeric, errors='coerce').fillna(0)
-            X_val_mod = transform_extractor_classification(df_val, fitted_extr)
-            train_transformed_list.append(X_train_mod)
-            val_transformed_list.append(X_val_mod)
+            df_val = df_mod.loc[:, id_val].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            X_va   = transform_extractor_classification(df_val, fitted_extr)
+            train_list.append(X_tr); val_list.append(X_va)
 
-        if len(train_transformed_list)==0:
-            continue
-
-        merging_strategies = ["concat", "average", "sum", "max"]
-        for merge_str in merging_strategies:
+        for merge_str in ["concat", "average", "sum", "max"]:
             try:
-                X_train_merged = merge_modalities(
-                    train_transformed_list[0],
-                    train_transformed_list[1],
-                    train_transformed_list[2],
-                    merge_str
-                )
-                X_val_merged = merge_modalities(
-                    val_transformed_list[0],
-                    val_transformed_list[1],
-                    val_transformed_list[2],
-                    merge_str
-                )
+                X_tr_m = merge_modalities(*train_list, strategy=merge_str)
+                X_va_m = merge_modalities(*val_list,   strategy=merge_str)
             except Exception as e:
-                print(f"Skipping merging strategy '{merge_str}' in fold {fold_idx} due to error: {e}")
+                print(f"Skipping merge '{merge_str}' fold {fold_idx}: {e}")
                 continue
 
             for model_name in clf_models:
-                plot_prefix = f"{ds_name}_EXTRACT_{extr_name}_{ncomps}_{merge_str}_{model_name}_fold{fold_idx}"
-                model, mets = train_classification_model(
-                    X_train_merged, y_train, X_val_merged, y_val,
+                model, mets = train_classification_model(       # <-- edited
+                    X_tr_m, y_train, X_va_m, y_val,
                     model_name,
-                    out_dir=os.path.join(base_out, "plots"),
-                    plot_prefix=plot_prefix
+                    out_dir=None, plot_prefix=""               # disable per‑fold plots
                 )
                 key = (merge_str, model_name)
                 cv_metrics.setdefault(key, []).append(mets)
 
+    # ---------- final evaluation (unchanged except comments) ----------
     avg_cv_results = []
     for (merge_str, model_name), mets_list in cv_metrics.items():
-        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0].keys()}
+        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0]}
         avg_mets.update({
-            "Dataset": ds_name,
-            "Workflow": "Extraction-CV",
-            "Extractor": extr_name,
-            "n_components": ncomps,
-            "MergeStrategy": merge_str,
-            "Model": model_name
+            "Dataset": ds_name, "Workflow": "Extraction-CV",
+            "Extractor": extr_name, "n_components": ncomps,
+            "MergeStrategy": merge_str, "Model": model_name
         })
-        # Final evaluation on hold-out test set
-        train_transformed_list = []
-        test_transformed_list = []
-        for mod_name, df_mod in data_modalities.items():
-            df_train = df_mod.loc[:, id_temp].transpose()
-            df_train = df_train.apply(pd.to_numeric, errors='coerce').fillna(0)
-            fitted_extr, X_train_mod = fit_transform_extractor_classification(
+
+        train_list, test_list = [], []
+        for _, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_temp].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            fitted_extr, X_tr = fit_transform_extractor_classification(
                 df_train, y_temp, extr_obj, ncomps
             )
-            df_test = df_mod.loc[:, id_test].transpose()
-            df_test = df_test.apply(pd.to_numeric, errors='coerce').fillna(0)
-            X_test_mod = transform_extractor_classification(df_test, fitted_extr)
-            train_transformed_list.append(X_train_mod)
-            test_transformed_list.append(X_test_mod)
-        try:
-            X_train_merged = merge_modalities(
-                train_transformed_list[0],
-                train_transformed_list[1],
-                train_transformed_list[2],
-                merge_str
-            )
-            X_test_merged = merge_modalities(
-                test_transformed_list[0],
-                test_transformed_list[1],
-                test_transformed_list[2],
-                merge_str
-            )
-        except Exception as e:
-            print(f"Skipping final test evaluation for merging strategy '{merge_str}' due to error: {e}")
-            continue
+            df_test = df_mod.loc[:, id_test].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            X_te    = transform_extractor_classification(df_test, fitted_extr)
+            train_list.append(X_tr); test_list.append(X_te)
 
+        X_tr_m = merge_modalities(*train_list, strategy=merge_str)
+        X_te_m = merge_modalities(*test_list,  strategy=merge_str)
+
+        final_prefix = f"{ds_name}_FINAL_EXTRACT_{extr_name}_{ncomps}_{merge_str}_{model_name}"
         final_model, test_mets = train_classification_model(
-            X_train_merged, y_temp, X_test_merged, y_test,
+            X_tr_m, y_temp, X_te_m, y_test,
             model_name,
-            out_dir=os.path.join(base_out, "plots"),
-            plot_prefix=f"{ds_name}_FINAL_EXTRACT_{extr_name}_{ncomps}_{merge_str}_{model_name}"
+            out_dir=os.path.join(base_out, "plots"),     # keep final plots
+            plot_prefix=final_prefix
         )
-        for k, v in test_mets.items():
-            avg_mets[f"Test_{k}"] = v
+        avg_mets.update({f"Test_{k}": v for k, v in test_mets.items()})
         avg_cv_results.append(avg_mets)
 
-        mfname = f"{ds_name}_FINAL_EXTRACT_{extr_name}_{ncomps}_{merge_str}_{model_name}.pkl"
-        mp = os.path.join(base_out, "models", mfname)
-        joblib.dump(final_model, mp)
+        joblib.dump(final_model,
+                    os.path.join(base_out, "models", f"{final_prefix}.pkl"))
 
-    df_avg = pd.DataFrame(avg_cv_results)
-    metrics_file = os.path.join(base_out, "metrics", f"{ds_name}_extraction_cv_metrics.csv")
-    df_avg.to_csv(metrics_file, index=False)
-
+    pd.DataFrame(avg_cv_results).to_csv(
+        os.path.join(base_out, "metrics", f"{ds_name}_extraction_cv_metrics.csv"),
+        index=False
+    )
     return avg_cv_results
+
 
 def process_clf_selection_combo_cv(
     ds_name, sel_name, sel_code, n_feats, clf_models,
@@ -1109,9 +990,7 @@ def process_clf_selection_combo_cv(
     run_idx = progress_count[0]
     print(f"[SELECT-CLF CV] {run_idx}/{clf_total_runs} => {ds_name} | {sel_name}-{n_feats}")
 
-    all_ids_arr = np.array(all_ids)
-    y_arr = np.array(y)
-
+    all_ids_arr = np.array(all_ids); y_arr = np.array(y)
     id_temp, id_test, y_temp, y_test = train_test_split(
         all_ids_arr, y_arr, test_size=test_size, random_state=0
     )
@@ -1120,114 +999,76 @@ def process_clf_selection_combo_cv(
     cv_metrics = {}
 
     for fold_idx, (train_idx, val_idx) in enumerate(cv.split(id_temp)):
-        id_train = id_temp[train_idx]
-        id_val   = id_temp[val_idx]
-        y_train = y_temp[train_idx]
-        y_val   = y_temp[val_idx]
+        id_train, id_val = id_temp[train_idx], id_temp[val_idx]
+        y_train,  y_val  = y_temp[train_idx],  y_temp[val_idx]
 
-        train_transformed_list = []
-        val_transformed_list = []
-        for mod_name, df_mod in data_modalities.items():
-            df_train = df_mod.loc[:, id_train].transpose()
-            df_train = df_train.apply(pd.to_numeric, errors='coerce').fillna(0)
-            chosen_cols, X_train_mod = fit_transform_selector_classification(
+        train_list, val_list = [], []
+        for _, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_train].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            chosen_cols, X_tr = fit_transform_selector_classification(
                 df_train, y_train, sel_code, n_feats
             )
-            df_val = df_mod.loc[:, id_val].transpose()
-            df_val = df_val.apply(pd.to_numeric, errors='coerce').fillna(0)
-            X_val_mod = transform_selector_classification(df_val, chosen_cols)
-            train_transformed_list.append(np.array(X_train_mod))
-            val_transformed_list.append(np.array(X_val_mod))
-        merging_strategies = ["concat", "average", "sum", "max"]
-        for merge_str in merging_strategies:
+            df_val = df_mod.loc[:, id_val].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            X_va   = transform_selector_classification(df_val, chosen_cols)
+            train_list.append(np.array(X_tr)); val_list.append(np.array(X_va))
+
+        for merge_str in ["concat", "average", "sum", "max"]:
             try:
-                X_train_merged = merge_modalities(
-                    train_transformed_list[0],
-                    train_transformed_list[1],
-                    train_transformed_list[2],
-                    merge_str
-                )
-                X_val_merged = merge_modalities(
-                    val_transformed_list[0],
-                    val_transformed_list[1],
-                    val_transformed_list[2],
-                    merge_str
-                )
+                X_tr_m = merge_modalities(*train_list, strategy=merge_str)
+                X_va_m = merge_modalities(*val_list,   strategy=merge_str)
             except Exception as e:
-                print(f"Skipping merging strategy '{merge_str}' in fold {fold_idx} due to error: {e}")
+                print(f"Skipping merge '{merge_str}' fold {fold_idx}: {e}")
                 continue
 
             for model_name in clf_models:
-                plot_prefix = f"{ds_name}_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}_fold{fold_idx}"
-                model, mets = train_classification_model(
-                    X_train_merged, y_train, X_val_merged, y_val,
+                model, mets = train_classification_model(      # <-- edited
+                    X_tr_m, y_train, X_va_m, y_val,
                     model_name,
-                    out_dir=os.path.join(base_out, "plots"),
-                    plot_prefix=plot_prefix
+                    out_dir=None, plot_prefix=""               # disable per‑fold plots
                 )
                 key = (merge_str, model_name)
                 cv_metrics.setdefault(key, []).append(mets)
 
+    # -------------- final evaluation (unchanged except comments) --------------
     avg_cv_results = []
     for (merge_str, model_name), mets_list in cv_metrics.items():
-        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0].keys()}
+        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0]}
         avg_mets.update({
-            "Dataset": ds_name,
-            "Workflow": "Selection-CV",
-            "Selector": sel_name,
-            "n_features": n_feats,
-            "MergeStrategy": merge_str,
-            "Model": model_name
+            "Dataset": ds_name, "Workflow": "Selection-CV",
+            "Selector": sel_name, "n_features": n_feats,
+            "MergeStrategy": merge_str, "Model": model_name
         })
-        # Final evaluation on hold-out test set
-        train_transformed_list = []
-        test_transformed_list = []
-        for mod_name, df_mod in data_modalities.items():
-            df_train = df_mod.loc[:, id_temp].transpose()
-            df_train = df_train.apply(pd.to_numeric, errors='coerce').fillna(0)
-            chosen_cols, X_train_mod = fit_transform_selector_classification(
+
+        train_list, test_list = [], []
+        for _, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_temp].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            chosen_cols, X_tr = fit_transform_selector_classification(
                 df_train, y_temp, sel_code, n_feats
             )
-            df_test = df_mod.loc[:, id_test].transpose()
-            df_test = df_test.apply(pd.to_numeric, errors='coerce').fillna(0)
-            X_test_mod = transform_selector_classification(df_test, chosen_cols)
-            train_transformed_list.append(np.array(X_train_mod))
-            test_transformed_list.append(np.array(X_test_mod))
-        try:
-            X_train_merged = merge_modalities(
-                train_transformed_list[0],
-                train_transformed_list[1],
-                train_transformed_list[2],
-                merge_str
-            )
-            X_test_merged = merge_modalities(
-                test_transformed_list[0],
-                test_transformed_list[1],
-                test_transformed_list[2],
-                merge_str
-            )
-        except Exception as e:
-            print(f"Skipping final test evaluation for merging strategy '{merge_str}' due to error: {e}")
-            continue
+            df_test = df_mod.loc[:, id_test].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            X_te    = transform_selector_classification(df_test, chosen_cols)
+            train_list.append(np.array(X_tr)); test_list.append(np.array(X_te))
 
+        X_tr_m = merge_modalities(*train_list, strategy=merge_str)
+        X_te_m = merge_modalities(*test_list,  strategy=merge_str)
+
+        final_prefix = f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}"
         final_model, test_mets = train_classification_model(
-            X_train_merged, y_temp, X_test_merged, y_test,
+            X_tr_m, y_temp, X_te_m, y_test,
             model_name,
-            out_dir=os.path.join(base_out, "plots"),
-            plot_prefix=f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}"
+            out_dir=os.path.join(base_out, "plots"),      # keep final plots
+            plot_prefix=final_prefix
         )
-        for k, v in test_mets.items():
-            avg_mets[f"Test_{k}"] = v
+        avg_mets.update({f"Test_{k}": v for k, v in test_mets.items()})
         avg_cv_results.append(avg_mets)
 
-        mfname = f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}.pkl"
-        mp = os.path.join(base_out, "models", mfname)
-        joblib.dump(final_model, mp)
+        joblib.dump(final_model,
+                    os.path.join(base_out, "models", f"{final_prefix}.pkl"))
 
-    df_avg = pd.DataFrame(avg_cv_results)
-    metrics_file = os.path.join(base_out, "metrics", f"{ds_name}_selection_cv_metrics.csv")
-    df_avg.to_csv(metrics_file, index=False)
-
+    pd.DataFrame(avg_cv_results).to_csv(
+        os.path.join(base_out, "metrics", f"{ds_name}_selection_cv_metrics.csv"),
+        index=False
+    )
     return avg_cv_results
 
 ###############################################################################
