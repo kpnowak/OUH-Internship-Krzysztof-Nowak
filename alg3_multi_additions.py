@@ -19,10 +19,10 @@ PHYSICAL_CORES = 20  # Total physical cores (2 sockets × 10 cores)
 LOGICAL_THREADS = 40  # Total logical threads (2 sockets × 20 threads)
 
 # Optimize parallelization settings for dual-socket Xeon Silver 4114
-N_JOBS = LOGICAL_THREADS - 2  # Use all but 2 threads to leave some for system
-CHUNK_SIZE = 10000  # Increased chunk size for better CPU utilization
-MAX_COMPONENTS = 256  # Increased for better feature utilization
-MAX_FEATURES = 256  # Increased for better feature utilization
+N_JOBS = LOGICAL_THREADS - 4  # Use all but 4 threads to leave some for system
+CHUNK_SIZE = 20000  # Increased chunk size for better CPU utilization
+MAX_COMPONENTS = 512  # Increased for better feature utilization
+MAX_FEATURES = 512  # Increased for better feature utilization
 
 # Optimize joblib settings for maximum CPU utilization
 JOBLIB_PARALLEL_CONFIG = {
@@ -41,15 +41,15 @@ MEMORY_OPTIMIZATION = {
     "use_sparse": True,  # Use sparse matrices when possible
     "dtype": np.float32,  # Use float32 instead of float64
     "chunk_size": CHUNK_SIZE,
-    "max_memory_usage": 0.85,  # Use 85% of available RAM
-    "max_array_size": int(TOTAL_RAM * 0.8),  # Maximum array size (80% of RAM)
-    "cache_size": int(TOTAL_RAM * 0.1)  # Cache size (10% of RAM)
+    "max_memory_usage": 0.9,  # Use 90% of available RAM
+    "max_array_size": int(TOTAL_RAM * 0.85),  # Maximum array size (85% of RAM)
+    "cache_size": int(TOTAL_RAM * 0.15)  # Cache size (15% of RAM)
 }
 
 # Model-specific optimizations
 MODEL_OPTIMIZATIONS = {
     "RandomForest": {
-        "n_estimators": 200,  # Increased for better performance
+        "n_estimators": 500,  # Increased for better performance
         "max_depth": None,
         "min_samples_split": 2,
         "min_samples_leaf": 1,
@@ -66,7 +66,7 @@ MODEL_OPTIMIZATIONS = {
     },
     "SVR": {
         "kernel": 'rbf',
-        "cache_size": 2000,
+        "cache_size": 5000,  # Increased cache size
         "max_iter": -1,
         "tol": 1e-3
     }
@@ -114,6 +114,7 @@ from sklearn.ensemble import RandomForestClassifier as RF_for_BorutaClf
 import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.sparse
+import warnings
 
 ###############################################################################
 # A) CONFIG OF DATASETS
@@ -609,27 +610,42 @@ def merge_modalities(mod1, mod2, mod3, strategy="concat"):
       - 'sum'     => element-wise sum (requires same shape; pads if needed)
       - 'max'     => element-wise max (requires same shape; pads if needed)
     """
+    # Filter out None or empty arrays
+    valid_arrays = [arr for arr in [mod1, mod2, mod3] if arr is not None and arr.size > 0]
+    
+    if not valid_arrays:
+        # Return a 2D array with shape (0, 0) instead of an empty 1D array
+        return np.array([[]])
+    
     if strategy == "concat":
-        return np.concatenate([mod1, mod2, mod3], axis=1)
+        # For concatenation, we can handle arrays with different shapes
+        return np.concatenate(valid_arrays, axis=1)
     else:
-        # For element-wise operations, determine the maximum number of columns among the three arrays
-        target_cols = max(mod1.shape[1], mod2.shape[1], mod3.shape[1])
+        # For element-wise operations, we need to ensure all arrays have the same shape
+        # Find the maximum number of columns among valid arrays
+        target_cols = max(arr.shape[1] for arr in valid_arrays)
         
         # Pad arrays to match the target number of columns
-        mod1_p = np.pad(mod1, ((0, 0), (0, target_cols - mod1.shape[1])), mode='constant', constant_values=0)
-        mod2_p = np.pad(mod2, ((0, 0), (0, target_cols - mod2.shape[1])), mode='constant', constant_values=0)
-        mod3_p = np.pad(mod3, ((0, 0), (0, target_cols - mod3.shape[1])), mode='constant', constant_values=0)
+        padded_arrays = []
+        for arr in valid_arrays:
+            if arr.shape[1] < target_cols:
+                # Pad with zeros on the right
+                pad_width = ((0, 0), (0, target_cols - arr.shape[1]))
+                padded_arr = np.pad(arr, pad_width, mode='constant', constant_values=0)
+            else:
+                padded_arr = arr
+            padded_arrays.append(padded_arr)
         
         if strategy == "average":
             # Count non-zero arrays for each position
-            count = (mod1_p != 0).astype(int) + (mod2_p != 0).astype(int) + (mod3_p != 0).astype(int)
+            count = sum((arr != 0).astype(int) for arr in padded_arrays)
             # Avoid division by zero
             count[count == 0] = 1
-            return (mod1_p + mod2_p + mod3_p) / count
+            return sum(padded_arrays) / count
         elif strategy == "sum":
-            return mod1_p + mod2_p + mod3_p
+            return sum(padded_arrays)
         elif strategy == "max":
-            return np.maximum(np.maximum(mod1_p, mod2_p), mod3_p)
+            return np.maximum.reduce(padded_arrays)
         else:
             raise ValueError(f"Unknown merging strategy {strategy}")
 
@@ -970,49 +986,80 @@ def transform_extractor_regression(X_test, fitted_extractor):
     return X_test_red
 
 def fit_transform_selector_regression(X_train, y_train, selector_code, n_feats):
+    # Check for empty arrays
+    if X_train.shape[0] == 0 or X_train.shape[1] == 0:
+        print("Warning: Empty input array in fit_transform_selector_regression")
+        return list(range(min(n_feats, X_train.shape[1]))), X_train
+
     if selector_code == "mrmr_reg":
-        mi = mutual_info_regression(X_train, y_train, random_state=0)
-        idx = np.argsort(mi)[::-1]  # descending
-        top_idx = idx[:n_feats]
-        return list(top_idx), X_train.iloc[:, top_idx]
+        try:
+            mi = mutual_info_regression(X_train, y_train, random_state=0)
+            if len(mi) == 0:
+                print("Warning: No mutual information scores calculated")
+                return list(range(min(n_feats, X_train.shape[1]))), X_train
+            idx = np.argsort(mi)[::-1]  # descending
+            top_idx = idx[:n_feats]
+            return list(top_idx), X_train.iloc[:, top_idx]
+        except Exception as e:
+            print(f"Warning: Mutual information calculation failed: {str(e)}")
+            return list(range(min(n_feats, X_train.shape[1]))), X_train
 
     elif selector_code == "lasso":
-        lasso = Lasso(alpha=0.01, max_iter=10000, random_state=0)
-        lasso.fit(X_train, y_train)
-        coefs = lasso.coef_
-        idx = np.argsort(np.abs(coefs))[::-1]
-        top_idx = idx[:n_feats]
-        return list(top_idx), X_train.iloc[:, top_idx]
+        try:
+            lasso = Lasso(alpha=0.01, max_iter=10000, random_state=0)
+            lasso.fit(X_train, y_train)
+            coefs = lasso.coef_
+            idx = np.argsort(np.abs(coefs))[::-1]
+            top_idx = idx[:n_feats]
+            return list(top_idx), X_train.iloc[:, top_idx]
+        except Exception as e:
+            print(f"Warning: Lasso selection failed: {str(e)}")
+            return list(range(min(n_feats, X_train.shape[1]))), X_train
 
     elif selector_code == "enet":
-        en = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=10000, random_state=0)
-        en.fit(X_train, y_train)
-        c = en.coef_
-        idx = np.argsort(np.abs(c))[::-1]
-        top_idx = idx[:n_feats]
-        return list(top_idx), X_train.iloc[:, top_idx]
+        try:
+            en = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=10000, random_state=0)
+            en.fit(X_train, y_train)
+            c = en.coef_
+            idx = np.argsort(np.abs(c))[::-1]
+            top_idx = idx[:n_feats]
+            return list(top_idx), X_train.iloc[:, top_idx]
+        except Exception as e:
+            print(f"Warning: ElasticNet selection failed: {str(e)}")
+            return list(range(min(n_feats, X_train.shape[1]))), X_train
 
     elif selector_code == "freg":
-        Fv, pv = f_regression(X_train, y_train)
-        idx = np.argsort(Fv)[::-1]
-        top_idx = idx[:n_feats]
-        return list(top_idx), X_train.iloc[:, top_idx]
+        try:
+            Fv, pv = f_regression(X_train, y_train)
+            if len(Fv) == 0:
+                print("Warning: No F-scores calculated")
+                return list(range(min(n_feats, X_train.shape[1]))), X_train
+            idx = np.argsort(Fv)[::-1]
+            top_idx = idx[:n_feats]
+            return list(top_idx), X_train.iloc[:, top_idx]
+        except Exception as e:
+            print(f"Warning: F-regression selection failed: {str(e)}")
+            return list(range(min(n_feats, X_train.shape[1]))), X_train
 
     elif selector_code == "boruta_reg":
-        rf = RF_for_BorutaReg(n_estimators=100, random_state=0)
-        bor = BorutaPy(rf, n_estimators='auto', random_state=0)
-        bor.fit(X_train.values, y_train.values)
-        mask = bor.support_
-        chosen = np.where(mask)[0]
-        if len(chosen) > n_feats:
-            ranks = bor.ranking_
-            chosen_ranks = sorted(zip(chosen, ranks[chosen]), key=lambda x: x[1])
-            chosen = [x[0] for x in chosen_ranks[:n_feats]]
-        return list(chosen), X_train.iloc[:, chosen]
+        try:
+            rf = RF_for_BorutaReg(n_estimators=100, random_state=0)
+            bor = BorutaPy(rf, n_estimators='auto', random_state=0)
+            bor.fit(X_train.values, y_train.values)
+            mask = bor.support_
+            chosen = np.where(mask)[0]
+            if len(chosen) > n_feats:
+                ranks = bor.ranking_
+                chosen_ranks = sorted(zip(chosen, ranks[chosen]), key=lambda x: x[1])
+                chosen = [x[0] for x in chosen_ranks[:n_feats]]
+            return list(chosen), X_train.iloc[:, chosen]
+        except Exception as e:
+            print(f"Warning: Boruta selection failed: {str(e)}")
+            return list(range(min(n_feats, X_train.shape[1]))), X_train
 
     else:
         # fallback => no selection
-        return list(range(X_train.shape[1])), X_train
+        return list(range(min(n_feats, X_train.shape[1]))), X_train
 
 def transform_selector_regression(X_test, chosen_cols):
     return X_test.iloc[:, chosen_cols]
@@ -1134,21 +1181,42 @@ def merge_modalities(mod1, mod2, mod3, strategy="concat"):
       - 'sum'     => element-wise sum (requires same shape; pads if needed)
       - 'max'     => element-wise max (requires same shape; pads if needed)
     """
+    # Filter out None or empty arrays
+    valid_arrays = [arr for arr in [mod1, mod2, mod3] if arr is not None and arr.size > 0]
+    
+    if not valid_arrays:
+        # Return a 2D array with shape (0, 0) instead of an empty 1D array
+        return np.array([[]])
+    
     if strategy == "concat":
-        return np.concatenate([mod1, mod2, mod3], axis=1)
+        # For concatenation, we can handle arrays with different shapes
+        return np.concatenate(valid_arrays, axis=1)
     else:
-        # For element-wise operations, determine the maximum number of columns among the three arrays.
-        target_cols = max(mod1.shape[1], mod2.shape[1], mod3.shape[1])
-        mod1_p = pad_to_shape(mod1, target_cols)
-        mod2_p = pad_to_shape(mod2, target_cols)
-        mod3_p = pad_to_shape(mod3, target_cols)
+        # For element-wise operations, we need to ensure all arrays have the same shape
+        # Find the maximum number of columns among valid arrays
+        target_cols = max(arr.shape[1] for arr in valid_arrays)
+        
+        # Pad arrays to match the target number of columns
+        padded_arrays = []
+        for arr in valid_arrays:
+            if arr.shape[1] < target_cols:
+                # Pad with zeros on the right
+                pad_width = ((0, 0), (0, target_cols - arr.shape[1]))
+                padded_arr = np.pad(arr, pad_width, mode='constant', constant_values=0)
+            else:
+                padded_arr = arr
+            padded_arrays.append(padded_arr)
         
         if strategy == "average":
-            return (mod1_p + mod2_p + mod3_p) / 3.0
+            # Count non-zero arrays for each position
+            count = sum((arr != 0).astype(int) for arr in padded_arrays)
+            # Avoid division by zero
+            count[count == 0] = 1
+            return sum(padded_arrays) / count
         elif strategy == "sum":
-            return mod1_p + mod2_p + mod3_p
+            return sum(padded_arrays)
         elif strategy == "max":
-            return np.maximum(mod1_p, np.maximum(mod2_p, mod3_p))
+            return np.maximum.reduce(padded_arrays)
         else:
             raise ValueError(f"Unknown merging strategy {strategy}")
 
@@ -1163,26 +1231,26 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
         # Filter out IDs that don't exist in the DataFrame
         valid_ids = [id_ for id_ in chunk_ids if id_ in modality_df.columns]
         if not valid_ids:
-            return np.zeros((0, modality_df.shape[0]))  # Return empty array if no valid IDs
+            return np.zeros((0, modality_df.shape[0]), dtype=MEMORY_OPTIMIZATION["dtype"])
         
         chunk_data = modality_df.loc[:, valid_ids].transpose()
         chunk_data = chunk_data.fillna(0)
-        return chunk_data.values
+        return chunk_data.values.astype(MEMORY_OPTIMIZATION["dtype"])
 
-    # Split IDs into chunks
+    # Split IDs into larger chunks for better parallelization
     train_chunks = [id_train[i:i + CHUNK_SIZE] for i in range(0, len(id_train), CHUNK_SIZE)]
     val_chunks = [id_val[i:i + CHUNK_SIZE] for i in range(0, len(id_val), CHUNK_SIZE)]
     test_chunks = [[idx_to_id[idx] for idx in idx_test[i:i + CHUNK_SIZE]] 
                    for i in range(0, len(idx_test), CHUNK_SIZE)]
 
-    # Process chunks in parallel
-    X_train_chunks = Parallel(n_jobs=N_JOBS, prefer="threads")(
+    # Process chunks in parallel with optimized settings
+    X_train_chunks = Parallel(**JOBLIB_PARALLEL_CONFIG)(
         delayed(process_chunk)(chunk, True) for chunk in train_chunks
     )
-    X_val_chunks = Parallel(n_jobs=N_JOBS, prefer="threads")(
+    X_val_chunks = Parallel(**JOBLIB_PARALLEL_CONFIG)(
         delayed(process_chunk)(chunk) for chunk in val_chunks
     )
-    X_test_chunks = Parallel(n_jobs=N_JOBS, prefer="threads")(
+    X_test_chunks = Parallel(**JOBLIB_PARALLEL_CONFIG)(
         delayed(process_chunk)(chunk) for chunk in test_chunks
     )
 
@@ -1196,11 +1264,11 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
         print(f"Warning: No valid data found for modality {modality_name}")
         return None, None, None
 
-    # Concatenate chunks
+    # Concatenate chunks with memory optimization
     try:
-        X_train_np = np.vstack(X_train_chunks)
-        X_val_np = np.vstack(X_val_chunks)
-        X_test_np = np.vstack(X_test_chunks)
+        X_train_np = np.vstack(X_train_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
+        X_val_np = np.vstack(X_val_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
+        X_test_np = np.vstack(X_test_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
     except ValueError as e:
         print(f"Error concatenating chunks for modality {modality_name}: {e}")
         return None, None, None
@@ -1234,14 +1302,15 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
         test_scaler = StandardScaler()
 
     try:
-        # Scale the data
-        X_train_scaled = train_scaler.fit_transform(X_train_np)
-        X_val_scaled = val_scaler.fit_transform(X_val_np)
-        X_test_scaled = test_scaler.fit_transform(X_test_np)
+        # Scale the data in parallel
+        with Parallel(**JOBLIB_PARALLEL_CONFIG) as parallel:
+            X_train_scaled = parallel(delayed(train_scaler.fit_transform)(X_train_np))
+            X_val_scaled = parallel(delayed(val_scaler.fit_transform)(X_val_np))
+            X_test_scaled = parallel(delayed(test_scaler.fit_transform)(X_test_np))
 
         # For PLS => pass y
         if isinstance(extr_copy, PLSRegression):
-            Y_train_arr = y_train.reshape(-1, 1)
+            Y_train_arr = y_train.reshape(-1, 1).astype(MEMORY_OPTIMIZATION["dtype"])
             X_train_trans = extr_copy.fit_transform(X_train_scaled, Y_train_arr)[0]
             
             val_extr = PLSRegression(
@@ -1276,9 +1345,9 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
 
         # Ensure all have the same number of components
         target_comps = min(X_train_trans.shape[1], X_val_trans.shape[1], X_test_trans.shape[1])
-        X_train_trans = X_train_trans[:, :target_comps]
-        X_val_trans = X_val_trans[:, :target_comps]
-        X_test_trans = X_test_trans[:, :target_comps]
+        X_train_trans = X_train_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
+        X_val_trans = X_val_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
+        X_test_trans = X_test_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
 
         return X_train_trans, X_val_trans, X_test_trans
     except Exception as e:
@@ -1300,7 +1369,7 @@ def train_evaluate_model(model_name, model, X_train, y_train, X_val):
 
 def process_cv_fold(train_idx, val_idx, idx_temp, idx_test, y_temp, y_test, 
                    data_modalities, reg_models, extr_obj, ncomps, id_to_idx, idx_to_id,
-                   missing_percentage=0.0, fold_idx=0):
+                   missing_percentage=0.0, fold_idx=0, base_out=None, ds_name=None, extr_name=None):
     # Convert numeric indices back to original IDs
     id_train = [idx_to_id[idx] for idx in train_idx]
     id_val = [idx_to_id[idx] for idx in val_idx]
@@ -1313,30 +1382,87 @@ def process_cv_fold(train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
     )
     
     # Process modalities in parallel
-    modality_results = Parallel(n_jobs=N_JOBS, prefer="threads")(
+    modality_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(
         delayed(process_modality)(name, df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id)
         for name, df in modified_data_modalities.items()
     )
     
+    # Filter out None results
+    valid_results = [r for r in modality_results if r is not None and all(x is not None and x.size > 0 for x in r)]
+    
+    if not valid_results:
+        print(f"Warning: No valid data found for any modality in fold {fold_idx}")
+        return {}
+    
     # Merge modalities
-    X_train_merged = merge_modalities(*[r[0] for r in modality_results])
-    X_val_merged = merge_modalities(*[r[1] for r in modality_results])
-    X_test_merged = merge_modalities(*[r[2] for r in modality_results])
+    X_train_merged = merge_modalities(*[r[0] for r in valid_results])
+    X_val_merged = merge_modalities(*[r[1] for r in valid_results])
+    X_test_merged = merge_modalities(*[r[2] for r in valid_results])
+    
+    # Skip if no valid data after merging
+    if X_train_merged.size == 0 or X_val_merged.size == 0 or X_test_merged.size == 0:
+        print(f"Warning: No valid data after merging in fold {fold_idx}")
+        return {}
     
     # Train and evaluate models in parallel
-    model_results = Parallel(n_jobs=N_JOBS, prefer="threads")(
-        delayed(train_evaluate_model)(
-            model_name,
-            RandomForestRegressor(n_estimators=100, n_jobs=N_JOBS) if model_name == "RandomForest" else
-            LinearRegression(n_jobs=N_JOBS) if model_name == "LinearRegression" else
-            SVR(kernel='rbf', cache_size=2000),
-            X_train_merged, y_train, X_val_merged
-        )
-        for model_name in reg_models
-    )
+    model_results = {}
+    for model_name in reg_models:
+        try:
+            if model_name == "RandomForest":
+                model = RandomForestRegressor(**MODEL_OPTIMIZATIONS["RandomForest"])
+            elif model_name == "LinearRegression":
+                model = LinearRegression(**MODEL_OPTIMIZATIONS["LinearRegression"])
+            elif model_name == "SVR":
+                model = SVR(**MODEL_OPTIMIZATIONS["SVR"])
+            else:
+                continue
+                
+            # Train the model
+            model.fit(X_train_merged, y_train)
+            
+            # Make predictions
+            y_val_pred = model.predict(X_val_merged)
+            
+            # Save the model if output directory is provided
+            if base_out is not None and ds_name is not None and extr_name is not None:
+                model_path = os.path.join(
+                    base_out, "models",
+                    f"{ds_name}_{extr_name}_{ncomps}_{model_name}_fold{fold_idx}_missing{missing_percentage}.pkl"
+                )
+                joblib.dump(model, model_path)
+                
+                # Generate and save plots
+                plot_prefix = f"{ds_name}_{extr_name}_{ncomps}_{model_name}_fold{fold_idx}_missing{missing_percentage}"
+                plot_dir = os.path.join(base_out, "plots")
+                
+                # Scatter plot
+                plt.figure(figsize=(10, 6))
+                plt.scatter(y_temp[val_idx], y_val_pred, alpha=0.5)
+                plt.plot([y_temp[val_idx].min(), y_temp[val_idx].max()], 
+                        [y_temp[val_idx].min(), y_temp[val_idx].max()], 'r--')
+                plt.xlabel('True Values')
+                plt.ylabel('Predictions')
+                plt.title(f'{plot_prefix} - Scatter Plot')
+                plt.savefig(os.path.join(plot_dir, f'{plot_prefix}_scatter.png'))
+                plt.close()
+                
+                # Residual plot
+                residuals = y_temp[val_idx] - y_val_pred
+                plt.figure(figsize=(10, 6))
+                plt.scatter(y_val_pred, residuals, alpha=0.5)
+                plt.axhline(y=0, color='r', linestyle='--')
+                plt.xlabel('Predictions')
+                plt.ylabel('Residuals')
+                plt.title(f'{plot_prefix} - Residuals Plot')
+                plt.savefig(os.path.join(plot_dir, f'{plot_prefix}_residuals.png'))
+                plt.close()
+            
+            model_results[model_name] = y_val_pred
+        except Exception as e:
+            print(f"Warning: Failed to train {model_name} in fold {fold_idx}: {str(e)}")
+            continue
     
-    return {name: pred for name, pred in model_results}
-
+    return model_results
 
 def process_reg_extraction_combo_cv(
     ds_name, extr_name, extr_obj, ncomps, reg_models,
@@ -1346,6 +1472,12 @@ def process_reg_extraction_combo_cv(
     progress_count[0] += 1
     run_idx = progress_count[0]
     print(f"[EXTRACT-REG CV] {run_idx}/{reg_total_runs} => {ds_name} | {extr_name}-{ncomps}")
+
+    # Ensure output directories exist
+    os.makedirs(base_out, exist_ok=True)
+    os.makedirs(os.path.join(base_out, "models"), exist_ok=True)
+    os.makedirs(os.path.join(base_out, "metrics"), exist_ok=True)
+    os.makedirs(os.path.join(base_out, "plots"), exist_ok=True)
 
     # Convert IDs to numeric indices
     id_to_idx = {id_: idx for idx, id_ in enumerate(all_ids)}
@@ -1367,40 +1499,63 @@ def process_reg_extraction_combo_cv(
     for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
         cv_results = []
         for fold_idx, (train_idx, val_idx) in enumerate(cv.split(idx_temp)):
-            result = process_cv_fold(
-                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
-                data_modalities, reg_models, extr_obj, ncomps, id_to_idx, idx_to_id,
-                missing_percentage=missing_percentage, fold_idx=fold_idx
-            )
+            # Suppress PLS warnings for this fold
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                result = process_cv_fold(
+                    train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                    data_modalities, reg_models, extr_obj, ncomps, id_to_idx, idx_to_id,
+                    missing_percentage=missing_percentage, fold_idx=fold_idx,
+                    base_out=base_out, ds_name=ds_name, extr_name=extr_name
+                )
+            
+            # Skip if no valid results
+            if not result:
+                continue
+                
             cv_results.append(result)
         
+        # Skip if no valid results for this missing percentage
+        if not cv_results:
+            continue
+            
         # Aggregate results for this missing percentage
         cv_metrics = {}
         for model_name in reg_models:
-            cv_metrics[model_name] = np.mean([
-                mean_squared_error(y_temp[val_idx], cv_results[i][model_name])
-                for i, (_, val_idx) in enumerate(cv.split(idx_temp))
-            ])
+            # Only include results for models that have predictions
+            valid_results = []
+            for i, (_, val_idx) in enumerate(cv.split(idx_temp)):
+                if i < len(cv_results) and model_name in cv_results[i]:
+                    try:
+                        mse = mean_squared_error(y_temp[val_idx], cv_results[i][model_name])
+                        valid_results.append(mse)
+                    except Exception as e:
+                        print(f"Warning: Failed to calculate MSE for {model_name} in fold {i}: {e}")
+                        continue
+            
+            if valid_results:
+                cv_metrics[model_name] = np.mean(valid_results)
 
         # Add results for this missing percentage
         for model_name in reg_models:
-            avg_mets = {
-                "Dataset": ds_name, "Workflow": "Extraction-CV",
-                "Extractor": extr_name, "n_components": ncomps,
-                "Model": model_name,
-                "Missing_Percentage": missing_percentage,
-                "CV_Metric": cv_metrics[model_name]
-            }
-            all_results.append(avg_mets)
+            if model_name in cv_metrics:
+                avg_mets = {
+                    "Dataset": ds_name, "Workflow": "Extraction-CV",
+                    "Extractor": extr_name, "n_components": ncomps,
+                    "Model": model_name,
+                    "Missing_Percentage": missing_percentage,
+                    "CV_Metric": cv_metrics[model_name]
+                }
+                all_results.append(avg_mets)
 
-    # Save all results
-    pd.DataFrame(all_results).to_csv(
-        os.path.join(base_out, "metrics", f"{ds_name}_extraction_cv_metrics.csv"),
-        index=False
-    )
+    # Save all results if any were generated
+    if all_results:
+        pd.DataFrame(all_results).to_csv(
+            os.path.join(base_out, "metrics", f"{ds_name}_extraction_cv_metrics.csv"),
+            index=False
+        )
     
     return all_results
-
 
 def process_reg_selection_combo_cv(
     ds_name, sel_name, sel_code, n_feats, reg_models,
