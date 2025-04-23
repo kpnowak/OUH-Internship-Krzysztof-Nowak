@@ -1,6 +1,7 @@
 # Core libraries
 numpy>=1.24.0
 pandas>=1.5.0
+psutil>=5.9.0  # System monitoring and process utilities
 
 # Machine learning toolkit
 scikit-learn>=1.2.0
@@ -9,15 +10,15 @@ scipy>=1.9.0
 # Feature selection algorithm
 Boruta>=0.3
 
-# Parallelization
-joblib>=1.2.0
+# Parallelization and caching
+joblib>=1.2.0  # Parallel processing and caching
 
 # Visualization
-matplotlib>=3.6.0
+matplotlib>=3.6.0  # Using 'Agg' backend for non-interactive plotting
 seaborn>=0.12.0
 
-# Dask
+# Dask for distributed computing
 dask>=2023.1.0
 distributed>=2023.1.0
 dask-ml>=2023.1.0
-bokeh>=3.1.0
+bokeh>=3.1.0  # Required for Dask dashboard
