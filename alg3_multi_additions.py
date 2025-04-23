@@ -18,28 +18,28 @@ TOTAL_RAM = 58.6 * 1024 * 1024 * 1024  # Convert GB to bytes
 PHYSICAL_CORES = 20  # Total physical cores (2 sockets × 10 cores)
 LOGICAL_THREADS = 40  # Total logical threads (2 sockets × 20 threads)
 
-# Optimize parallelization settings for dual-socket Xeon Silver 4114
-N_JOBS = LOGICAL_THREADS - 4  # Use all but 4 threads to leave some for system
-CHUNK_SIZE = 20000  # Increased chunk size for better CPU utilization
-MAX_COMPONENTS = 512  # Increased for better feature utilization
-MAX_FEATURES = 512  # Increased for better feature utilization
+# Optimize parallelization settings for VM
+N_JOBS = LOGICAL_THREADS - 2  # Use all but 2 threads to leave some for system
+CHUNK_SIZE = 50000  # Increased chunk size for better CPU utilization
+MAX_COMPONENTS = 1024  # Increased for better feature utilization
+MAX_FEATURES = 1024  # Increased for better feature utilization
 
 # Optimize joblib settings for maximum CPU utilization
 JOBLIB_PARALLEL_CONFIG = {
     "n_jobs": N_JOBS,
-    "prefer": "processes",  # Use processes for CPU-bound tasks
-    "backend": "loky",  # More efficient backend
-    "batch_size": "auto",  # Automatic batch size
-    "verbose": 0,  # Disable verbose output
-    "max_nbytes": None,  # No memory limit for joblib
-    "mmap_mode": "r+",  # Memory mapping for large arrays
-    "temp_folder": None  # Use system temp folder
+    "prefer": "threads",  # Use threads instead of processes for Windows
+    "backend": "threading",  # Use threading backend for Windows
+    "batch_size": "auto",
+    "verbose": 0,
+    "max_nbytes": None,
+    "mmap_mode": None,  # Disable memory mapping for Windows
+    "temp_folder": None
 }
 
-# Memory optimization settings for 58.6GB RAM
+# Memory optimization settings for VM with 58.6GB RAM
 MEMORY_OPTIMIZATION = {
-    "use_sparse": True,  # Use sparse matrices when possible
-    "dtype": np.float32,  # Use float32 instead of float64
+    "use_sparse": True,
+    "dtype": np.float32,
     "chunk_size": CHUNK_SIZE,
     "max_memory_usage": 0.9,  # Use 90% of available RAM
     "max_array_size": int(TOTAL_RAM * 0.85),  # Maximum array size (85% of RAM)
@@ -1302,11 +1302,10 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
         test_scaler = StandardScaler()
 
     try:
-        # Scale the data in parallel
-        with Parallel(**JOBLIB_PARALLEL_CONFIG) as parallel:
-            X_train_scaled = parallel(delayed(train_scaler.fit_transform)(X_train_np))
-            X_val_scaled = parallel(delayed(val_scaler.fit_transform)(X_val_np))
-            X_test_scaled = parallel(delayed(test_scaler.fit_transform)(X_test_np))
+        # Scale the data
+        X_train_scaled = train_scaler.fit_transform(X_train_np)
+        X_val_scaled = val_scaler.fit_transform(X_val_np)
+        X_test_scaled = test_scaler.fit_transform(X_test_np)
 
         # For PLS => pass y
         if isinstance(extr_copy, PLSRegression):
@@ -1892,147 +1891,148 @@ def process_clf_selection_combo_cv(
 # M) MAIN
 ###############################################################################
 def main():
-    # Parameters for cross-validation splits
-    TEST_SIZE = 0.2   # Hold-out test set fraction
-    N_SPLITS = 3      # Number of CV folds
+    if __name__ == '__main__':
+        # Parameters for cross-validation splits
+        TEST_SIZE = 0.2   # Hold-out test set fraction
+        N_SPLITS = 3      # Number of CV folds
 
-    # 1) REGRESSION block
-    reg_extractors = get_regression_extractors()
-    reg_selectors  = get_regression_selectors()
-    reg_models     = ["LinearRegression", "RandomForest", "SVR"]
-    n_comps_list   = [64, 128, MAX_COMPONENTS]  # Reduced number of components
-    n_feats_list   = [64, 128, MAX_FEATURES]    # Reduced number of features
+        # 1) REGRESSION block
+        reg_extractors = get_regression_extractors()
+        reg_selectors  = get_regression_selectors()
+        reg_models     = ["LinearRegression", "RandomForest", "SVR"]
+        n_comps_list   = [256, 512, MAX_COMPONENTS]  # Reduced number of components
+        n_feats_list   = [256, 512, MAX_FEATURES]    # Reduced number of features
 
-    n_extract_runs = (
-        len(REGRESSION_DATASETS) * len(reg_extractors) * len(n_comps_list)
-    )
-    n_select_runs = (
-        len(REGRESSION_DATASETS) * len(reg_selectors) * len(n_feats_list)
-    )
-    reg_total_runs = n_extract_runs + n_select_runs
-    progress_count_reg = [0]
+        n_extract_runs = (
+            len(REGRESSION_DATASETS) * len(reg_extractors) * len(n_comps_list)
+        )
+        n_select_runs = (
+            len(REGRESSION_DATASETS) * len(reg_selectors) * len(n_feats_list)
+        )
+        reg_total_runs = n_extract_runs + n_select_runs
+        progress_count_reg = [0]
 
-    print("=== REGRESSION BLOCK (AML, Sarcoma) ===")
-    for ds_conf in REGRESSION_DATASETS:
-        ds_name = ds_conf["name"]
-        base_out = os.path.join("output_regression", ds_name)
-        os.makedirs(base_out, exist_ok=True)
-        os.makedirs(os.path.join(base_out, "models"), exist_ok=True)
-        os.makedirs(os.path.join(base_out, "metrics"), exist_ok=True)
-        os.makedirs(os.path.join(base_out, "plots"), exist_ok=True)
+        print("=== REGRESSION BLOCK (AML, Sarcoma) ===")
+        for ds_conf in REGRESSION_DATASETS:
+            ds_name = ds_conf["name"]
+            base_out = os.path.join("output_regression", ds_name)
+            os.makedirs(base_out, exist_ok=True)
+            os.makedirs(os.path.join(base_out, "models"), exist_ok=True)
+            os.makedirs(os.path.join(base_out, "metrics"), exist_ok=True)
+            os.makedirs(os.path.join(base_out, "plots"), exist_ok=True)
 
-        print(f"\n--- Processing {ds_name} (Regression) ---")
+            print(f"\n--- Processing {ds_name} (Regression) ---")
 
-        # load
-        exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
-        # prepare
-        try:
-            data_modalities, common_ids, y, clin_f = prepare_data(
-                ds_conf, exp_df, methy_df, mirna_df, is_regression=True
-            )
-        except ValueError as e:
-            print(f"Skipping {ds_name} => {e}")
-            continue
+            # load
+            exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
+            # prepare
+            try:
+                data_modalities, common_ids, y, clin_f = prepare_data(
+                    ds_conf, exp_df, methy_df, mirna_df, is_regression=True
+                )
+            except ValueError as e:
+                print(f"Skipping {ds_name} => {e}")
+                continue
 
-        if len(common_ids) == 0 or y.shape[0] == 0:
-            print(f"No overlapping or no valid samples => skipping {ds_name}")
-            continue
+            if len(common_ids) == 0 or y.shape[0] == 0:
+                print(f"No overlapping or no valid samples => skipping {ds_name}")
+                continue
 
-        # A) Extraction with CV
-        extraction_jobs = [
-            delayed(process_reg_extraction_combo_cv)(
-                ds_name, extr_name, extr_obj, nc,
-                reg_models, data_modalities, common_ids, y, base_out,
-                progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
-            )
-            for extr_name, extr_obj in reg_extractors.items()
-            for nc in n_comps_list
-        ]
+            # A) Extraction with CV
+            extraction_jobs = [
+                delayed(process_reg_extraction_combo_cv)(
+                    ds_name, extr_name, extr_obj, nc,
+                    reg_models, data_modalities, common_ids, y, base_out,
+                    progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
+                )
+                for extr_name, extr_obj in reg_extractors.items()
+                for nc in n_comps_list
+            ]
 
-        all_extraction_results = Parallel(n_jobs=N_JOBS, prefer="processes")(extraction_jobs)
+            all_extraction_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(extraction_jobs)
 
-        # B) Selection with CV
-        selection_jobs = [
-            delayed(process_reg_selection_combo_cv)(
-                ds_name, sel_name, sel_code, nf,
-                reg_models, data_modalities, common_ids, y, base_out,
-                progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
-            )
-            for sel_name, sel_code in reg_selectors.items()
-            for nf in n_feats_list
-        ]
+            # B) Selection with CV
+            selection_jobs = [
+                delayed(process_reg_selection_combo_cv)(
+                    ds_name, sel_name, sel_code, nf,
+                    reg_models, data_modalities, common_ids, y, base_out,
+                    progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
+                )
+                for sel_name, sel_code in reg_selectors.items()
+                for nf in n_feats_list
+            ]
 
-        all_selection_results = Parallel(n_jobs=N_JOBS, prefer="processes")(selection_jobs)
+            all_selection_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(selection_jobs)
 
-    # 2) CLASSIFICATION block
-    clf_extractors = get_classification_extractors()
-    clf_selectors  = get_classification_selectors()
-    clf_models     = ["LogisticRegression", "RandomForest", "SVC"]
-    n_comps_list_clf = [64, 128, MAX_COMPONENTS]  # Reduced number of components
-    n_feats_list_clf = [64, 128, MAX_FEATURES]    # Reduced number of features
+        # 2) CLASSIFICATION block
+        clf_extractors = get_classification_extractors()
+        clf_selectors  = get_classification_selectors()
+        clf_models     = ["LogisticRegression", "RandomForest", "SVC"]
+        n_comps_list_clf = [256, 512, MAX_COMPONENTS]  # Reduced number of components
+        n_feats_list_clf = [256, 512, MAX_FEATURES]    # Reduced number of features
 
-    n_extract_runs_clf = (
-        len(CLASSIFICATION_DATASETS) * len(clf_extractors) * len(n_comps_list_clf)
-    )
-    n_select_runs_clf = (
-        len(CLASSIFICATION_DATASETS) * len(clf_selectors) * len(n_feats_list_clf)
-    )
-    clf_total_runs = n_extract_runs_clf + n_select_runs_clf
-    progress_count_clf = [0]
+        n_extract_runs_clf = (
+            len(CLASSIFICATION_DATASETS) * len(clf_extractors) * len(n_comps_list_clf)
+        )
+        n_select_runs_clf = (
+            len(CLASSIFICATION_DATASETS) * len(clf_selectors) * len(n_feats_list_clf)
+        )
+        clf_total_runs = n_extract_runs_clf + n_select_runs_clf
+        progress_count_clf = [0]
 
-    print("\n=== CLASSIFICATION BLOCK (Breast, Colon, Kidney, etc.) ===")
-    for ds_conf in CLASSIFICATION_DATASETS:
-        ds_name = ds_conf["name"]
-        base_out = os.path.join("output_classification", ds_name)
-        os.makedirs(base_out, exist_ok=True)
-        os.makedirs(os.path.join(base_out, "models"), exist_ok=True)
-        os.makedirs(os.path.join(base_out, "metrics"), exist_ok=True)
-        os.makedirs(os.path.join(base_out, "plots"), exist_ok=True)
+        print("\n=== CLASSIFICATION BLOCK (Breast, Colon, Kidney, etc.) ===")
+        for ds_conf in CLASSIFICATION_DATASETS:
+            ds_name = ds_conf["name"]
+            base_out = os.path.join("output_classification", ds_name)
+            os.makedirs(base_out, exist_ok=True)
+            os.makedirs(os.path.join(base_out, "models"), exist_ok=True)
+            os.makedirs(os.path.join(base_out, "metrics"), exist_ok=True)
+            os.makedirs(os.path.join(base_out, "plots"), exist_ok=True)
 
-        print(f"\n--- Processing {ds_name} (Classification) ---")
+            print(f"\n--- Processing {ds_name} (Classification) ---")
 
-        # load
-        exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
-        # prepare
-        try:
-            data_modalities, common_ids, y, clin_f = prepare_data(
-                ds_conf, exp_df, methy_df, mirna_df, is_regression=False
-            )
-        except ValueError as e:
-            print(f"Skipping {ds_name} => {e}")
-            continue
+            # load
+            exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
+            # prepare
+            try:
+                data_modalities, common_ids, y, clin_f = prepare_data(
+                    ds_conf, exp_df, methy_df, mirna_df, is_regression=False
+                )
+            except ValueError as e:
+                print(f"Skipping {ds_name} => {e}")
+                continue
 
-        if len(common_ids) == 0 or y.shape[0] == 0:
-            print(f"No overlapping or no valid samples => skipping {ds_name}")
-            continue
+            if len(common_ids) == 0 or y.shape[0] == 0:
+                print(f"No overlapping or no valid samples => skipping {ds_name}")
+                continue
 
-        # A) Extraction with CV
-        extraction_jobs = [
-            delayed(process_clf_extraction_combo_cv)(
-                ds_name, extr_name, extr_obj, nc,
-                clf_models, data_modalities, common_ids, y, base_out,
-                progress_count_clf, clf_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
-            )
-            for extr_name, extr_obj in clf_extractors.items()
-            for nc in n_comps_list_clf
-        ]
+            # A) Extraction with CV
+            extraction_jobs = [
+                delayed(process_clf_extraction_combo_cv)(
+                    ds_name, extr_name, extr_obj, nc,
+                    clf_models, data_modalities, common_ids, y, base_out,
+                    progress_count_clf, clf_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
+                )
+                for extr_name, extr_obj in clf_extractors.items()
+                for nc in n_comps_list_clf
+            ]
 
-        all_extraction_results = Parallel(n_jobs=N_JOBS, prefer="processes")(extraction_jobs)
+            all_extraction_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(extraction_jobs)
 
-        # B) Selection with CV
-        selection_jobs = [
-            delayed(process_clf_selection_combo_cv)(
-                ds_name, sel_name, sel_code, nf,
-                clf_models, data_modalities, common_ids, y, base_out,
-                progress_count_clf, clf_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
-            )
-            for sel_name, sel_code in clf_selectors.items()
-            for nf in n_feats_list_clf
-        ]
+            # B) Selection with CV
+            selection_jobs = [
+                delayed(process_clf_selection_combo_cv)(
+                    ds_name, sel_name, sel_code, nf,
+                    clf_models, data_modalities, common_ids, y, base_out,
+                    progress_count_clf, clf_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
+                )
+                for sel_name, sel_code in clf_selectors.items()
+                for nf in n_feats_list_clf
+            ]
 
-        all_selection_results = Parallel(n_jobs=N_JOBS, prefer="processes")(selection_jobs)
+            all_selection_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(selection_jobs)
 
-    print("\nAll done! Regression outputs in 'output_regression/' and classification outputs in 'output_classification/'.")
+        print("\nAll done! Regression outputs in 'output_regression/' and classification outputs in 'output_classification/'.")
 
 # Remove the lru_cache decorators and replace with a simpler caching mechanism
 class Cache:
