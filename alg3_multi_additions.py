@@ -24,58 +24,10 @@ import multiprocessing
 #  📌 HARDWARE-AWARE TUNING  –  Xeon Silver 4114 × 2  (20C/40T, 59 GB RAM)
 # ──────────────────────────────────────────────────────────────────────────────
 
-# ----- CPU layout ------------------------------------------------------------
-PHYS_CORES   = psutil.cpu_count(logical=False)        # 20
-LOGI_THREADS = psutil.cpu_count(logical=True)         # 40
-
-# Use 90 % of logical threads – enough parallelism, leaves head-room for the OS
-N_JOBS = max(1, floor(LOGI_THREADS * 0.9))            # → 36  (good empirical sweet-spot)
-
-# Windows must use "spawn"; prefer loky for robustness
-if platform.system() == "Windows":
-    multiprocessing.set_start_method("spawn", force=True)
-
-# ----- Memory limits ---------------------------------------------------------
-TOTAL_RAM      = psutil.virtual_memory().total        # bytes
-RAM_FRACTION   = 0.80                                 # we allow Python to claim 80 %
-MAX_ARRAY_SIZE = int(TOTAL_RAM * RAM_FRACTION)        # bytes
-CACHE_SIZE     = int(TOTAL_RAM * 0.10)                # 10 % for memoised artefacts
-
-# ----- Chunk size for parallel processing ------------------------------------
-CHUNK_SIZE = 50_000  # Optimal chunk size for Windows stability
-
-# ----- Feature and component limits ------------------------------------------
-MAX_COMPONENTS = 1024  # Maximum number of components for dimensionality reduction
-MAX_FEATURES = 1024   # Maximum number of features for feature selection
-
-# ----- BLAS / MKL / NumExpr thread pins --------------------------------------
-os.environ["OMP_NUM_THREADS"]      = str(N_JOBS)      # OpenMP – numpy, sklearn
-os.environ["MKL_NUM_THREADS"]      = str(N_JOBS)      # Intel MKL
-os.environ["NUMEXPR_NUM_THREADS"]  = str(N_JOBS)      # numexpr (if any)
-
-# ----- Joblib default config -------------------------------------------------
-JOBLIB_PARALLEL_CONFIG = {
-    "n_jobs": N_JOBS,                 # outer level parallelism
-    "backend": "loky",                # robust, sub-processes
-    "prefer": "processes",
-    "batch_size": "auto",
-    "verbose": 0,
-    "max_nbytes": "100M",             # larger shared-mem chunks – fine on 59 GB
-    "mmap_mode": None,                # mmap is slower on Windows
-    "temp_folder": os.path.join(os.getcwd(), "temp_joblib")
-}
-
-# Wrap heavy BLAS work in threadpoolctl context
-from contextlib import contextmanager
-from threadpoolctl import threadpool_limits
-
-@contextmanager
-def heavy_cpu_section(num_threads=N_JOBS):
-    """Context manager to limit thread count in heavy CPU sections."""
-    with threadpool_limits(limits=num_threads):
-        yield
-
-# ──────────────────────────────────────────────────────────────────────────────
+# ----- Memory limits --------------------------------------------------------
+TOTAL_RAM = psutil.virtual_memory().total
+MAX_ARRAY_SIZE = int(TOTAL_RAM * 0.8)  # 80% of RAM for arrays
+CACHE_SIZE = int(TOTAL_RAM * 0.1)      # 10% of RAM for cache
 
 # Memory optimization settings for VM with 58.6GB RAM
 MEMORY_OPTIMIZATION = {
@@ -86,6 +38,54 @@ MEMORY_OPTIMIZATION = {
     "max_array_size": MAX_ARRAY_SIZE,  # Maximum array size (80% of RAM)
     "cache_size": CACHE_SIZE  # Cache size (10% of RAM)
 }
+
+# ----- Constants ------------------------------------------------------------
+MAX_COMPONENTS = 1_024
+MAX_FEATURES = 1_024
+CHUNK_SIZE = MEMORY_OPTIMIZATION["chunk_size"]
+
+# ----- CPU layout ------------------------------------------------------------
+PHYS_CORES   = psutil.cpu_count(logical=False)      # 20
+OUTER_PROCS  = max(1, int(PHYS_CORES*0.9))          # 18
+OMP_BLAS_THREADS = 1                                # ✨ NEW
+
+N_JOBS = OUTER_PROCS
+
+# ----- Thread control --------------------------------------------------------
+os.environ.update({
+    "OMP_NUM_THREADS":      str(OMP_BLAS_THREADS),
+    "OPENBLAS_NUM_THREADS": str(OMP_BLAS_THREADS),
+    "MKL_NUM_THREADS":      str(OMP_BLAS_THREADS),
+    "NUMEXPR_NUM_THREADS":  str(OMP_BLAS_THREADS),
+})
+
+# ----- Joblib default config -------------------------------------------------
+JOBLIB_PARALLEL_CONFIG = {
+    "n_jobs": OUTER_PROCS,
+    "backend": "loky",
+    "prefer": "processes",
+    "batch_size": "auto",
+    "verbose": 0,
+    "max_nbytes": "100M",
+    "temp_folder": os.path.join(os.getcwd(), "temp_joblib")
+}
+
+# ----- Thread-backend Parallel helper ----------------------------------------
+def TParallel(*args, **kwargs):
+    """Thread-backend Parallel that never spawns new processes."""
+    return Parallel(*args, backend="threading", **kwargs)
+
+# Wrap heavy BLAS work in threadpoolctl context
+from contextlib import contextmanager
+from threadpoolctl import threadpool_limits
+
+@contextmanager
+def heavy_cpu_section(num_threads=OMP_BLAS_THREADS):
+    """Context manager to limit thread count in heavy CPU sections."""
+    with threadpool_limits(limits=num_threads):
+        yield
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 # Resource monitoring function
 def log_resource_usage(stage: str):
@@ -126,7 +126,7 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.svm import SVR, SVC
 
 # Dimensionality Reduction (for regression)
-from sklearn.decomposition import PCA, NMF, FastICA, FactorAnalysis
+from sklearn.decomposition import PCA, NMF, FastICA, FactorAnalysis, IncrementalPCA, MiniBatchNMF
 from sklearn.cross_decomposition import PLSRegression
 
 # Dimensionality Reduction (for classification)
@@ -163,6 +163,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.sparse
 import warnings
+from pandas.api.types import is_sparse
 
 # Memory caching setup
 from joblib import Memory
@@ -186,17 +187,299 @@ from sklearn.svm import SVR, SVC
 
 # extractors ------------------------------------------------------------------
 EXTRACTOR_FACTORY = {
-    "PCA": lambda n: PCA(n_components=n, random_state=0),
-    "NMF": lambda n: NMF(n_components=n, init="nndsvda", max_iter=10_000, random_state=0),
-    "ICA": lambda n: FastICA(n_components=n, max_iter=10_000, random_state=0),
+    "PCA": lambda n: PCA(n_components=n, random_state=0, svd_solver='auto'),
+    "NMF": lambda n: NMF(n_components=n, init="nndsvda", max_iter=10_000, random_state=0, solver='mu'),
+    "ICA": lambda n: FastICA(n_components=n, max_iter=10_000, random_state=0, whiten='unit-variance', tol=1e-4),
     "FA": lambda n: FactorAnalysis(n_components=n, random_state=0),
     "KPCA": lambda n: KernelPCA(n_components=n, kernel="rbf"),
     "PLS": lambda n: PLSRegression(n_components=n, max_iter=1_000),
+    "IncrementalPCA": lambda n: IncrementalPCA(n_components=n, batch_size=1000),
+    "MiniBatchNMF": lambda n: MiniBatchNMF(n_components=n, init="nndsvda", batch_size=1000, random_state=0)
 }
+
+def fit_transform_extractor_classification(X_train, y_train, extractor, n_components):
+    """Fit and transform data using the specified extractor for classification tasks."""
+    # scaling
+    if extractor.__class__.__name__ == "NMF":
+        scl = MinMaxScaler(clip=True)
+    else:
+        scl = StandardScaler()
+
+    X_train_scl = scl.fit_transform(X_train)
+
+    if hasattr(extractor, "random_state"):
+        extractor.random_state = 0
+
+    if isinstance(extractor, LDA):
+        n_classes = len(np.unique(y_train))
+        max_lda = n_classes - 1
+        if max_lda < 1:
+            X_train_red = None
+        else:
+            n_components = min(n_components, max_lda)
+            extractor.n_components = n_components
+            X_train_red = extractor.fit_transform(X_train_scl, y_train)
+    elif isinstance(extractor, KernelPCA):
+        extractor.n_components = n_components
+        X_train_red = extractor.fit_transform(X_train_scl)
+    else:
+        if hasattr(extractor, "n_components"):
+            extractor.n_components = n_components
+        X_train_red = extractor.fit_transform(X_train_scl)
+
+    fitted_extractor = {
+        "scaler": scl,
+        "extractor": extractor
+    }
+    return fitted_extractor, X_train_red
+
+def transform_extractor_classification(X_test, fitted_extractor):
+    """Transform test data using a fitted extractor for classification tasks."""
+    scl = fitted_extractor["scaler"]
+    extractor = fitted_extractor["extractor"]
+    X_test_scl = scl.transform(X_test)
+    # Ensure the number of features matches what the extractor was trained on
+    if X_test_scl.shape[1] != extractor.n_features_in_:
+        raise ValueError(f"X has {X_test_scl.shape[1]} features, but {extractor.__class__.__name__} is expecting {extractor.n_features_in_} features as input")
+    X_test_red = extractor.transform(X_test_scl)
+    return X_test_red
+
+def fit_transform_selector_classification(X_train, y_train, selector_code, n_feats):
+    """Fit and transform data using the specified selector for classification tasks."""
+    if selector_code=="mrmr_clf":
+        mi = mutual_info_classif(X_train, y_train, random_state=0)
+        idx = np.argsort(mi)[::-1]
+        top_idx = idx[:n_feats]
+        return list(top_idx), X_train.iloc[:, top_idx]
+
+    elif selector_code=="fclassif":
+        Fv, pv = f_classif(X_train, y_train)
+        idx = np.argsort(Fv)[::-1]
+        top_idx = idx[:n_feats]
+        return list(top_idx), X_train.iloc[:, top_idx]
+
+    elif selector_code=="logistic_l1":
+        lr = LogisticRegression(penalty='l1', solver='liblinear', C=0.1, random_state=0)
+        lr.fit(X_train, y_train)
+        coefs = np.abs(lr.coef_).sum(axis=0)
+        idx = np.argsort(coefs)[::-1]
+        top_idx = idx[:n_feats]
+        return list(top_idx), X_train.iloc[:, top_idx]
+
+    elif selector_code=="boruta_clf":
+        rf = RF_for_BorutaClf(n_estimators=100, random_state=0)
+        bor = BorutaPy(rf, n_estimators='auto', random_state=0)
+        bor.fit(X_train.values, y_train.values)
+        mask = bor.support_
+        chosen_cols = np.where(mask)[0]
+        if len(chosen_cols) > n_feats:
+            ranks = bor.ranking_
+            chosen_ranks = sorted(zip(chosen_cols, ranks[chosen_cols]), key=lambda x: x[1])
+            chosen_cols = [x[0] for x in chosen_ranks[:n_feats]]
+        return list(chosen_cols), X_train.iloc[:, chosen_cols]
+
+    elif selector_code=="chi2_selection":
+        X_clipped = np.clip(X_train, 0, None)
+        sel = SelectKBest(chi2, k=min(n_feats, X_train.shape[1]))
+        sel.fit(X_clipped, y_train)
+        mask = sel.get_support()
+        chosen_cols = np.where(mask)[0]
+        return list(chosen_cols), X_train.iloc[:, chosen_cols]
+
+    else:
+        # fallback => no selection
+        return list(range(X_train.shape[1])), X_train
+
+def transform_selector_classification(X_test, chosen_cols):
+    """Transform test data using a fitted selector for classification tasks."""
+    return X_test.iloc[:, chosen_cols]
+
+def train_classification_model(X_train, y_train, X_test, y_test,
+                            model_name, out_dir=None, plot_prefix=""):
+    """Train and evaluate a classification model."""
+    if model_name=="LogisticRegression":
+        model = LogisticRegression(penalty='l2', solver='liblinear', random_state=0)
+    elif model_name=="RandomForest":
+        model = RandomForestClassifier(n_estimators=100, random_state=0)
+    elif model_name=="SVC":
+        model = SVC(kernel='rbf', probability=True, random_state=0)
+    else:
+        raise ValueError(f"Unknown classification model {model_name}")
+
+    t0 = time.time()
+    model.fit(X_train, y_train)
+    train_time = time.time() - t0
+
+    y_pred = model.predict(X_test)
+
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, average='weighted', zero_division=0)
+    recall    = recall_score(y_test, y_pred, average='weighted', zero_division=0)
+    f1v       = f1_score(y_test, y_pred, average='weighted')
+    mcc       = matthews_corrcoef(y_test, y_pred)
+
+    try:
+        unique_cl = np.unique(y_test)
+        if len(unique_cl)==2:
+            y_proba = model.predict_proba(X_test)[:, 1]
+            aucv = roc_auc_score(y_test, y_proba)
+        else:
+            aucv = np.nan
+    except:
+        aucv = np.nan
+
+    cm = confusion_matrix(y_test, y_pred)
+    if out_dir and plot_prefix:
+        os.makedirs(out_dir, exist_ok=True)
+        cm_path = os.path.join(out_dir, f"{plot_prefix}_CM.png")
+        str_labels = [str(lb) for lb in sorted(np.unique(y_train))]
+        plot_confusion_matrix(cm, str_labels, plot_prefix, cm_path)
+
+        if len(np.unique(y_test)) == 2:
+            roc_path = os.path.join(out_dir, f"{plot_prefix}_ROC.png")
+            plot_roc_curve_binary(model, X_test, y_test, str_labels, plot_prefix, roc_path)
+
+    metrics = {
+        "Accuracy": accuracy,
+        "Precision": precision,
+        "Recall": recall,
+        "F1": f1v,
+        "MCC": mcc,
+        "AUROC": aucv,
+        "Train_Time_Seconds": train_time
+    }
+    return model, metrics
+
+def fit_transform_extractor_regression(X_train, y_train, extractor, n_components):
+    """Fit and transform data using the specified extractor for regression tasks."""
+    # scaling
+    if extractor.__class__.__name__ == "NMF":
+        scl = MinMaxScaler(clip=True)
+    else:
+        scl = StandardScaler()
+
+    X_train_scl = scl.fit_transform(X_train)
+
+    if hasattr(extractor, "random_state"):
+        extractor.random_state = 0
+
+    if isinstance(extractor, PLSRegression):
+        extractor.n_components = n_components
+        X_train_red = extractor.fit_transform(X_train_scl, y_train)[0]
+    else:
+        if hasattr(extractor, "n_components"):
+            extractor.n_components = n_components
+        X_train_red = extractor.fit_transform(X_train_scl)
+
+    fitted_extractor = {
+        "scaler": scl,
+        "extractor": extractor
+    }
+    return fitted_extractor, X_train_red
+
+def transform_extractor_regression(X_test, fitted_extractor):
+    """Transform test data using a fitted extractor for regression tasks."""
+    scl = fitted_extractor["scaler"]
+    extractor = fitted_extractor["extractor"]
+    X_test_scl = scl.transform(X_test)
+    # Ensure the number of features matches what the extractor was trained on
+    if X_test_scl.shape[1] != extractor.n_features_in_:
+        raise ValueError(f"X has {X_test_scl.shape[1]} features, but {extractor.__class__.__name__} is expecting {extractor.n_features_in_} features as input")
+    X_test_red = extractor.transform(X_test_scl)
+    return X_test_red
+
+def fit_transform_selector_regression(X_train, y_train, selector_code, n_feats):
+    """Fit and transform data using the specified selector for regression tasks."""
+    if selector_code=="mrmr_reg":
+        mi = mutual_info_regression(X_train, y_train, random_state=0)
+        idx = np.argsort(mi)[::-1]
+        top_idx = idx[:n_feats]
+        return list(top_idx), X_train.iloc[:, top_idx]
+
+    elif selector_code=="freg":
+        Fv, pv = f_regression(X_train, y_train)
+        idx = np.argsort(Fv)[::-1]
+        top_idx = idx[:n_feats]
+        return list(top_idx), X_train.iloc[:, top_idx]
+
+    elif selector_code=="lasso":
+        lasso = Lasso(alpha=0.01, max_iter=10_000, random_state=0)
+        lasso.fit(X_train, y_train)
+        coefs = np.abs(lasso.coef_)
+        idx = np.argsort(coefs)[::-1]
+        top_idx = idx[:n_feats]
+        return list(top_idx), X_train.iloc[:, top_idx]
+
+    elif selector_code=="enet":
+        enet = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=10_000, random_state=0)
+        enet.fit(X_train, y_train)
+        coefs = np.abs(enet.coef_)
+        idx = np.argsort(coefs)[::-1]
+        top_idx = idx[:n_feats]
+        return list(top_idx), X_train.iloc[:, top_idx]
+
+    elif selector_code=="boruta_reg":
+        rf = RF_for_BorutaReg(n_estimators=100, random_state=0)
+        bor = BorutaPy(rf, n_estimators='auto', random_state=0)
+        bor.fit(X_train.values, y_train.values)
+        mask = bor.support_
+        chosen_cols = np.where(mask)[0]
+        if len(chosen_cols) > n_feats:
+            ranks = bor.ranking_
+            chosen_ranks = sorted(zip(chosen_cols, ranks[chosen_cols]), key=lambda x: x[1])
+            chosen_cols = [x[0] for x in chosen_ranks[:n_feats]]
+        return list(chosen_cols), X_train.iloc[:, chosen_cols]
+
+    else:
+        # fallback => no selection
+        return list(range(X_train.shape[1])), X_train
+
+def transform_selector_regression(X_test, chosen_cols):
+    """Transform test data using a fitted selector for regression tasks."""
+    return X_test.iloc[:, chosen_cols]
+
+def train_regression_model(X_train, y_train, X_test, y_test,
+                         model_name, out_dir=None, plot_prefix=""):
+    """Train and evaluate a regression model."""
+    if model_name=="LinearRegression":
+        model = LinearRegression(n_jobs=N_JOBS)
+    elif model_name=="RandomForest":
+        model = RandomForestRegressor(n_estimators=100, random_state=0)
+    elif model_name=="SVR":
+        model = SVR(kernel='rbf', cache_size=2000)
+    else:
+        raise ValueError(f"Unknown regression model {model_name}")
+
+    t0 = time.time()
+    model.fit(X_train, y_train)
+    train_time = time.time() - t0
+
+    y_pred = model.predict(X_test)
+
+    mse = mean_squared_error(y_test, y_pred)
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    if out_dir and plot_prefix:
+        os.makedirs(out_dir, exist_ok=True)
+        scatter_path = os.path.join(out_dir, f"{plot_prefix}_scatter.png")
+        plot_regression_scatter(y_test, y_pred, plot_prefix, scatter_path)
+        
+        residuals_path = os.path.join(out_dir, f"{plot_prefix}_residuals.png")
+        plot_regression_residuals(y_test, y_pred, plot_prefix, residuals_path)
+
+    metrics = {
+        "MSE": mse,
+        "RMSE": sqrt(mse),
+        "MAE": mae,
+        "R2": r2,
+        "Train_Time_Seconds": train_time
+    }
+    return model, metrics
 
 @MEM.cache
 def build_extraction_pipeline(name: str, n_components: int):
-    scaler = MinMaxScaler() if name == "NMF" else StandardScaler()
+    scaler = MinMaxScaler() if name in ["NMF", "MiniBatchNMF"] else StandardScaler()
     extractor = EXTRACTOR_FACTORY[name](n_components)
     return Pipeline([("sc", scaler), ("extr", extractor)])
 
@@ -391,7 +674,7 @@ def try_read_file(file_path):
                     # Only convert to sparse if memory usage is high and not already sparse
                     if (MEMORY_OPTIMIZATION["use_sparse"] and 
                         chunk.memory_usage().sum() > 1e6 and 
-                        not isinstance(chunk, pd.DataFrame.sparse)):
+                        not is_sparse(chunk)):
                         # Convert to numpy array first, then to sparse
                         chunk = pd.DataFrame.sparse.from_spmatrix(
                             scipy.sparse.csr_matrix(chunk.values),
@@ -405,7 +688,7 @@ def try_read_file(file_path):
                 # Convert to sparse if beneficial and not already sparse
                 if (MEMORY_OPTIMIZATION["use_sparse"] and 
                     df.memory_usage().sum() > 1e6 and 
-                    not isinstance(df, pd.DataFrame.sparse)):
+                    not is_sparse(df)):
                     df = pd.DataFrame.sparse.from_spmatrix(
                         scipy.sparse.csr_matrix(df.values),
                         index=df.index,
@@ -437,7 +720,7 @@ def try_read_file(file_path):
                 # Only convert to sparse if memory usage is high and not already sparse
                 if (MEMORY_OPTIMIZATION["use_sparse"] and 
                     chunk.memory_usage().sum() > 1e6 and 
-                    not isinstance(chunk, pd.DataFrame.sparse)):
+                    not is_sparse(chunk)):
                     # Convert to numpy array first, then to sparse
                     chunk = pd.DataFrame.sparse.from_spmatrix(
                         scipy.sparse.csr_matrix(chunk.values),
@@ -451,7 +734,7 @@ def try_read_file(file_path):
             # Convert to sparse if beneficial and not already sparse
             if (MEMORY_OPTIMIZATION["use_sparse"] and 
                 df.memory_usage().sum() > 1e6 and 
-                not isinstance(df, pd.DataFrame.sparse)):
+                not is_sparse(df)):
                 df = pd.DataFrame.sparse.from_spmatrix(
                     scipy.sparse.csr_matrix(df.values),
                     index=df.index,
@@ -472,8 +755,8 @@ def load_omics_and_clinical(ds_config):
         os.path.join(odir, "mirna.csv")
     ]
     
-    # Read all files in parallel with optimized settings
-    results = Parallel(**JOBLIB_PARALLEL_CONFIG)(
+    # Read all files in parallel with threading backend
+    results = TParallel(n_jobs=N_JOBS)(
         delayed(try_read_file)(path) for path in file_paths
     )
     
@@ -633,7 +916,7 @@ def apply_missing_modalities(data_modalities, availability_matrix, modality_name
             missing_samples = np.where(availability_matrix[:, i] == 0)[0]
             if len(missing_samples) > 0:
                 # Handle sparse arrays
-                if isinstance(df, pd.DataFrame.sparse):
+                if is_sparse(df):
                     # Convert to dense for modification
                     df = df.sparse.to_dense()
                     # Set values to NaN
@@ -692,6 +975,15 @@ def _pad(arr: np.ndarray, target_cols: int) -> np.ndarray:
         return arr
     return np.pad(arr, ((0, 0), (0, diff)), mode="constant", constant_values=0)
 
+from sklearn.impute import SimpleImputer
+_imputer = SimpleImputer(strategy="mean")
+
+def _impute_nan(arr: np.ndarray) -> np.ndarray:
+    """Impute NaN values in a numpy array using mean imputation."""
+    if np.isnan(arr).any():
+        return _imputer.fit_transform(arr)
+    return arr
+
 def merge_modalities(*arrays, strategy: str = "concat") -> np.ndarray:
     """
     Merge an arbitrary number of numpy arrays (same number of rows).
@@ -712,25 +1004,24 @@ def merge_modalities(*arrays, strategy: str = "concat") -> np.ndarray:
         return np.empty((0, 0), dtype=np.float32)
 
     if strategy == "concat":
-        return np.concatenate(valid, axis=1).astype(np.float32, copy=False)
+        merged = np.concatenate(valid, axis=1).astype(np.float32, copy=False)
+        return _impute_nan(merged)
 
     # for element-wise operations the matrices must have equal column count
     target = max(a.shape[1] for a in valid)
-
-    def _pad(arr):
-        diff = target - arr.shape[1]
-        return np.pad(arr, ((0, 0), (0, diff)), "constant") if diff else arr
-
-    padded = [_pad(a) for a in valid]
+    padded = [_pad(a, target) for a in valid]
 
     if strategy == "average":
         count = sum((a != 0).astype(int) for a in padded)
         count[count == 0] = 1          # avoid division by 0
-        return (sum(padded) / count).astype(np.float32, copy=False)
+        merged = (sum(padded) / count).astype(np.float32, copy=False)
+        return _impute_nan(merged)
     if strategy == "sum":
-        return sum(padded).astype(np.float32, copy=False)
+        merged = sum(padded).astype(np.float32, copy=False)
+        return _impute_nan(merged)
     if strategy == "max":
-        return np.maximum.reduce(padded).astype(np.float32, copy=False)
+        merged = np.maximum.reduce(padded).astype(np.float32, copy=False)
+        return _impute_nan(merged)
 
     raise ValueError(f"Unknown merge strategy '{strategy}'")
 
@@ -829,533 +1120,8 @@ def plot_roc_curve_binary(model, X_test, y_test, class_labels, title, out_path):
 # F) TRAIN & EVAL: REGRESSION
 ###############################################################################
 
-def process_modality(
-    df: pd.DataFrame,
-    modality_name: str,
-    task: str,
-    n_components: int,
-    extractor_name: str,
-    selector_code: str,
-    k: int,
-) -> np.ndarray:
-    """Process a single modality using pipeline helpers."""
-    log_resource_usage(f"Processing modality {modality_name}")
-    
-    # Build and fit extraction pipeline
-    extr_pipe = build_extraction_pipeline(extractor_name, n_components)
-    X_extr = extr_pipe.fit_transform(df)
-    
-    # Build and fit selection pipeline
-    sel_pipe = build_selection_pipeline(selector_code, k, task)
-    X_sel = sel_pipe.fit_transform(X_extr)
-    
-    return X_sel
-
-def process_modalities(
-    dfs: Dict[str, pd.DataFrame],
-    task: str,
-    n_components: int,
-    extractor_name: str,
-    selector_code: str,
-    k: int,
-    missing_percentage: Optional[float] = None,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Process all modalities using pipeline helpers."""
-    log_resource_usage("Starting modalities processing")
-    
-    # Handle missing modalities if enabled
-    if missing_percentage is not None:
-        dfs = process_with_missing_modalities(dfs, missing_percentage)
-    
-    # Process each modality
-    processed = {}
-    for name, df in dfs.items():
-        processed[name] = process_modality(
-            df, name, task, n_components, extractor_name, selector_code, k
-        )
-    
-    # Merge modalities
-    return merge_modalities(list(processed.values()))
-
-def train_regression_model(X_train, y_train, X_test, y_test,
-                         model_name, out_dir=None, plot_prefix=""):
-    """Train and evaluate a regression model."""
-    log_resource_usage(f"Training {model_name}")
-    
-    # Convert to numpy arrays with optimized data types and memory layout
-    X_train = np.asarray(X_train, dtype=MEMORY_OPTIMIZATION["dtype"], order='C')
-    X_test = np.asarray(X_test, dtype=MEMORY_OPTIMIZATION["dtype"], order='C')
-    y_train = np.asarray(y_train, dtype=MEMORY_OPTIMIZATION["dtype"], order='C')
-    y_test = np.asarray(y_test, dtype=MEMORY_OPTIMIZATION["dtype"], order='C')
-    
-    # Initialize model with optimized parameters
-    if model_name == "RandomForest":
-        model = RandomForestRegressor(**MODEL_OPTIMIZATIONS["RandomForest"])
-    elif model_name == "LinearRegression":
-        model = LinearRegression(**MODEL_OPTIMIZATIONS["LinearRegression"])
-    elif model_name == "SVR":
-        model = SVR(**MODEL_OPTIMIZATIONS["SVR"])
-    else:
-        raise ValueError(f"Unknown model: {model_name}")
-    
-    # Train model with optimized batch processing
-    if hasattr(model, 'partial_fit'):
-        batch_size = min(MEMORY_OPTIMIZATION["chunk_size"], len(X_train))
-        for i in range(0, len(X_train), batch_size):
-            model.partial_fit(
-                X_train[i:i+batch_size],
-                y_train[i:i+batch_size]
-            )
-    else:
-        # Use early stopping if available
-        if hasattr(model, 'set_params'):
-            model.set_params(verbose=0)
-        
-        # Train with memory mapping if data is large
-        if X_train.nbytes > MEMORY_OPTIMIZATION["max_array_size"]:
-            # Create memory-mapped arrays
-            X_train_mmap = np.memmap('X_train.dat', dtype=MEMORY_OPTIMIZATION["dtype"],
-                                   mode='w+', shape=X_train.shape)
-            y_train_mmap = np.memmap('y_train.dat', dtype=MEMORY_OPTIMIZATION["dtype"],
-                                   mode='w+', shape=y_train.shape)
-            X_train_mmap[:] = X_train[:]
-            y_train_mmap[:] = y_train[:]
-            model.fit(X_train_mmap, y_train_mmap)
-            del X_train_mmap, y_train_mmap
-        else:
-            model.fit(X_train, y_train)
-    
-    # Make predictions with optimized batch processing
-    if len(X_test) > MEMORY_OPTIMIZATION["chunk_size"]:
-        y_pred = np.zeros(len(X_test), dtype=MEMORY_OPTIMIZATION["dtype"])
-        for i in range(0, len(X_test), MEMORY_OPTIMIZATION["chunk_size"]):
-            y_pred[i:i+MEMORY_OPTIMIZATION["chunk_size"]] = model.predict(
-                X_test[i:i+MEMORY_OPTIMIZATION["chunk_size"]]
-            )
-    else:
-        y_pred = model.predict(X_test)
-    
-    # Calculate metrics
-    metrics = {
-        'mse': mean_squared_error(y_test, y_pred),
-        'mae': mean_absolute_error(y_test, y_pred),
-        'r2': r2_score(y_test, y_pred)
-    }
-    
-    # Generate plots if requested
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-        
-        # Plot scatter
-        plt.figure(figsize=(10, 6))
-        plt.scatter(y_test, y_pred, alpha=0.5)
-        plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
-        plt.xlabel('True Values')
-        plt.ylabel('Predictions')
-        plt.title(f'{plot_prefix} - Scatter Plot')
-        plt.savefig(os.path.join(out_dir, f'{plot_prefix}_scatter.png'))
-        plt.close()
-        
-        # Plot residuals
-        plt.figure(figsize=(10, 6))
-        plt.scatter(y_pred, y_test - y_pred, alpha=0.5)
-        plt.axhline(y=0, color='r', linestyle='--')
-        plt.xlabel('Predictions')
-        plt.ylabel('Residuals')
-        plt.title(f'{plot_prefix} - Residuals Plot')
-        plt.savefig(os.path.join(out_dir, f'{plot_prefix}_residuals.png'))
-        plt.close()
-    
-    return model, metrics
-
-###############################################################################
-# G) TRAIN & EVAL: CLASSIFICATION
-###############################################################################
-
-def train_classification_model(X_train, y_train, X_test, y_test,
-                               model_name, out_dir=None, plot_prefix=""):
-    if model_name=="LogisticRegression":
-        model = LogisticRegression(penalty='l2', solver='liblinear', random_state=0)
-    elif model_name=="RandomForest":
-        model = RandomForestClassifier(n_estimators=100, random_state=0)
-    elif model_name=="SVC":
-        model = SVC(kernel='rbf', probability=True, random_state=0)
-    else:
-        raise ValueError(f"Unknown classification model {model_name}")
-
-    t0 = time.time()
-    model.fit(X_train, y_train)
-    train_time = time.time() - t0
-
-    y_pred = model.predict(X_test)
-
-    accuracy = accuracy_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred, average='weighted', zero_division=0)
-    recall    = recall_score(y_test, y_pred, average='weighted', zero_division=0)
-    f1v       = f1_score(y_test, y_pred, average='weighted')
-    mcc       = matthews_corrcoef(y_test, y_pred)
-
-    try:
-        unique_cl = np.unique(y_test)
-        if len(unique_cl)==2:
-            y_proba = model.predict_proba(X_test)[:, 1]
-            aucv = roc_auc_score(y_test, y_proba)
-        else:
-            aucv = np.nan
-    except:
-        aucv = np.nan
-
-    cm = confusion_matrix(y_test, y_pred)
-    if out_dir and plot_prefix:
-        os.makedirs(out_dir, exist_ok=True)
-        cm_path = os.path.join(out_dir, f"{plot_prefix}_CM.png")
-        str_labels = [str(lb) for lb in sorted(np.unique(y_train))]
-        plot_confusion_matrix(cm, str_labels, plot_prefix, cm_path)
-
-        if len(np.unique(y_test)) == 2:
-            roc_path = os.path.join(out_dir, f"{plot_prefix}_ROC.png")
-            plot_roc_curve_binary(model, X_test, y_test, str_labels, plot_prefix, roc_path)
-
-    metrics = {
-        "Accuracy": accuracy,
-        "Precision": precision,
-        "Recall": recall,
-        "F1": f1v,
-        "MCC": mcc,
-        "AUROC": aucv,
-        "Train_Time_Seconds": train_time
-    }
-    return model, metrics
-
-###############################################################################
-# H) FEATURE EXTRACTION/SELECTION FIT+TRANSFORM UTILS (REGRESSION)
-###############################################################################
-
-def fit_transform_extractor_regression(X_train, y_train, extractor, n_components):
-    # Some extractors (NMF) want non-negative => scale with MinMax
-    if extractor.__class__.__name__ == "NMF":
-        scl = MinMaxScaler(clip=True)
-    else:
-        scl = StandardScaler()
-
-    # Convert to optimized data type
-    X_train = np.asarray(X_train, dtype=MEMORY_OPTIMIZATION["dtype"])
-    if isinstance(y_train, (pd.Series, pd.DataFrame)):
-        y_train = np.asarray(y_train, dtype=MEMORY_OPTIMIZATION["dtype"])
-
-    # Scale data in chunks if large
-    if len(X_train) > MEMORY_OPTIMIZATION["chunk_size"]:
-        X_train_scl = np.zeros_like(X_train, dtype=MEMORY_OPTIMIZATION["dtype"])
-        for i in range(0, len(X_train), MEMORY_OPTIMIZATION["chunk_size"]):
-            X_train_scl[i:i+MEMORY_OPTIMIZATION["chunk_size"]] = scl.fit_transform(
-                X_train[i:i+MEMORY_OPTIMIZATION["chunk_size"]]
-            )
-    else:
-        X_train_scl = scl.fit_transform(X_train)
-
-    if hasattr(extractor, "random_state"):
-        extractor.random_state = 0
-    if hasattr(extractor, "n_components"):
-        extractor.n_components = n_components
-
-    # For PLS => pass y
-    if isinstance(extractor, PLSRegression):
-        Y_train_arr = y_train.reshape(-1, 1)
-        # Process in chunks if large
-        if len(X_train_scl) > MEMORY_OPTIMIZATION["chunk_size"]:
-            X_train_red = np.zeros((len(X_train_scl), n_components), dtype=MEMORY_OPTIMIZATION["dtype"])
-            for i in range(0, len(X_train_scl), MEMORY_OPTIMIZATION["chunk_size"]):
-                chunk = X_train_scl[i:i+MEMORY_OPTIMIZATION["chunk_size"]]
-                y_chunk = Y_train_arr[i:i+MEMORY_OPTIMIZATION["chunk_size"]]
-                X_train_red[i:i+MEMORY_OPTIMIZATION["chunk_size"]] = extractor.fit_transform(chunk, y_chunk)[0]
-        else:
-            X_train_red = extractor.fit_transform(X_train_scl, Y_train_arr)[0]
-    else:
-        # Process in chunks if large
-        if len(X_train_scl) > MEMORY_OPTIMIZATION["chunk_size"]:
-            X_train_red = np.zeros((len(X_train_scl), n_components), dtype=MEMORY_OPTIMIZATION["dtype"])
-            for i in range(0, len(X_train_scl), MEMORY_OPTIMIZATION["chunk_size"]):
-                chunk = X_train_scl[i:i+MEMORY_OPTIMIZATION["chunk_size"]]
-                X_train_red[i:i+MEMORY_OPTIMIZATION["chunk_size"]] = extractor.fit_transform(chunk)
-        else:
-            X_train_red = extractor.fit_transform(X_train_scl)
-
-    fitted_extractor = {
-        "scaler": scl,
-        "extractor": extractor
-    }
-    return fitted_extractor, X_train_red
-
-def transform_extractor_regression(X_test, fitted_extractor):
-    scl = fitted_extractor["scaler"]
-    extractor = fitted_extractor["extractor"]
-    
-    # Convert to optimized data type
-    X_test = np.asarray(X_test, dtype=MEMORY_OPTIMIZATION["dtype"])
-    
-    # Scale data in chunks if large
-    if len(X_test) > MEMORY_OPTIMIZATION["chunk_size"]:
-        X_test_scl = np.zeros_like(X_test, dtype=MEMORY_OPTIMIZATION["dtype"])
-        for i in range(0, len(X_test), MEMORY_OPTIMIZATION["chunk_size"]):
-            X_test_scl[i:i+MEMORY_OPTIMIZATION["chunk_size"]] = scl.transform(
-                X_test[i:i+MEMORY_OPTIMIZATION["chunk_size"]]
-            )
-    else:
-        X_test_scl = scl.transform(X_test)
-
-    if isinstance(extractor, PLSRegression):
-        X_test_red = extractor.transform(X_test_scl)
-    else:
-        # Ensure the number of features matches what the extractor was trained on
-        if X_test_scl.shape[1] != extractor.n_features_in_:
-            raise ValueError(f"X has {X_test_scl.shape[1]} features, but {extractor.__class__.__name__} is expecting {extractor.n_features_in_} features as input")
-        
-        # Transform in chunks if large
-        if len(X_test_scl) > MEMORY_OPTIMIZATION["chunk_size"]:
-            X_test_red = np.zeros((len(X_test_scl), extractor.n_components), dtype=MEMORY_OPTIMIZATION["dtype"])
-            for i in range(0, len(X_test_scl), MEMORY_OPTIMIZATION["chunk_size"]):
-                chunk = X_test_scl[i:i+MEMORY_OPTIMIZATION["chunk_size"]]
-                X_test_red[i:i+MEMORY_OPTIMIZATION["chunk_size"]] = extractor.transform(chunk)
-        else:
-            X_test_red = extractor.transform(X_test_scl)
-    
-    return X_test_red
-
-def fit_transform_selector_regression(X_train, y_train, selector_code, n_feats):
-    # Check for empty arrays
-    if X_train.shape[0] == 0 or X_train.shape[1] == 0:
-        print("Warning: Empty input array in fit_transform_selector_regression")
-        return list(range(min(n_feats, X_train.shape[1]))), X_train
-
-    if selector_code == "mrmr_reg":
-        try:
-            mi = mutual_info_regression(X_train, y_train, random_state=0)
-            if len(mi) == 0:
-                print("Warning: No mutual information scores calculated")
-                return list(range(min(n_feats, X_train.shape[1]))), X_train
-            idx = np.argsort(mi)[::-1]  # descending
-            top_idx = idx[:n_feats]
-            return list(top_idx), X_train.iloc[:, top_idx]
-        except Exception as e:
-            print(f"Warning: Mutual information calculation failed: {str(e)}")
-            return list(range(min(n_feats, X_train.shape[1]))), X_train
-
-    elif selector_code == "lasso":
-        try:
-            lasso = Lasso(alpha=0.01, max_iter=10000, random_state=0)
-            lasso.fit(X_train, y_train)
-            coefs = lasso.coef_
-            idx = np.argsort(np.abs(coefs))[::-1]
-            top_idx = idx[:n_feats]
-            return list(top_idx), X_train.iloc[:, top_idx]
-        except Exception as e:
-            print(f"Warning: Lasso selection failed: {str(e)}")
-            return list(range(min(n_feats, X_train.shape[1]))), X_train
-
-    elif selector_code == "enet":
-        try:
-            en = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=10000, random_state=0)
-            en.fit(X_train, y_train)
-            c = en.coef_
-            idx = np.argsort(np.abs(c))[::-1]
-            top_idx = idx[:n_feats]
-            return list(top_idx), X_train.iloc[:, top_idx]
-        except Exception as e:
-            print(f"Warning: ElasticNet selection failed: {str(e)}")
-            return list(range(min(n_feats, X_train.shape[1]))), X_train
-
-    elif selector_code == "freg":
-        try:
-            Fv, pv = f_regression(X_train, y_train)
-            if len(Fv) == 0:
-                print("Warning: No F-scores calculated")
-                return list(range(min(n_feats, X_train.shape[1]))), X_train
-            idx = np.argsort(Fv)[::-1]
-            top_idx = idx[:n_feats]
-            return list(top_idx), X_train.iloc[:, top_idx]
-        except Exception as e:
-            print(f"Warning: F-regression selection failed: {str(e)}")
-            return list(range(min(n_feats, X_train.shape[1]))), X_train
-
-    elif selector_code == "boruta_reg":
-        try:
-            rf = RF_for_BorutaReg(n_estimators=100, random_state=0)
-            bor = BorutaPy(rf, n_estimators='auto', random_state=0)
-            bor.fit(X_train.values, y_train.values)
-            mask = bor.support_
-            chosen = np.where(mask)[0]
-            if len(chosen) > n_feats:
-                ranks = bor.ranking_
-                chosen_ranks = sorted(zip(chosen, ranks[chosen]), key=lambda x: x[1])
-                chosen = [x[0] for x in chosen_ranks[:n_feats]]
-            return list(chosen), X_train.iloc[:, chosen]
-        except Exception as e:
-            print(f"Warning: Boruta selection failed: {str(e)}")
-            return list(range(min(n_feats, X_train.shape[1]))), X_train
-
-    else:
-        # fallback => no selection
-        return list(range(min(n_feats, X_train.shape[1]))), X_train
-
-def transform_selector_regression(X_test, chosen_cols):
-    return X_test.iloc[:, chosen_cols]
-
-###############################################################################
-# I) FEATURE EXTRACTION/SELECTION FIT+TRANSFORM UTILS (CLASSIFICATION)
-###############################################################################
-
-def fit_transform_extractor_classification(X_train, y_train, extractor, n_components):
-    # scaling
-    if extractor.__class__.__name__ == "NMF":
-        scl = MinMaxScaler(clip=True)
-    else:
-        scl = StandardScaler()
-
-    X_train_scl = scl.fit_transform(X_train)
-
-    if hasattr(extractor, "random_state"):
-        extractor.random_state = 0
-
-    if isinstance(extractor, LDA):
-        n_classes = len(np.unique(y_train))
-        max_lda = n_classes - 1
-        if max_lda < 1:
-            X_train_red = None
-        else:
-            n_components = min(n_components, max_lda)
-            extractor.n_components = n_components
-            X_train_red = extractor.fit_transform(X_train_scl, y_train)
-    elif isinstance(extractor, KernelPCA):
-        extractor.n_components = n_components
-        X_train_red = extractor.fit_transform(X_train_scl)
-    else:
-        if hasattr(extractor, "n_components"):
-            extractor.n_components = n_components
-        X_train_red = extractor.fit_transform(X_train_scl)
-
-    fitted_extractor = {
-        "scaler": scl,
-        "extractor": extractor
-    }
-    return fitted_extractor, X_train_red
-
-def transform_extractor_classification(X_test, fitted_extractor):
-    scl = fitted_extractor["scaler"]
-    extractor = fitted_extractor["extractor"]
-    X_test_scl = scl.transform(X_test)
-    # Ensure the number of features matches what the extractor was trained on
-    if X_test_scl.shape[1] != extractor.n_features_in_:
-        raise ValueError(f"X has {X_test_scl.shape[1]} features, but {extractor.__class__.__name__} is expecting {extractor.n_features_in_} features as input")
-    X_test_red = extractor.transform(X_test_scl)
-    return X_test_red
-
-def fit_transform_selector_classification(X_train, y_train, selector_code, n_feats):
-    if selector_code=="mrmr_clf":
-        mi = mutual_info_classif(X_train, y_train, random_state=0)
-        idx = np.argsort(mi)[::-1]
-        top_idx = idx[:n_feats]
-        return list(top_idx), X_train.iloc[:, top_idx]
-
-    elif selector_code=="fclassif":
-        Fv, pv = f_classif(X_train, y_train)
-        idx = np.argsort(Fv)[::-1]
-        top_idx = idx[:n_feats]
-        return list(top_idx), X_train.iloc[:, top_idx]
-
-    elif selector_code=="logistic_l1":
-        lr = LogisticRegression(penalty='l1', solver='liblinear', C=0.1, random_state=0)
-        lr.fit(X_train, y_train)
-        coefs = np.abs(lr.coef_).sum(axis=0)
-        idx = np.argsort(coefs)[::-1]
-        top_idx = idx[:n_feats]
-        return list(top_idx), X_train.iloc[:, top_idx]
-
-    elif selector_code=="boruta_clf":
-        rf = RF_for_BorutaClf(n_estimators=100, random_state=0)
-        bor = BorutaPy(rf, n_estimators='auto', random_state=0)
-        bor.fit(X_train.values, y_train.values)
-        mask = bor.support_
-        chosen_cols = np.where(mask)[0]
-        if len(chosen_cols) > n_feats:
-            ranks = bor.ranking_
-            chosen_ranks = sorted(zip(chosen_cols, ranks[chosen_cols]), key=lambda x: x[1])
-            chosen_cols = [x[0] for x in chosen_ranks[:n_feats]]
-        return list(chosen_cols), X_train.iloc[:, chosen_cols]
-
-    elif selector_code=="chi2_selection":
-        X_clipped = np.clip(X_train, 0, None)
-        sel = SelectKBest(chi2, k=min(n_feats, X_train.shape[1]))
-        sel.fit(X_clipped, y_train)
-        mask = sel.get_support()
-        chosen_cols = np.where(mask)[0]
-        return list(chosen_cols), X_train.iloc[:, chosen_cols]
-
-    else:
-        # fallback => no selection
-        return list(range(X_train.shape[1])), X_train
-
-def transform_selector_classification(X_test, chosen_cols):
-    return X_test.iloc[:, chosen_cols]
-
-###############################################################################
-# J) MERGING STRATEGIES
-###############################################################################
-
-def pad_to_shape(arr, target_cols):
-    """Pads array 'arr' with zeros on the right to reach 'target_cols' columns."""
-    current_cols = arr.shape[1]
-    if current_cols < target_cols:
-        pad_width = target_cols - current_cols
-        return np.pad(arr, ((0, 0), (0, pad_width)), mode='constant', constant_values=0)
-    return arr
-
-def merge_modalities(*arrays, strategy: str = "concat") -> np.ndarray:
-    """
-    Merge an arbitrary number of numpy arrays (same number of rows).
-
-    Parameters
-    ----------
-    *arrays     Variable-length list of 2-D arrays (or None/empty).
-    strategy    'concat' | 'average' | 'sum' | 'max'
-
-    Returns
-    -------
-    np.ndarray  The merged matrix (float32).  Empty (0, 0) array if nothing
-                usable was supplied.
-    """
-    # keep only non-empty, non-None inputs
-    valid = [a for a in arrays if a is not None and getattr(a, "size", 0) > 0]
-    if not valid:
-        return np.empty((0, 0), dtype=np.float32)
-
-    if strategy == "concat":
-        return np.concatenate(valid, axis=1).astype(np.float32, copy=False)
-
-    # for element-wise operations the matrices must have equal column count
-    target = max(a.shape[1] for a in valid)
-
-    def _pad(arr):
-        diff = target - arr.shape[1]
-        return np.pad(arr, ((0, 0), (0, diff)), "constant") if diff else arr
-
-    padded = [_pad(a) for a in valid]
-
-    if strategy == "average":
-        count = sum((a != 0).astype(int) for a in padded)
-        count[count == 0] = 1          # avoid division by 0
-        return (sum(padded) / count).astype(np.float32, copy=False)
-    if strategy == "sum":
-        return sum(padded).astype(np.float32, copy=False)
-    if strategy == "max":
-        return np.maximum.reduce(padded).astype(np.float32, copy=False)
-
-    raise ValueError(f"Unknown merge strategy '{strategy}'")
-
-###############################################################################
-# K) HIGH‑LEVEL PROCESS FUNCTIONS (REGRESSION) WITH CROSS‑VALIDATION
-###############################################################################
-
 def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id):
+    """Process a single modality with proper parallel processing hierarchy."""
     # Process data in chunks for better memory management
     def process_chunk(chunk_ids, is_train=False):
         # Filter out IDs that don't exist in the DataFrame
@@ -1377,16 +1143,17 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
     test_chunks = [[idx_to_id[idx] for idx in idx_test[i:i + CHUNK_SIZE]] 
                    for i in range(0, len(idx_test), CHUNK_SIZE)]
 
-    # Process chunks in parallel with optimized settings
-    X_train_chunks = Parallel(**JOBLIB_PARALLEL_CONFIG)(
-        delayed(process_chunk)(chunk, True) for chunk in train_chunks
-    )
-    X_val_chunks = Parallel(**JOBLIB_PARALLEL_CONFIG)(
-        delayed(process_chunk)(chunk) for chunk in val_chunks
-    )
-    X_test_chunks = Parallel(**JOBLIB_PARALLEL_CONFIG)(
-        delayed(process_chunk)(chunk) for chunk in test_chunks
-    )
+    # Process chunks in parallel with threading backend
+    with parallel_config(backend="threading"):
+        X_train_chunks = Parallel(n_jobs=N_JOBS)(
+            delayed(process_chunk)(chunk, True) for chunk in train_chunks
+        )
+        X_val_chunks = Parallel(n_jobs=N_JOBS)(
+            delayed(process_chunk)(chunk) for chunk in val_chunks
+        )
+        X_test_chunks = Parallel(n_jobs=N_JOBS)(
+            delayed(process_chunk)(chunk) for chunk in test_chunks
+        )
 
     # Filter out None chunks
     X_train_chunks = [chunk for chunk in X_train_chunks if chunk is not None and chunk.shape[0] > 0]
@@ -1527,11 +1294,10 @@ def process_cv_fold(
     )
 
     # Process modalities in parallel with threading backend
-    with parallel_config(backend="threading"):
-        modality_results = Parallel(n_jobs=N_JOBS)(
-            delayed(process_modality)(name, df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id)
-            for name, df in modified_modalities.items()
-        )
+    modality_results = TParallel(n_jobs=N_JOBS)(
+        delayed(process_modality)(name, df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id)
+        for name, df in modified_modalities.items()
+    )
 
     # Filter out None results
     valid_results = [r for r in modality_results if r is not None and all(x is not None and x.size > 0 for x in r)]
@@ -2102,148 +1868,147 @@ def process_clf_selection_combo_cv(
 # M) MAIN
 ###############################################################################
 def main():
-    if __name__ == '__main__':
-        # Parameters for cross-validation splits
-        TEST_SIZE = 0.2   # Hold-out test set fraction
-        N_SPLITS = 3      # Number of CV folds
+    # Parameters for cross-validation splits
+    TEST_SIZE = 0.2   # Hold-out test set fraction
+    N_SPLITS = 3      # Number of CV folds
 
-        # 1) REGRESSION block
-        reg_extractors = get_regression_extractors()
-        reg_selectors  = get_regression_selectors()
-        reg_models     = ["LinearRegression", "RandomForest", "SVR"]
-        n_comps_list   = [256, 512, MAX_COMPONENTS]  # Reduced number of components
-        n_feats_list   = [256, 512, MAX_FEATURES]    # Reduced number of features
+    # 1) REGRESSION block
+    reg_extractors = get_regression_extractors()
+    reg_selectors  = get_regression_selectors()
+    reg_models     = ["LinearRegression", "RandomForest", "SVR"]
+    n_comps_list   = [256, 512, MAX_COMPONENTS]  # Reduced number of components
+    n_feats_list   = [256, 512, MAX_FEATURES]    # Reduced number of features
 
-        n_extract_runs = (
-            len(REGRESSION_DATASETS) * len(reg_extractors) * len(n_comps_list)
-        )
-        n_select_runs = (
-            len(REGRESSION_DATASETS) * len(reg_selectors) * len(n_feats_list)
-        )
-        reg_total_runs = n_extract_runs + n_select_runs
-        progress_count_reg = [0]
+    n_extract_runs = (
+        len(REGRESSION_DATASETS) * len(reg_extractors) * len(n_comps_list)
+    )
+    n_select_runs = (
+        len(REGRESSION_DATASETS) * len(reg_selectors) * len(n_feats_list)
+    )
+    reg_total_runs = n_extract_runs + n_select_runs
+    progress_count_reg = [0]
 
-        print("=== REGRESSION BLOCK (AML, Sarcoma) ===")
-        for ds_conf in REGRESSION_DATASETS:
-            ds_name = ds_conf["name"]
-            base_out = os.path.join("output_regression", ds_name)
-            os.makedirs(base_out, exist_ok=True)
-            os.makedirs(os.path.join(base_out, "models"), exist_ok=True)
-            os.makedirs(os.path.join(base_out, "metrics"), exist_ok=True)
-            os.makedirs(os.path.join(base_out, "plots"), exist_ok=True)
+    print("=== REGRESSION BLOCK (AML, Sarcoma) ===")
+    for ds_conf in REGRESSION_DATASETS:
+        ds_name = ds_conf["name"]
+        base_out = os.path.join("output_regression", ds_name)
+        os.makedirs(base_out, exist_ok=True)
+        os.makedirs(os.path.join(base_out, "models"), exist_ok=True)
+        os.makedirs(os.path.join(base_out, "metrics"), exist_ok=True)
+        os.makedirs(os.path.join(base_out, "plots"), exist_ok=True)
 
-            print(f"\n--- Processing {ds_name} (Regression) ---")
+        print(f"\n--- Processing {ds_name} (Regression) ---")
 
-            # load
-            exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
-            # prepare
-            try:
-                data_modalities, common_ids, y, clin_f = prepare_data(
-                    ds_conf, exp_df, methy_df, mirna_df, is_regression=True
-                )
-            except ValueError as e:
-                print(f"Skipping {ds_name} => {e}")
-                continue
+        # load
+        exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
+        # prepare
+        try:
+            data_modalities, common_ids, y, clin_f = prepare_data(
+                ds_conf, exp_df, methy_df, mirna_df, is_regression=True
+            )
+        except ValueError as e:
+            print(f"Skipping {ds_name} => {e}")
+            continue
 
-            if len(common_ids) == 0 or y.shape[0] == 0:
-                print(f"No overlapping or no valid samples => skipping {ds_name}")
-                continue
+        if len(common_ids) == 0 or y.shape[0] == 0:
+            print(f"No overlapping or no valid samples => skipping {ds_name}")
+            continue
 
-            # A) Extraction with CV
-            extraction_jobs = [
-                delayed(process_reg_extraction_combo_cv)(
-                    ds_name, extr_name, extr_obj, nc,
-                    reg_models, data_modalities, common_ids, y, base_out,
-                    progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
-                )
-                for extr_name, extr_obj in reg_extractors.items()
-                for nc in n_comps_list
-            ]
+        # A) Extraction with CV
+        extraction_jobs = [
+            delayed(process_reg_extraction_combo_cv)(
+                ds_name, extr_name, extr_obj, nc,
+                reg_models, data_modalities, common_ids, y, base_out,
+                progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
+            )
+            for extr_name, extr_obj in reg_extractors.items()
+            for nc in n_comps_list
+        ]
 
-            all_extraction_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(extraction_jobs)
+        all_extraction_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(extraction_jobs)
 
-            # B) Selection with CV
-            selection_jobs = [
-                delayed(process_reg_selection_combo_cv)(
-                    ds_name, sel_name, sel_code, nf,
-                    reg_models, data_modalities, common_ids, y, base_out,
-                    progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
-                )
-                for sel_name, sel_code in reg_selectors.items()
-                for nf in n_feats_list
-            ]
+        # B) Selection with CV
+        selection_jobs = [
+            delayed(process_reg_selection_combo_cv)(
+                ds_name, sel_name, sel_code, nf,
+                reg_models, data_modalities, common_ids, y, base_out,
+                progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
+            )
+            for sel_name, sel_code in reg_selectors.items()
+            for nf in n_feats_list
+        ]
 
-            all_selection_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(selection_jobs)
+        all_selection_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(selection_jobs)
 
-        # 2) CLASSIFICATION block
-        clf_extractors = get_classification_extractors()
-        clf_selectors  = get_classification_selectors()
-        clf_models     = ["LogisticRegression", "RandomForest", "SVC"]
-        n_comps_list_clf = [256, 512, MAX_COMPONENTS]  # Reduced number of components
-        n_feats_list_clf = [256, 512, MAX_FEATURES]    # Reduced number of features
+    # 2) CLASSIFICATION block
+    clf_extractors = get_classification_extractors()
+    clf_selectors  = get_classification_selectors()
+    clf_models     = ["LogisticRegression", "RandomForest", "SVC"]
+    n_comps_list_clf = [256, 512, MAX_COMPONENTS]  # Reduced number of components
+    n_feats_list_clf = [256, 512, MAX_FEATURES]    # Reduced number of features
 
-        n_extract_runs_clf = (
-            len(CLASSIFICATION_DATASETS) * len(clf_extractors) * len(n_comps_list_clf)
-        )
-        n_select_runs_clf = (
-            len(CLASSIFICATION_DATASETS) * len(clf_selectors) * len(n_feats_list_clf)
-        )
-        clf_total_runs = n_extract_runs_clf + n_select_runs_clf
-        progress_count_clf = [0]
+    n_extract_runs_clf = (
+        len(CLASSIFICATION_DATASETS) * len(clf_extractors) * len(n_comps_list_clf)
+    )
+    n_select_runs_clf = (
+        len(CLASSIFICATION_DATASETS) * len(clf_selectors) * len(n_feats_list_clf)
+    )
+    clf_total_runs = n_extract_runs_clf + n_select_runs_clf
+    progress_count_clf = [0]
 
-        print("\n=== CLASSIFICATION BLOCK (Breast, Colon, Kidney, etc.) ===")
-        for ds_conf in CLASSIFICATION_DATASETS:
-            ds_name = ds_conf["name"]
-            base_out = os.path.join("output_classification", ds_name)
-            os.makedirs(base_out, exist_ok=True)
-            os.makedirs(os.path.join(base_out, "models"), exist_ok=True)
-            os.makedirs(os.path.join(base_out, "metrics"), exist_ok=True)
-            os.makedirs(os.path.join(base_out, "plots"), exist_ok=True)
+    print("\n=== CLASSIFICATION BLOCK (Breast, Colon, Kidney, etc.) ===")
+    for ds_conf in CLASSIFICATION_DATASETS:
+        ds_name = ds_conf["name"]
+        base_out = os.path.join("output_classification", ds_name)
+        os.makedirs(base_out, exist_ok=True)
+        os.makedirs(os.path.join(base_out, "models"), exist_ok=True)
+        os.makedirs(os.path.join(base_out, "metrics"), exist_ok=True)
+        os.makedirs(os.path.join(base_out, "plots"), exist_ok=True)
 
-            print(f"\n--- Processing {ds_name} (Classification) ---")
+        print(f"\n--- Processing {ds_name} (Classification) ---")
 
-            # load
-            exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
-            # prepare
-            try:
-                data_modalities, common_ids, y, clin_f = prepare_data(
-                    ds_conf, exp_df, methy_df, mirna_df, is_regression=False
-                )
-            except ValueError as e:
-                print(f"Skipping {ds_name} => {e}")
-                continue
+        # load
+        exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
+        # prepare
+        try:
+            data_modalities, common_ids, y, clin_f = prepare_data(
+                ds_conf, exp_df, methy_df, mirna_df, is_regression=False
+            )
+        except ValueError as e:
+            print(f"Skipping {ds_name} => {e}")
+            continue
 
-            if len(common_ids) == 0 or y.shape[0] == 0:
-                print(f"No overlapping or no valid samples => skipping {ds_name}")
-                continue
+        if len(common_ids) == 0 or y.shape[0] == 0:
+            print(f"No overlapping or no valid samples => skipping {ds_name}")
+            continue
 
-            # A) Extraction with CV
-            extraction_jobs = [
-                delayed(process_clf_extraction_combo_cv)(
-                    ds_name, extr_name, extr_obj, nc,
-                    clf_models, data_modalities, common_ids, y, base_out,
-                    progress_count_clf, clf_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
-                )
-                for extr_name, extr_obj in clf_extractors.items()
-                for nc in n_comps_list_clf
-            ]
+        # A) Extraction with CV
+        extraction_jobs = [
+            delayed(process_clf_extraction_combo_cv)(
+                ds_name, extr_name, extr_obj, nc,
+                clf_models, data_modalities, common_ids, y, base_out,
+                progress_count_clf, clf_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
+            )
+            for extr_name, extr_obj in clf_extractors.items()
+            for nc in n_comps_list_clf
+        ]
 
-            all_extraction_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(extraction_jobs)
+        all_extraction_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(extraction_jobs)
 
-            # B) Selection with CV
-            selection_jobs = [
-                delayed(process_clf_selection_combo_cv)(
-                    ds_name, sel_name, sel_code, nf,
-                    clf_models, data_modalities, common_ids, y, base_out,
-                    progress_count_clf, clf_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
-                )
-                for sel_name, sel_code in clf_selectors.items()
-                for nf in n_feats_list_clf
-            ]
+        # B) Selection with CV
+        selection_jobs = [
+            delayed(process_clf_selection_combo_cv)(
+                ds_name, sel_name, sel_code, nf,
+                clf_models, data_modalities, common_ids, y, base_out,
+                progress_count_clf, clf_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
+            )
+            for sel_name, sel_code in clf_selectors.items()
+            for nf in n_feats_list_clf
+        ]
 
-            all_selection_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(selection_jobs)
+        all_selection_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(selection_jobs)
 
-        print("\nAll done! Regression outputs in 'output_regression/' and classification outputs in 'output_classification/'.")
+    print("\nAll done! Regression outputs in 'output_regression/' and classification outputs in 'output_classification/'.")
 
 # Cache helpers – smaller keys (SHA1 of columns)
 class _Cache:
@@ -2312,5 +2077,5 @@ def cached_fit_transform_selector_classification(X_train, y_train, selector_code
 ###############################################################################
 # M) MAIN
 ###############################################################################
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
