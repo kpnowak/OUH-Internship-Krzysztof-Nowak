@@ -1418,7 +1418,7 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
 
     # Check if we have any valid data
     if not X_train_chunks or not X_val_chunks or not X_test_chunks:
-        print(f"Warning: No valid data found for modality {modality_name} | Algorithm: {extr_obj.__class__.__name__} | Components: {ncomps} | Batch Size: {CHUNK_SIZE} | Memory Config: {MEMORY_OPTIMIZATION}")
+        print(f"Warning: No valid data found for modality {modality_name} | Algorithm: {extr_obj.__class__.__name__} | Components: {ncomps}")
         return None, None, None
 
     try:
@@ -1543,7 +1543,7 @@ def process_cv_fold(train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
     valid_results = [r for r in modality_results if r is not None and all(x is not None and x.size > 0 for x in r)]
     
     if not valid_results:
-        print(f"Warning: No valid data found for any modality in fold {fold_idx} | Algorithm: {extr_obj.__class__.__name__} | Components: {ncomps} | Missing Percentage: {missing_percentage} | Batch Size: {CHUNK_SIZE} | Memory Config: {MEMORY_OPTIMIZATION}")
+        print(f"Warning: No valid data found for any modality in fold {fold_idx} | Algorithm: {extr_obj.__class__.__name__} | Components: {ncomps} | Missing Percentage: {missing_percentage} | Models: {', '.join(reg_models)}")
         return {}
     
     # Merge modalities
