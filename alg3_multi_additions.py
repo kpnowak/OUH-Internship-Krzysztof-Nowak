@@ -29,7 +29,7 @@ PHYSICAL_CORES = psutil.cpu_count(logical=False)
 LOGICAL_THREADS = psutil.cpu_count(logical=True)
 
 # Optimize parallelization settings for maximum CPU utilization
-N_JOBS = PHYSICAL_CORES  # Use physical cores for better stability
+N_JOBS = max(1, PHYSICAL_CORES // 2)  # Reduced for debugging
 CHUNK_SIZE = 50_000  # Adjusted chunk size for Windows stability
 MAX_COMPONENTS = 1_024  # Increased for better feature utilization
 MAX_FEATURES = 1_024  # Increased for better feature utilization
@@ -385,6 +385,8 @@ def try_read_file(file_path):
                         index=df.index,
                         columns=df.columns
                     )
+                # Force 32-bit storage
+                df = df.astype(np.float32, copy=False)
                 return df
         except Exception as e:
             continue
@@ -429,6 +431,8 @@ def try_read_file(file_path):
                     index=df.index,
                     columns=df.columns
                 )
+            # Force 32-bit storage
+            df = df.astype(np.float32, copy=False)
             return df
     except Exception as e:
         raise ValueError(f"Failed to read {os.path.basename(file_path)}: {str(e)}")
@@ -662,30 +666,47 @@ def _pad(arr: np.ndarray, target_cols: int) -> np.ndarray:
         return arr
     return np.pad(arr, ((0, 0), (0, diff)), mode="constant", constant_values=0)
 
-def merge_modalities(mod1, mod2, mod3, strategy="concat"):
+def merge_modalities(*arrays, strategy: str = "concat") -> np.ndarray:
     """
-    Merge three numpy arrays (same # of rows).
-      - 'concat'  => column-wise concatenation (works with mismatched shapes)
-      - 'average' => element-wise average (requires same shape; pads if needed)
-      - 'sum'     => element-wise sum (requires same shape; pads if needed)
-      - 'max'     => element-wise max (requires same shape; pads if needed)
+    Merge an arbitrary number of numpy arrays (same number of rows).
+
+    Parameters
+    ----------
+    *arrays     Variable-length list of 2-D arrays (or None/empty).
+    strategy    'concat' | 'average' | 'sum' | 'max'
+
+    Returns
+    -------
+    np.ndarray  The merged matrix (float32).  Empty (0, 0) array if nothing
+                usable was supplied.
     """
-    valid = [a for a in [mod1, mod2, mod3] if a is not None and a.size]
+    # keep only non-empty, non-None inputs
+    valid = [a for a in arrays if a is not None and getattr(a, "size", 0) > 0]
     if not valid:
-        return np.empty((0, 0))
+        return np.empty((0, 0), dtype=np.float32)
+
     if strategy == "concat":
-        return np.concatenate(valid, axis=1)
+        return np.concatenate(valid, axis=1).astype(np.float32, copy=False)
+
+    # for element-wise operations the matrices must have equal column count
     target = max(a.shape[1] for a in valid)
-    padded = [_pad(a, target) for a in valid]
+
+    def _pad(arr):
+        diff = target - arr.shape[1]
+        return np.pad(arr, ((0, 0), (0, diff)), "constant") if diff else arr
+
+    padded = [_pad(a) for a in valid]
+
     if strategy == "average":
         count = sum((a != 0).astype(int) for a in padded)
-        count[count == 0] = 1
-        return sum(padded) / count
+        count[count == 0] = 1          # avoid division by 0
+        return (sum(padded) / count).astype(np.float32, copy=False)
     if strategy == "sum":
-        return sum(padded)
+        return sum(padded).astype(np.float32, copy=False)
     if strategy == "max":
-        return np.maximum.reduce(padded)
-    raise ValueError(f"Unknown merge strategy {strategy}")
+        return np.maximum.reduce(padded).astype(np.float32, copy=False)
+
+    raise ValueError(f"Unknown merge strategy '{strategy}'")
 
 ###############################################################################
 # D) EXTRACTORS & SELECTORS
@@ -1262,31 +1283,47 @@ def pad_to_shape(arr, target_cols):
         return np.pad(arr, ((0, 0), (0, pad_width)), mode='constant', constant_values=0)
     return arr
 
-def merge_modalities(mod1, mod2, mod3, strategy="concat"):
+def merge_modalities(*arrays, strategy: str = "concat") -> np.ndarray:
     """
-    Merge three numpy arrays (same # of rows).
-      - 'concat'  => column-wise concatenation (works with mismatched shapes)
-      - 'average' => element-wise average (requires same shape; pads if needed)
-      - 'sum'     => element-wise sum (requires same shape; pads if needed)
-      - 'max'     => element-wise max (requires same shape; pads if needed)
+    Merge an arbitrary number of numpy arrays (same number of rows).
+
+    Parameters
+    ----------
+    *arrays     Variable-length list of 2-D arrays (or None/empty).
+    strategy    'concat' | 'average' | 'sum' | 'max'
+
+    Returns
+    -------
+    np.ndarray  The merged matrix (float32).  Empty (0, 0) array if nothing
+                usable was supplied.
     """
-    valid = [a for a in [mod1, mod2, mod3] if a is not None and a.size]
+    # keep only non-empty, non-None inputs
+    valid = [a for a in arrays if a is not None and getattr(a, "size", 0) > 0]
     if not valid:
-        return np.empty((0, 0))
+        return np.empty((0, 0), dtype=np.float32)
+
     if strategy == "concat":
-        return np.concatenate(valid, axis=1)
+        return np.concatenate(valid, axis=1).astype(np.float32, copy=False)
+
+    # for element-wise operations the matrices must have equal column count
     target = max(a.shape[1] for a in valid)
-    padded = [_pad(a, target) for a in valid]
+
+    def _pad(arr):
+        diff = target - arr.shape[1]
+        return np.pad(arr, ((0, 0), (0, diff)), "constant") if diff else arr
+
+    padded = [_pad(a) for a in valid]
+
     if strategy == "average":
         count = sum((a != 0).astype(int) for a in padded)
-        count[count == 0] = 1
-        return sum(padded) / count
+        count[count == 0] = 1          # avoid division by 0
+        return (sum(padded) / count).astype(np.float32, copy=False)
     if strategy == "sum":
-        return sum(padded)
+        return sum(padded).astype(np.float32, copy=False)
     if strategy == "max":
-        return np.maximum.reduce(padded)
-    raise ValueError(f"Unknown merge strategy {strategy}")
+        return np.maximum.reduce(padded).astype(np.float32, copy=False)
 
+    raise ValueError(f"Unknown merge strategy '{strategy}'")
 
 ###############################################################################
 # K) HIGH‑LEVEL PROCESS FUNCTIONS (REGRESSION) WITH CROSS‑VALIDATION
