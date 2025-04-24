@@ -1423,22 +1423,34 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
     print(f"Number of validation IDs: {len(id_val)}")
     print(f"Number of test indices: {len(idx_test)}")
     
+    # First, ensure all IDs exist in the modality DataFrame
+    if modality_df is None:
+        print(f"Warning: Modality {modality_name} is None")
+        return None, None, None
+        
+    # Get the intersection of IDs that exist in both the modality and the provided IDs
+    existing_ids = set(modality_df.columns)
+    train_ids = [id_ for id_ in id_train if id_ in existing_ids]
+    val_ids = [id_ for id_ in id_val if id_ in existing_ids]
+    test_ids = [idx_to_id[idx] for idx in idx_test if idx_to_id[idx] in existing_ids]
+    
+    print(f"Existing IDs in modality: {len(existing_ids)}")
+    print(f"Matched training IDs: {len(train_ids)}")
+    print(f"Matched validation IDs: {len(val_ids)}")
+    print(f"Matched test IDs: {len(test_ids)}")
+    
+    if not train_ids or not val_ids or not test_ids:
+        print(f"Warning: Not enough matched IDs for {modality_name}")
+        return None, None, None
+    
     # Process data in chunks for better memory management
     def process_chunk(chunk_ids, is_train=False):
         print(f"\nProcessing chunk for {modality_name} (is_train={is_train})")
         print(f"Chunk size: {len(chunk_ids)}")
         
-        # Filter out IDs that don't exist in the DataFrame
-        valid_ids = [id_ for id_ in chunk_ids if id_ in modality_df.columns]
-        print(f"Valid IDs in chunk: {len(valid_ids)}")
-        
-        if not valid_ids:
-            print(f"Warning: No valid IDs found in chunk for {modality_name}")
-            return None
-        
         try:
             # Transpose and convert to numeric
-            chunk_data = modality_df.loc[:, valid_ids].transpose()
+            chunk_data = modality_df.loc[:, chunk_ids].transpose()
             chunk_data = chunk_data.apply(pd.to_numeric, errors='coerce')
             chunk_data = chunk_data.fillna(0)
             
@@ -1449,10 +1461,9 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
             return None
 
     # Split IDs into chunks for better parallelization
-    train_chunks = [id_train[i:i + CHUNK_SIZE] for i in range(0, len(id_train), CHUNK_SIZE)]
-    val_chunks = [id_val[i:i + CHUNK_SIZE] for i in range(0, len(id_val), CHUNK_SIZE)]
-    test_chunks = [[idx_to_id[idx] for idx in idx_test[i:i + CHUNK_SIZE]] 
-                   for i in range(0, len(idx_test), CHUNK_SIZE)]
+    train_chunks = [train_ids[i:i + CHUNK_SIZE] for i in range(0, len(train_ids), CHUNK_SIZE)]
+    val_chunks = [val_ids[i:i + CHUNK_SIZE] for i in range(0, len(val_ids), CHUNK_SIZE)]
+    test_chunks = [test_ids[i:i + CHUNK_SIZE] for i in range(0, len(test_ids), CHUNK_SIZE)]
     
     print(f"\nNumber of train chunks: {len(train_chunks)}")
     print(f"Number of validation chunks: {len(val_chunks)}")
