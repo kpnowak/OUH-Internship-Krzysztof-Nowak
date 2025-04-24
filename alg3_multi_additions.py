@@ -376,68 +376,164 @@ def load_omics_and_clinical(clinical_file, omics_dir):
         if not os.path.exists(file_path):
             print(f"Warning: File does not exist: {file_path}")
     
-    # Load clinical data
+    # Load clinical data with robust CSV reading
     print("\nLoading clinical data...")
-    clinical_data = pd.read_csv(clinical_file)
-    print(f"Clinical data shape: {clinical_data.shape}")
-    print(f"Clinical data columns: {clinical_data.columns.tolist()}")
+    try:
+        # First try to detect the delimiter
+        with open(clinical_file, 'r') as f:
+            first_line = f.readline()
+            possible_delimiters = [',', '\t', ';']
+            delimiter_counts = {delim: first_line.count(delim) for delim in possible_delimiters}
+            detected_delimiter = max(delimiter_counts.items(), key=lambda x: x[1])[0]
+            
+            # Read the file with the detected delimiter
+            clinical_data = pd.read_csv(
+                clinical_file,
+                sep=detected_delimiter,
+                engine='python',
+                on_bad_lines='warn',
+                low_memory=False
+            )
+            
+            # Clean up column names
+            clinical_data.columns = clinical_data.columns.str.strip()
+            
+            print(f"Clinical data shape: {clinical_data.shape}")
+            print(f"Clinical data columns: {clinical_data.columns.tolist()}")
+            
+    except Exception as e:
+        print(f"Error loading clinical data: {str(e)}")
+        print("Trying alternative loading method...")
+        try:
+            # Fallback method: read as text and parse manually
+            with open(clinical_file, 'r') as f:
+                lines = f.readlines()
+                # Find the header line
+                header_line = next(i for i, line in enumerate(lines) if any(delim in line for delim in possible_delimiters))
+                header = lines[header_line].strip().split(detected_delimiter)
+                data = [line.strip().split(detected_delimiter) for line in lines[header_line+1:]]
+                clinical_data = pd.DataFrame(data, columns=header)
+                print(f"Clinical data loaded with fallback method. Shape: {clinical_data.shape}")
+        except Exception as e2:
+            print(f"Failed to load clinical data: {str(e2)}")
+            return None, None, None, None
     
     # Load omics data in parallel
     print("\nLoading omics data...")
-    with Parallel(n_jobs=N_JOBS, backend='threading') as parallel:
-        results = parallel(
-            delayed(try_read_file)(file_path) 
-            for file_path in [exp_file, methy_file, mirna_file]
-        )
+    try:
+        with Parallel(n_jobs=N_JOBS, backend='threading') as parallel:
+            results = parallel(
+                delayed(try_read_file)(file_path) 
+                for file_path in [exp_file, methy_file, mirna_file]
+            )
+        
+        exp_data, methy_data, mirna_data = results
+        
+        # Log data shapes
+        print("\nData shapes:")
+        print(f"Gene expression: {exp_data.shape if exp_data is not None else 'None'}")
+        print(f"Methylation: {methy_data.shape if methy_data is not None else 'None'}")
+        print(f"miRNA: {mirna_data.shape if mirna_data is not None else 'None'}")
+        
+        return exp_data, methy_data, mirna_data, clinical_data
+    except Exception as e:
+        print(f"Error loading omics data: {str(e)}")
+        return None, None, None, None
+
+def prepare_data(exp_data, methy_data, mirna_data, clinical_data):
+    """Prepare data with detailed logging."""
+    print("\n=== Data Preparation Process ===")
     
-    exp_data, methy_data, mirna_data = results
-    
-    # Log data shapes
-    print("\nData shapes:")
+    # Log initial shapes
+    print("\nInitial data shapes:")
+    print(f"Clinical data: {clinical_data.shape}")
     print(f"Gene expression: {exp_data.shape if exp_data is not None else 'None'}")
     print(f"Methylation: {methy_data.shape if methy_data is not None else 'None'}")
     print(f"miRNA: {mirna_data.shape if mirna_data is not None else 'None'}")
     
-    return exp_data, methy_data, mirna_data, clinical_data
-
-def prepare_data(exp_data, methy_data, mirna_data, clinical_data):
-    """Prepare data with detailed logging."""
-    print("\nPreparing data...")
+    # Clean up column names and IDs
+    print("\nStep 1: Cleaning IDs and column names...")
+    print(f"Clinical data columns before cleaning: {clinical_data.columns.tolist()[:5]}...")
+    clinical_data['id'] = clinical_data['id'].astype(str).str.strip()
+    print(f"Clinical data columns after cleaning: {clinical_data.columns.tolist()[:5]}...")
     
-    # Parse outcomes
-    print("Parsing outcomes...")
-    outcomes = clinical_data['outcome'].apply(parse_outcome)
-    print(f"Outcomes shape: {outcomes.shape}")
-    print(f"Outcome values: {outcomes.unique()}")
-    
-    # Clean up column names
-    print("\nCleaning column names...")
-    for df in [exp_data, methy_data, mirna_data]:
+    for df, name in [(exp_data, "Gene expression"), 
+                     (methy_data, "Methylation"), 
+                     (mirna_data, "miRNA")]:
         if df is not None:
+            print(f"\n{name} columns before cleaning: {df.columns.tolist()[:5]}...")
+            df.columns = df.columns.astype(str).str.strip()
             df.columns = df.columns.str.replace('^X', '', regex=True)
+            print(f"{name} columns after cleaning: {df.columns.tolist()[:5]}...")
     
     # Find common IDs
-    print("\nFinding common IDs...")
-    common_ids = set(clinical_data['id'])
-    for df in [exp_data, methy_data, mirna_data]:
-        if df is not None:
-            common_ids = common_ids.intersection(set(df.index))
+    print("\nStep 2: Finding common IDs...")
+    # Get IDs from each modality
+    clinical_ids = set(clinical_data['id'])
+    exp_ids = set(exp_data.columns) if exp_data is not None else set()
+    methy_ids = set(methy_data.columns) if methy_data is not None else set()
+    mirna_ids = set(mirna_data.columns) if mirna_data is not None else set()
     
-    print(f"Number of common IDs: {len(common_ids)}")
+    # Log number of IDs in each modality
+    print(f"\nNumber of IDs in each modality:")
+    print(f"Clinical IDs: {len(clinical_ids)}")
+    print(f"Gene expression IDs: {len(exp_ids)}")
+    print(f"Methylation IDs: {len(methy_ids)}")
+    print(f"miRNA IDs: {len(mirna_ids)}")
+    
+    # Find intersection of all IDs
+    print("\nStep 3: Finding intersection of IDs...")
+    common_ids = clinical_ids
+    for df, name in [(exp_data, "Gene expression"), 
+                     (methy_data, "Methylation"), 
+                     (mirna_data, "miRNA")]:
+        if df is not None:
+            current_ids = set(df.columns)
+            common_ids = common_ids.intersection(current_ids)
+            print(f"\nAfter {name} intersection:")
+            print(f"  - Common IDs: {len(common_ids)}")
+            print(f"  - Lost samples: {len(current_ids) - len(common_ids)}")
+            print(f"  - Sample overlap: {len(common_ids) / len(current_ids) * 100:.2f}%")
+    
+    print(f"\nFinal number of common IDs: {len(common_ids)}")
     if len(common_ids) == 0:
         print("Warning: No common IDs found between clinical and omics data")
-        return None, None, None
+        return None, None, None, None, None
     
     # Filter data
-    print("\nFiltering data...")
+    print("\nStep 4: Filtering data...")
     clinical_data = clinical_data[clinical_data['id'].isin(common_ids)]
-    outcomes = outcomes[clinical_data.index]
+    outcomes = clinical_data['outcome']
+    print(f"Clinical data after filtering: {clinical_data.shape}")
     
-    for i, df in enumerate([exp_data, methy_data, mirna_data]):
+    # Filter each modality
+    for i, (df, name) in enumerate([(exp_data, "Gene expression"), 
+                                   (methy_data, "Methylation"), 
+                                   (mirna_data, "miRNA")]):
         if df is not None:
-            df = df.loc[list(common_ids)]
-            print(f"Modality {i+1} shape after filtering: {df.shape}")
+            df = df[list(common_ids)]
+            print(f"{name} shape after filtering: {df.shape}")
+            if i == 0:
+                exp_data = df
+            elif i == 1:
+                methy_data = df
+            else:
+                mirna_data = df
     
+    # Log final shapes
+    print("\nFinal data shapes:")
+    print(f"Clinical data: {clinical_data.shape}")
+    print(f"Gene expression: {exp_data.shape if exp_data is not None else 'None'}")
+    print(f"Methylation: {methy_data.shape if methy_data is not None else 'None'}")
+    print(f"miRNA: {mirna_data.shape if mirna_data is not None else 'None'}")
+    
+    # Verify all modalities have the same number of samples
+    sample_counts = [df.shape[1] for df in [exp_data, methy_data, mirna_data] if df is not None]
+    if len(set(sample_counts)) > 1:
+        print("\nWarning: Inconsistent number of samples across modalities!")
+        print(f"Sample counts: {sample_counts}")
+    
+    print("\n=== Data Preparation Complete ===")
     return exp_data, methy_data, mirna_data, common_ids, outcomes
 
 def strip_and_slice_columns(col_list):
@@ -1979,6 +2075,7 @@ def main():
         n_comps_list   = [256, 512, MAX_COMPONENTS]  # Reduced number of components
         n_feats_list   = [256, 512, MAX_FEATURES]    # Reduced number of features
 
+        # Calculate total number of runs
         n_extract_runs = (
             len(REGRESSION_DATASETS) * len(reg_extractors) * len(n_comps_list)
         )
@@ -1986,7 +2083,7 @@ def main():
             len(REGRESSION_DATASETS) * len(reg_selectors) * len(n_feats_list)
         )
         reg_total_runs = n_extract_runs + n_select_runs
-        progress_count_reg = [0]
+        progress_count_reg = [0]  # Initialize counter at 0
 
         print("=== REGRESSION BLOCK (AML, Sarcoma) ===")
         for ds_conf in REGRESSION_DATASETS:
@@ -1999,9 +2096,13 @@ def main():
 
             print(f"\n--- Processing {ds_name} (Regression) ---")
 
-            # load
-            exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
-            # prepare
+            # Load data
+            exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(
+                ds_conf["clinical_file"],
+                ds_conf["omics_dir"]
+            )
+
+            # Prepare data
             try:
                 data_modalities, common_ids, y, clin_f = prepare_data(
                     ds_conf, exp_df, methy_df, mirna_df, is_regression=True
@@ -2014,7 +2115,7 @@ def main():
                 print(f"No overlapping or no valid samples => skipping {ds_name}")
                 continue
 
-            # A) Extraction with CV
+            # A) Extraction with CV - Run jobs in parallel with optimized settings
             extraction_jobs = [
                 delayed(process_reg_extraction_combo_cv)(
                     ds_name, extr_name, extr_obj, nc,
@@ -2025,7 +2126,9 @@ def main():
                 for nc in n_comps_list
             ]
 
-            all_extraction_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(extraction_jobs)
+            # Use optimized parallel processing
+            with Parallel(**JOBLIB_PARALLEL_CONFIG) as parallel:
+                all_extraction_results = parallel(extraction_jobs)
 
             # B) Selection with CV
             selection_jobs = [
@@ -2064,9 +2167,10 @@ def main():
 
             print(f"\n--- Processing {ds_name} (Classification) ---")
 
-            # load
+            # Load data
             exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
-            # prepare
+
+            # Prepare data
             try:
                 data_modalities, common_ids, y, clin_f = prepare_data(
                     ds_conf, exp_df, methy_df, mirna_df, is_regression=False
