@@ -713,8 +713,9 @@ def process_with_missing_modalities(data_modalities, common_ids, missing_percent
     print(f"Number of common IDs: {len(common_ids)}")
     print(f"Available modalities: {list(data_modalities.keys())}")
     
-    if not MISSING_MODALITIES_CONFIG["enabled"] or missing_percentage == 0:
-        print("Missing modalities simulation is disabled or percentage is 0")
+    # Only return early if missing modalities are explicitly disabled
+    if not MISSING_MODALITIES_CONFIG["enabled"]:
+        print("Missing modalities simulation is disabled")
         return data_modalities
     
     n_samples = len(common_ids)
@@ -737,7 +738,7 @@ def process_with_missing_modalities(data_modalities, common_ids, missing_percent
         n_samples_to_modify = int(n_samples * missing_percentage)
         print(f"\nNumber of samples to modify: {n_samples_to_modify}")
         
-        # Randomly select samples to modify
+        # Randomly select samples to modify, ensuring at least one modality remains
         samples_to_modify = np.random.choice(n_samples, n_samples_to_modify, replace=False)
         print(f"Selected sample indices: {samples_to_modify}")
         
@@ -1415,6 +1416,7 @@ def merge_modalities(mod1, mod2, mod3, strategy="concat"):
 ###############################################################################
 
 def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id):
+    """Process a single modality with proper validation set handling."""
     print(f"\n=== Processing Modality: {modality_name} ===")
     print(f"Initial DataFrame shape: {modality_df.shape if modality_df is not None else 'None'}")
     print(f"Number of training IDs: {len(id_train)}")
@@ -1435,22 +1437,18 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
             return None
         
         try:
+            # Transpose and convert to numeric
             chunk_data = modality_df.loc[:, valid_ids].transpose()
-            print(f"Chunk data shape after transpose: {chunk_data.shape}")
-            
-            # Check for NaN values
-            nan_count = chunk_data.isna().sum().sum()
-            print(f"Number of NaN values in chunk: {nan_count}")
-            
+            chunk_data = chunk_data.apply(pd.to_numeric, errors='coerce')
             chunk_data = chunk_data.fillna(0)
-            print(f"Chunk data shape after fillna: {chunk_data.shape}")
             
+            print(f"Chunk data shape after processing: {chunk_data.shape}")
             return chunk_data.values.astype(MEMORY_OPTIMIZATION["dtype"])
         except Exception as e:
             print(f"Error processing chunk for {modality_name}: {str(e)}")
             return None
 
-    # Split IDs into larger chunks for better parallelization
+    # Split IDs into chunks for better parallelization
     train_chunks = [id_train[i:i + CHUNK_SIZE] for i in range(0, len(id_train), CHUNK_SIZE)]
     val_chunks = [id_val[i:i + CHUNK_SIZE] for i in range(0, len(id_val), CHUNK_SIZE)]
     test_chunks = [[idx_to_id[idx] for idx in idx_test[i:i + CHUNK_SIZE]] 
@@ -1504,18 +1502,10 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
                 setattr(extr_copy, key, value)
 
         if hasattr(extr_copy, "n_components"):
-            if isinstance(extr_copy, PLSRegression):
-                max_components = min(X_train_np.shape[0] - 1, X_train_np.shape[1], ncomps)
-                extr_copy.n_components = max_components
-                extr_copy.max_iter = 1000
-                extr_copy.tol = 1e-6
-            else:
-                extr_copy.n_components = min(ncomps, X_train_np.shape[1], X_train_np.shape[0])
+            extr_copy.n_components = min(ncomps, X_train_np.shape[1], X_train_np.shape[0])
         
         print(f"\nExtractor configuration:")
         print(f"n_components: {extr_copy.n_components if hasattr(extr_copy, 'n_components') else 'N/A'}")
-        print(f"max_iter: {extr_copy.max_iter if hasattr(extr_copy, 'max_iter') else 'N/A'}")
-        print(f"tol: {extr_copy.tol if hasattr(extr_copy, 'tol') else 'N/A'}")
 
         if hasattr(extr_copy, "random_state"):
             extr_copy.random_state = 0
@@ -1541,56 +1531,13 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
         print(f"X_val_scaled: {X_val_scaled.shape}")
         print(f"X_test_scaled: {X_test_scaled.shape}")
 
-        # For PLS => pass y
-        if isinstance(extr_copy, PLSRegression):
-            Y_train_arr = y_train.reshape(-1, 1).astype(MEMORY_OPTIMIZATION["dtype"])
-            print(f"\nPLS Regression - Y_train_arr shape: {Y_train_arr.shape}")
-            
-            X_train_trans = extr_copy.fit_transform(X_train_scaled, Y_train_arr)[0]
-            
-            val_extr = PLSRegression(
-                n_components=min(X_val_scaled.shape[0] - 1, X_val_scaled.shape[1], extr_copy.n_components),
-                max_iter=1000,
-                tol=1e-6
-            )
-            if len(Y_train_arr) > X_val_scaled.shape[0]:
-                Y_val_arr = Y_train_arr[:X_val_scaled.shape[0]]
-            else:
-                Y_val_arr = np.pad(Y_train_arr, ((0, max(0, X_val_scaled.shape[0] - len(Y_train_arr))), (0, 0)), 'constant')
-            
-            val_extr.fit(X_val_scaled, Y_val_arr)
-            X_val_trans = val_extr.transform(X_val_scaled)
-            
-            test_extr = PLSRegression(
-                n_components=min(X_test_scaled.shape[0] - 1, X_test_scaled.shape[1], extr_copy.n_components),
-                max_iter=1000,
-                tol=1e-6
-            )
-            if len(Y_train_arr) > X_test_scaled.shape[0]:
-                Y_test_arr = Y_train_arr[:X_test_scaled.shape[0]]
-            else:
-                Y_test_arr = np.pad(Y_train_arr, ((0, max(0, X_test_scaled.shape[0] - len(Y_train_arr))), (0, 0)), 'constant')
-            
-            test_extr.fit(X_test_scaled, Y_test_arr)
-            X_test_trans = test_extr.transform(X_test_scaled)
-        else:
-            print("\nApplying feature extraction...")
-            X_train_trans = extr_copy.fit_transform(X_train_scaled)
-            X_val_trans = extr_copy.transform(X_val_scaled)
-            X_test_trans = extr_copy.transform(X_test_scaled)
+        # Apply feature extraction
+        print("\nApplying feature extraction...")
+        X_train_trans = extr_copy.fit_transform(X_train_scaled)
+        X_val_trans = extr_copy.transform(X_val_scaled)
+        X_test_trans = extr_copy.transform(X_test_scaled)
         
         print(f"\nShapes after feature extraction:")
-        print(f"X_train_trans: {X_train_trans.shape}")
-        print(f"X_val_trans: {X_val_trans.shape}")
-        print(f"X_test_trans: {X_test_trans.shape}")
-
-        # Ensure all have the same number of components
-        target_comps = min(X_train_trans.shape[1], X_val_trans.shape[1], X_test_trans.shape[1])
-        X_train_trans = X_train_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
-        X_val_trans = X_val_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
-        X_test_trans = X_test_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
-        
-        print(f"\nFinal shapes after component selection:")
         print(f"X_train_trans: {X_train_trans.shape}")
         print(f"X_val_trans: {X_val_trans.shape}")
         print(f"X_test_trans: {X_test_trans.shape}")
