@@ -355,32 +355,90 @@ def try_read_file(file_path):
     except Exception as e:
         raise ValueError(f"Failed to read {os.path.basename(file_path)}: {str(e)}")
 
-def load_omics_and_clinical(ds_config):
-    odir = ds_config["omics_dir"]
+def load_omics_and_clinical(clinical_file, omics_dir):
+    """Load omics and clinical data with detailed logging."""
+    print(f"\nLoading data from:")
+    print(f"Clinical file: {clinical_file}")
+    print(f"Omics directory: {omics_dir}")
     
-    file_paths = [
-        os.path.join(odir, "exp.csv"),
-        os.path.join(odir, "methy.csv"),
-        os.path.join(odir, "mirna.csv")
-    ]
+    # Define file paths
+    exp_file = os.path.join(omics_dir, 'exp.csv')
+    methy_file = os.path.join(omics_dir, 'methy.csv')
+    mirna_file = os.path.join(omics_dir, 'mirna.csv')
     
-    # Read all files in parallel with optimized settings
-    results = Parallel(**JOBLIB_PARALLEL_CONFIG)(
-        delayed(try_read_file)(path) for path in file_paths
-    )
+    print(f"\nExpected files:")
+    print(f"Gene expression: {exp_file}")
+    print(f"Methylation: {methy_file}")
+    print(f"miRNA: {mirna_file}")
     
-    exp_df, methy_df, mirna_df = results
+    # Check if files exist
+    for file_path in [exp_file, methy_file, mirna_file]:
+        if not os.path.exists(file_path):
+            print(f"Warning: File does not exist: {file_path}")
     
-    # Read clinical data with optimized settings
-    clinical_df = pd.read_csv(
-        ds_config["clinical_file"],
-        sep=None,
-        engine='python',
-        dtype={'sampleID': str, ds_config["outcome_col"]: MEMORY_OPTIMIZATION["dtype"]},
-        memory_map=True
-    )
+    # Load clinical data
+    print("\nLoading clinical data...")
+    clinical_data = pd.read_csv(clinical_file)
+    print(f"Clinical data shape: {clinical_data.shape}")
+    print(f"Clinical data columns: {clinical_data.columns.tolist()}")
     
-    return exp_df, methy_df, mirna_df, clinical_df
+    # Load omics data in parallel
+    print("\nLoading omics data...")
+    with Parallel(n_jobs=N_JOBS, backend='threading') as parallel:
+        results = parallel(
+            delayed(try_read_file)(file_path) 
+            for file_path in [exp_file, methy_file, mirna_file]
+        )
+    
+    exp_data, methy_data, mirna_data = results
+    
+    # Log data shapes
+    print("\nData shapes:")
+    print(f"Gene expression: {exp_data.shape if exp_data is not None else 'None'}")
+    print(f"Methylation: {methy_data.shape if methy_data is not None else 'None'}")
+    print(f"miRNA: {mirna_data.shape if mirna_data is not None else 'None'}")
+    
+    return exp_data, methy_data, mirna_data, clinical_data
+
+def prepare_data(exp_data, methy_data, mirna_data, clinical_data):
+    """Prepare data with detailed logging."""
+    print("\nPreparing data...")
+    
+    # Parse outcomes
+    print("Parsing outcomes...")
+    outcomes = clinical_data['outcome'].apply(parse_outcome)
+    print(f"Outcomes shape: {outcomes.shape}")
+    print(f"Outcome values: {outcomes.unique()}")
+    
+    # Clean up column names
+    print("\nCleaning column names...")
+    for df in [exp_data, methy_data, mirna_data]:
+        if df is not None:
+            df.columns = df.columns.str.replace('^X', '', regex=True)
+    
+    # Find common IDs
+    print("\nFinding common IDs...")
+    common_ids = set(clinical_data['id'])
+    for df in [exp_data, methy_data, mirna_data]:
+        if df is not None:
+            common_ids = common_ids.intersection(set(df.index))
+    
+    print(f"Number of common IDs: {len(common_ids)}")
+    if len(common_ids) == 0:
+        print("Warning: No common IDs found between clinical and omics data")
+        return None, None, None
+    
+    # Filter data
+    print("\nFiltering data...")
+    clinical_data = clinical_data[clinical_data['id'].isin(common_ids)]
+    outcomes = outcomes[clinical_data.index]
+    
+    for i, df in enumerate([exp_data, methy_data, mirna_data]):
+        if df is not None:
+            df = df.loc[list(common_ids)]
+            print(f"Modality {i+1} shape after filtering: {df.shape}")
+    
+    return exp_data, methy_data, mirna_data, common_ids, outcomes
 
 def strip_and_slice_columns(col_list):
     newcols = []
@@ -1421,41 +1479,23 @@ def process_cv_fold(train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
             # Make predictions
             y_val_pred = model.predict(X_val_merged)
             
-            # Save the model if output directory is provided
-            if base_out is not None and ds_name is not None and extr_name is not None:
-                model_path = os.path.join(
-                    base_out, "models",
-                    f"{ds_name}_{extr_name}_{ncomps}_{model_name}_fold{fold_idx}_missing{missing_percentage}.pkl"
-                )
-                joblib.dump(model, model_path)
-                
-                # Generate and save plots
-                plot_prefix = f"{ds_name}_{extr_name}_{ncomps}_{model_name}_fold{fold_idx}_missing{missing_percentage}"
-                plot_dir = os.path.join(base_out, "plots")
-                
-                # Scatter plot
-                plt.figure(figsize=(10, 6))
-                plt.scatter(y_temp[val_idx], y_val_pred, alpha=0.5)
-                plt.plot([y_temp[val_idx].min(), y_temp[val_idx].max()], 
-                        [y_temp[val_idx].min(), y_temp[val_idx].max()], 'r--')
-                plt.xlabel('True Values')
-                plt.ylabel('Predictions')
-                plt.title(f'{plot_prefix} - Scatter Plot')
-                plt.savefig(os.path.join(plot_dir, f'{plot_prefix}_scatter.png'))
-                plt.close()
-                
-                # Residual plot
-                residuals = y_temp[val_idx] - y_val_pred
-                plt.figure(figsize=(10, 6))
-                plt.scatter(y_val_pred, residuals, alpha=0.5)
-                plt.axhline(y=0, color='r', linestyle='--')
-                plt.xlabel('Predictions')
-                plt.ylabel('Residuals')
-                plt.title(f'{plot_prefix} - Residuals Plot')
-                plt.savefig(os.path.join(plot_dir, f'{plot_prefix}_residuals.png'))
-                plt.close()
+            # Calculate metrics for this fold
+            mse = mean_squared_error(y_temp[val_idx], y_val_pred)
+            mae = mean_absolute_error(y_temp[val_idx], y_val_pred)
+            r2 = r2_score(y_temp[val_idx], y_val_pred)
             
-            model_results[model_name] = y_val_pred
+            model_results[model_name] = {
+                'mse': mse,
+                'mae': mae,
+                'r2': r2,
+                'model': model,  # Keep the model for final evaluation
+                'X_train': X_train_merged,
+                'X_val': X_val_merged,
+                'X_test': X_test_merged,
+                'y_train': y_train,
+                'y_val': y_temp[val_idx]
+            }
+            
         except Exception as e:
             print(f"Warning: Failed to train {model_name} in fold {fold_idx}: {str(e)}")
             continue
@@ -1525,14 +1565,22 @@ def process_reg_extraction_combo_cv(
             for i, (_, val_idx) in enumerate(cv.split(idx_temp)):
                 if i < len(cv_results) and model_name in cv_results[i]:
                     try:
-                        mse = mean_squared_error(y_temp[val_idx], cv_results[i][model_name])
-                        valid_results.append(mse)
+                        mse = cv_results[i][model_name]['mse']
+                        mae = cv_results[i][model_name]['mae']
+                        r2 = cv_results[i][model_name]['r2']
+                        valid_results.append({'mse': mse, 'mae': mae, 'r2': r2})
                     except Exception as e:
-                        print(f"Warning: Failed to calculate MSE for {model_name} in fold {i}: {e}")
+                        print(f"Warning: Failed to calculate metrics for {model_name} in fold {i}: {e}")
                         continue
             
             if valid_results:
-                cv_metrics[model_name] = np.mean(valid_results)
+                # Calculate average metrics across folds
+                avg_metrics = {
+                    'mse': np.mean([r['mse'] for r in valid_results]),
+                    'mae': np.mean([r['mae'] for r in valid_results]),
+                    'r2': np.mean([r['r2'] for r in valid_results])
+                }
+                cv_metrics[model_name] = avg_metrics
 
         # Add results for this missing percentage
         for model_name in reg_models:
@@ -1542,9 +1590,74 @@ def process_reg_extraction_combo_cv(
                     "Extractor": extr_name, "n_components": ncomps,
                     "Model": model_name,
                     "Missing_Percentage": missing_percentage,
-                    "CV_Metric": cv_metrics[model_name]
+                    "CV_MSE": cv_metrics[model_name]['mse'],
+                    "CV_MAE": cv_metrics[model_name]['mae'],
+                    "CV_R2": cv_metrics[model_name]['r2']
                 }
                 all_results.append(avg_mets)
+
+        # Save final model and plots for each model
+        for model_name in reg_models:
+            if model_name in cv_results[0]:  # Use first fold's model for final evaluation
+                try:
+                    # Get the model and data from the first fold
+                    model = cv_results[0][model_name]['model']
+                    X_test = cv_results[0][model_name]['X_test']
+                    
+                    # Make final predictions
+                    y_test_pred = model.predict(X_test)
+                    
+                    # Calculate final metrics
+                    final_mse = mean_squared_error(y_test, y_test_pred)
+                    final_mae = mean_absolute_error(y_test, y_test_pred)
+                    final_r2 = r2_score(y_test, y_test_pred)
+                    
+                    # Save the final model
+                    model_path = os.path.join(
+                        base_out, "models",
+                        f"{ds_name}_{extr_name}_{ncomps}_{model_name}_missing{missing_percentage}.pkl"
+                    )
+                    joblib.dump(model, model_path)
+                    
+                    # Generate and save final plots
+                    plot_prefix = f"{ds_name}_{extr_name}_{ncomps}_{model_name}_missing{missing_percentage}"
+                    plot_dir = os.path.join(base_out, "plots")
+                    
+                    # Scatter plot
+                    plt.figure(figsize=(10, 6))
+                    plt.scatter(y_test, y_test_pred, alpha=0.5)
+                    plt.plot([y_test.min(), y_test.max()], 
+                            [y_test.min(), y_test.max()], 'r--')
+                    plt.xlabel('True Values')
+                    plt.ylabel('Predictions')
+                    plt.title(f'{plot_prefix} - Final Scatter Plot')
+                    plt.savefig(os.path.join(plot_dir, f'{plot_prefix}_final_scatter.png'))
+                    plt.close()
+                    
+                    # Residual plot
+                    residuals = y_test - y_test_pred
+                    plt.figure(figsize=(10, 6))
+                    plt.scatter(y_test_pred, residuals, alpha=0.5)
+                    plt.axhline(y=0, color='r', linestyle='--')
+                    plt.xlabel('Predictions')
+                    plt.ylabel('Residuals')
+                    plt.title(f'{plot_prefix} - Final Residuals Plot')
+                    plt.savefig(os.path.join(plot_dir, f'{plot_prefix}_final_residuals.png'))
+                    plt.close()
+                    
+                    # Add final metrics to results
+                    for result in all_results:
+                        if (result["Model"] == model_name and 
+                            result["Missing_Percentage"] == missing_percentage):
+                            result.update({
+                                "Test_MSE": final_mse,
+                                "Test_MAE": final_mae,
+                                "Test_R2": final_r2
+                            })
+                            
+                except Exception as e:
+                    print(f"Warning: Failed to save final model/plots for {model_name}: {str(e)}")
+                    continue
 
     # Save all results if any were generated
     if all_results:
@@ -1555,123 +1668,87 @@ def process_reg_extraction_combo_cv(
     
     return all_results
 
-def process_reg_selection_combo_cv(
-    ds_name, sel_name, sel_code, n_feats, reg_models,
-    data_modalities, all_ids, y, base_out,
-    progress_count, reg_total_runs, test_size=0.2, n_splits=3
-):
-    progress_count[0] += 1
-    run_idx = progress_count[0]
-    print(f"[SELECT-REG CV] {run_idx}/{reg_total_runs} => {ds_name} | {sel_name}-{n_feats}")
-
-    all_ids_arr = np.array(all_ids)
-    y_arr       = np.array(y)
-
-    id_temp, id_test, y_temp, y_test = train_test_split(
-        all_ids_arr, y_arr, test_size=test_size, random_state=0
-    )
-
-    cv = KFold(n_splits=n_splits, shuffle=True, random_state=0)
-    cv_metrics = {}
-
-    for fold_idx, (train_idx, val_idx) in enumerate(cv.split(id_temp)):
-        id_train, id_val = id_temp[train_idx], id_temp[val_idx]
-        y_train,  y_val  = y_temp[train_idx],  y_temp[val_idx]
-
-        train_list, val_list = [], []
-        for modality_name, df_mod in data_modalities.items():
-            df_train = df_mod.loc[:, id_train].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
-            chosen, X_tr = cached_fit_transform_selector_regression(
-                df_train, pd.Series(y_train), sel_code, n_feats, ds_name, modality_name
-            )
-            df_val   = df_mod.loc[:, id_val].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
-            X_va     = transform_selector_regression(df_val, chosen)
-            train_list.append(np.array(X_tr))
-            val_list.append(np.array(X_va))
-
-        for merge_str in ["concat", "average", "sum", "max"]:
-            try:
-                X_tr_m = merge_modalities(*train_list, strategy=merge_str)
-                X_va_m = merge_modalities(*val_list,   strategy=merge_str)
-            except Exception as e:
-                print(f"Skipping merge '{merge_str}' fold {fold_idx}: {e}")
-                continue
-
-            # Create model instances from model names
-            model_dict = {}
-            for model_name in reg_models:
-                if model_name == "RandomForest":
-                    model_dict[model_name] = RandomForestRegressor(
-                        n_estimators=100,
-                        max_depth=None,
-                        min_samples_split=2,
-                        min_samples_leaf=1,
-                        n_jobs=N_JOBS,
-                        random_state=0
-                    )
-                elif model_name == "LinearRegression":
-                    model_dict[model_name] = LinearRegression(n_jobs=N_JOBS)
-                elif model_name == "SVR":
-                    model_dict[model_name] = SVR(kernel='rbf', cache_size=2000)
-                else:
-                    raise ValueError(f"Unknown model: {model_name}")
-
-            for model_name, model in model_dict.items():
-                model, mets = train_regression_model(
-                    X_tr_m, y_train, X_va_m, y_val,
-                    model_name,
-                    out_dir=None,
-                    plot_prefix=""
-                )
-                key = (merge_str, model_name)
-                cv_metrics.setdefault(key, []).append(mets)
-
-    avg_cv_results = []
-    for (merge_str, model_name), mets_list in cv_metrics.items():
-        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0]}
-        avg_mets.update({
-            "Dataset": ds_name, "Workflow": "Selection-CV",
-            "Selector": sel_name, "n_features": n_feats,
-            "MergeStrategy": merge_str, "Model": model_name
-        })
-
-        train_list, test_list = [], []
-        for modality_name, df_mod in data_modalities.items():
-            df_train = df_mod.loc[:, id_temp].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
-            chosen_cols, X_tr = cached_fit_transform_selector_regression(
-                df_train, pd.Series(y_temp), sel_code, n_feats, ds_name, modality_name
-            )
-            df_test  = df_mod.loc[:, id_test].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
-            X_te     = transform_selector_regression(df_test, chosen_cols)
-            train_list.append(np.array(X_tr))
-            test_list.append(np.array(X_te))
-
-        X_tr_m = merge_modalities(*train_list, strategy=merge_str)
-        X_te_m = merge_modalities(*test_list,  strategy=merge_str)
-
-        # Create model for final evaluation
-        final_model, test_mets = train_regression_model(
-            X_tr_m, y_temp, X_te_m, y_test,
-            model_name,
-            out_dir=os.path.join(base_out, "plots"),
-            plot_prefix=f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}"
+def process_reg_selection_combo_cv(ds_config, missing_percentage=0.0):
+    """Process regression selection with cross-validation and detailed logging."""
+    print("\nStarting regression selection processing...")
+    print(f"Dataset config: {ds_config}")
+    print(f"Missing percentage: {missing_percentage}")
+    
+    # Load data
+    print("\nLoading data...")
+    try:
+        exp_data, methy_data, mirna_data, clinical_data = load_omics_and_clinical(
+            ds_config["clinical_file"],
+            ds_config["omics_dir"]
         )
-        avg_mets.update({f"Test_{k}": v for k, v in test_mets.items()})
-        avg_cv_results.append(avg_mets)
-
-        joblib.dump(final_model,
-                    os.path.join(base_out, "models", f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}.pkl"))
-
-    pd.DataFrame(avg_cv_results).to_csv(
-        os.path.join(base_out, "metrics", f"{ds_name}_selection_cv_metrics.csv"),
-        index=False
-    )
-    return avg_cv_results
-
-
-###############################################################################
-# L) HIGH‑LEVEL PROCESS FUNCTIONS (CLASSIFICATION) WITH CROSS‑VALIDATION
-###############################################################################
+    except Exception as e:
+        print(f"Error loading data: {str(e)}")
+        return None
+    
+    # Prepare data
+    print("\nPreparing data...")
+    try:
+        exp_data, methy_data, mirna_data, common_ids, outcomes = prepare_data(
+            exp_data, methy_data, mirna_data, clinical_data
+        )
+        if exp_data is None:
+            print("Error: No valid data found after preparation")
+            return None
+    except Exception as e:
+        print(f"Error preparing data: {str(e)}")
+        return None
+    
+    # Process modalities
+    print("\nProcessing modalities...")
+    modalities = {
+        'exp': exp_data,
+        'methy': methy_data,
+        'mirna': mirna_data
+    }
+    
+    processed_modalities = {}
+    for name, data in modalities.items():
+        if data is not None:
+            print(f"\nProcessing {name} modality...")
+            try:
+                processed = process_modality(data, name)
+                if processed is not None:
+                    processed_modalities[name] = processed
+                    print(f"Successfully processed {name} modality")
+                else:
+                    print(f"Warning: {name} modality processing returned None")
+            except Exception as e:
+                print(f"Error processing {name} modality: {str(e)}")
+    
+    if not processed_modalities:
+        print("Error: No modalities were successfully processed")
+        return None
+    
+    # Process with missing modalities if needed
+    if missing_percentage > 0:
+        print(f"\nProcessing with {missing_percentage}% missing modalities...")
+        try:
+            processed_modalities = process_with_missing_modalities(
+                processed_modalities,
+                missing_percentage
+            )
+        except Exception as e:
+            print(f"Error processing missing modalities: {str(e)}")
+            return None
+    
+    # Train models
+    print("\nTraining models...")
+    try:
+        results = train_models(processed_modalities, outcomes)
+        if results is None:
+            print("Error: Model training failed")
+            return None
+    except Exception as e:
+        print(f"Error training models: {str(e)}")
+        return None
+    
+    print("\nProcessing completed successfully")
+    return results
 
 def process_clf_extraction_combo_cv(
     ds_name, extr_name, extr_obj, ncomps, clf_models,
@@ -1953,12 +2030,9 @@ def main():
             # B) Selection with CV
             selection_jobs = [
                 delayed(process_reg_selection_combo_cv)(
-                    ds_name, sel_name, sel_code, nf,
-                    reg_models, data_modalities, common_ids, y, base_out,
-                    progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
+                    ds_conf, missing_percentage=0.0
                 )
-                for sel_name, sel_code in reg_selectors.items()
-                for nf in n_feats_list
+                for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]
             ]
 
             all_selection_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(selection_jobs)
