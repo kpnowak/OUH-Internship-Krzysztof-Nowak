@@ -707,16 +707,27 @@ def process_with_missing_modalities(data_modalities, common_ids, missing_percent
     Returns:
         dict: Modified data_modalities with missing modalities
     """
+    print(f"\n=== Processing Missing Modalities ===")
+    print(f"Missing percentage: {missing_percentage}")
+    print(f"Fold index: {fold_idx}")
+    print(f"Number of common IDs: {len(common_ids)}")
+    print(f"Available modalities: {list(data_modalities.keys())}")
+    
     if not MISSING_MODALITIES_CONFIG["enabled"] or missing_percentage == 0:
-        # Return original data when missing modalities are disabled or percentage is 0
+        print("Missing modalities simulation is disabled or percentage is 0")
         return data_modalities
     
     n_samples = len(common_ids)
     n_modalities = len(MISSING_MODALITIES_CONFIG["modality_names"])
     
+    print(f"\nInitial data shapes:")
+    for name, df in data_modalities.items():
+        print(f"{name}: {df.shape}")
+    
     # Calculate random seed for this fold
     random_seed = MISSING_MODALITIES_CONFIG["random_seed"] + (fold_idx * MISSING_MODALITIES_CONFIG["cv_fold_seed_offset"])
     np.random.seed(random_seed)
+    print(f"\nUsing random seed: {random_seed}")
     
     # Create availability matrix
     availability_matrix = np.ones((n_samples, n_modalities), dtype=np.int8)
@@ -724,9 +735,11 @@ def process_with_missing_modalities(data_modalities, common_ids, missing_percent
     if missing_percentage > 0:
         # Calculate number of samples to modify
         n_samples_to_modify = int(n_samples * missing_percentage)
+        print(f"\nNumber of samples to modify: {n_samples_to_modify}")
         
         # Randomly select samples to modify
         samples_to_modify = np.random.choice(n_samples, n_samples_to_modify, replace=False)
+        print(f"Selected sample indices: {samples_to_modify}")
         
         # For each selected sample, randomly set some modalities to 0
         for sample_idx in samples_to_modify:
@@ -734,6 +747,12 @@ def process_with_missing_modalities(data_modalities, common_ids, missing_percent
             n_modalities_to_drop = np.random.randint(1, n_modalities)
             modalities_to_drop = np.random.choice(n_modalities, n_modalities_to_drop, replace=False)
             availability_matrix[sample_idx, modalities_to_drop] = 0
+            print(f"Sample {sample_idx}: Dropping modalities {modalities_to_drop}")
+    
+    print(f"\nAvailability matrix summary:")
+    print(f"Shape: {availability_matrix.shape}")
+    print(f"Number of missing values: {np.sum(availability_matrix == 0)}")
+    print(f"Missing values per modality: {np.sum(availability_matrix == 0, axis=0)}")
     
     # Create a mapping from sample IDs to their indices
     id_to_idx = {id_: idx for idx, id_ in enumerate(common_ids)}
@@ -741,23 +760,34 @@ def process_with_missing_modalities(data_modalities, common_ids, missing_percent
     # Process each modality
     modified_data = {}
     for i, (modality_name, df) in enumerate(data_modalities.items()):
+        print(f"\nProcessing modality: {modality_name}")
+        print(f"Original shape: {df.shape}")
+        
         # Get the samples that should have this modality
         available_samples = [id_ for id_ in common_ids if availability_matrix[id_to_idx[id_], i] == 1]
+        print(f"Number of available samples: {len(available_samples)}")
         
         # Create a new dataframe with only the available samples
         if len(available_samples) > 0:
             # For each available sample, check if it exists in the original dataframe
             existing_samples = [id_ for id_ in available_samples if id_ in df.columns]
+            print(f"Number of existing samples: {len(existing_samples)}")
+            
             if len(existing_samples) > 0:
                 modified_df = df[existing_samples].copy()
+                print(f"Modified shape: {modified_df.shape}")
             else:
-                # If no samples exist in the original dataframe, create an empty dataframe
+                print("Warning: No existing samples found in original dataframe")
                 modified_df = pd.DataFrame(columns=df.columns)
         else:
-            # If no samples are available for this modality, create an empty dataframe
+            print("Warning: No available samples for this modality")
             modified_df = pd.DataFrame(columns=df.columns)
         
         modified_data[modality_name] = modified_df
+    
+    print("\nFinal modified data shapes:")
+    for name, df in modified_data.items():
+        print(f"{name}: {df.shape}")
     
     return modified_data
 
@@ -1385,19 +1415,39 @@ def merge_modalities(mod1, mod2, mod3, strategy="concat"):
 ###############################################################################
 
 def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id):
+    print(f"\n=== Processing Modality: {modality_name} ===")
+    print(f"Initial DataFrame shape: {modality_df.shape if modality_df is not None else 'None'}")
+    print(f"Number of training IDs: {len(id_train)}")
+    print(f"Number of validation IDs: {len(id_val)}")
+    print(f"Number of test indices: {len(idx_test)}")
+    
     # Process data in chunks for better memory management
     def process_chunk(chunk_ids, is_train=False):
+        print(f"\nProcessing chunk for {modality_name} (is_train={is_train})")
+        print(f"Chunk size: {len(chunk_ids)}")
+        
         # Filter out IDs that don't exist in the DataFrame
         valid_ids = [id_ for id_ in chunk_ids if id_ in modality_df.columns]
+        print(f"Valid IDs in chunk: {len(valid_ids)}")
+        
         if not valid_ids:
+            print(f"Warning: No valid IDs found in chunk for {modality_name}")
             return None
         
         try:
             chunk_data = modality_df.loc[:, valid_ids].transpose()
+            print(f"Chunk data shape after transpose: {chunk_data.shape}")
+            
+            # Check for NaN values
+            nan_count = chunk_data.isna().sum().sum()
+            print(f"Number of NaN values in chunk: {nan_count}")
+            
             chunk_data = chunk_data.fillna(0)
+            print(f"Chunk data shape after fillna: {chunk_data.shape}")
+            
             return chunk_data.values.astype(MEMORY_OPTIMIZATION["dtype"])
         except Exception as e:
-            print(f"Warning: Error processing chunk for {modality_name}: {str(e)}")
+            print(f"Error processing chunk for {modality_name}: {str(e)}")
             return None
 
     # Split IDs into larger chunks for better parallelization
@@ -1405,8 +1455,13 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
     val_chunks = [id_val[i:i + CHUNK_SIZE] for i in range(0, len(id_val), CHUNK_SIZE)]
     test_chunks = [[idx_to_id[idx] for idx in idx_test[i:i + CHUNK_SIZE]] 
                    for i in range(0, len(idx_test), CHUNK_SIZE)]
+    
+    print(f"\nNumber of train chunks: {len(train_chunks)}")
+    print(f"Number of validation chunks: {len(val_chunks)}")
+    print(f"Number of test chunks: {len(test_chunks)}")
 
     # Process chunks in parallel with optimized settings
+    print("\nProcessing chunks in parallel...")
     X_train_chunks = Parallel(**JOBLIB_PARALLEL_CONFIG)(
         delayed(process_chunk)(chunk, True) for chunk in train_chunks
     )
@@ -1421,6 +1476,10 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
     X_train_chunks = [chunk for chunk in X_train_chunks if chunk is not None and chunk.shape[0] > 0]
     X_val_chunks = [chunk for chunk in X_val_chunks if chunk is not None and chunk.shape[0] > 0]
     X_test_chunks = [chunk for chunk in X_test_chunks if chunk is not None and chunk.shape[0] > 0]
+    
+    print(f"\nValid train chunks: {len(X_train_chunks)}")
+    print(f"Valid validation chunks: {len(X_val_chunks)}")
+    print(f"Valid test chunks: {len(X_test_chunks)}")
 
     # Check if we have any valid data
     if not X_train_chunks or not X_val_chunks or not X_test_chunks:
@@ -1432,6 +1491,11 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
         X_train_np = np.vstack(X_train_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
         X_val_np = np.vstack(X_val_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
         X_test_np = np.vstack(X_test_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
+        
+        print(f"\nFinal shapes after concatenation:")
+        print(f"X_train_np: {X_train_np.shape}")
+        print(f"X_val_np: {X_val_np.shape}")
+        print(f"X_test_np: {X_test_np.shape}")
 
         # Create extractor copy for safety
         extr_copy = type(extr_obj)()
@@ -1447,6 +1511,11 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
                 extr_copy.tol = 1e-6
             else:
                 extr_copy.n_components = min(ncomps, X_train_np.shape[1], X_train_np.shape[0])
+        
+        print(f"\nExtractor configuration:")
+        print(f"n_components: {extr_copy.n_components if hasattr(extr_copy, 'n_components') else 'N/A'}")
+        print(f"max_iter: {extr_copy.max_iter if hasattr(extr_copy, 'max_iter') else 'N/A'}")
+        print(f"tol: {extr_copy.tol if hasattr(extr_copy, 'tol') else 'N/A'}")
 
         if hasattr(extr_copy, "random_state"):
             extr_copy.random_state = 0
@@ -1462,13 +1531,21 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
             test_scaler = StandardScaler()
 
         # Scale the data
+        print("\nScaling data...")
         X_train_scaled = train_scaler.fit_transform(X_train_np)
         X_val_scaled = val_scaler.fit_transform(X_val_np)
         X_test_scaled = test_scaler.fit_transform(X_test_np)
+        
+        print(f"Shapes after scaling:")
+        print(f"X_train_scaled: {X_train_scaled.shape}")
+        print(f"X_val_scaled: {X_val_scaled.shape}")
+        print(f"X_test_scaled: {X_test_scaled.shape}")
 
         # For PLS => pass y
         if isinstance(extr_copy, PLSRegression):
             Y_train_arr = y_train.reshape(-1, 1).astype(MEMORY_OPTIMIZATION["dtype"])
+            print(f"\nPLS Regression - Y_train_arr shape: {Y_train_arr.shape}")
+            
             X_train_trans = extr_copy.fit_transform(X_train_scaled, Y_train_arr)[0]
             
             val_extr = PLSRegression(
@@ -1497,19 +1574,32 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
             test_extr.fit(X_test_scaled, Y_test_arr)
             X_test_trans = test_extr.transform(X_test_scaled)
         else:
+            print("\nApplying feature extraction...")
             X_train_trans = extr_copy.fit_transform(X_train_scaled)
             X_val_trans = extr_copy.transform(X_val_scaled)
             X_test_trans = extr_copy.transform(X_test_scaled)
+        
+        print(f"\nShapes after feature extraction:")
+        print(f"X_train_trans: {X_train_trans.shape}")
+        print(f"X_val_trans: {X_val_trans.shape}")
+        print(f"X_test_trans: {X_test_trans.shape}")
 
         # Ensure all have the same number of components
         target_comps = min(X_train_trans.shape[1], X_val_trans.shape[1], X_test_trans.shape[1])
         X_train_trans = X_train_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
         X_val_trans = X_val_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
         X_test_trans = X_test_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
+        
+        print(f"\nFinal shapes after component selection:")
+        print(f"X_train_trans: {X_train_trans.shape}")
+        print(f"X_val_trans: {X_val_trans.shape}")
+        print(f"X_test_trans: {X_test_trans.shape}")
 
         return X_train_trans, X_val_trans, X_test_trans
     except Exception as e:
         print(f"Error processing modality {modality_name}: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
         return None, None, None
 
 def train_evaluate_model(model_name, model, X_train, y_train, X_val):
