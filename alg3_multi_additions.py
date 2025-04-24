@@ -216,7 +216,7 @@ CLASSIFICATION_DATASETS = [
 # Configuration for missing modalities simulation
 MISSING_MODALITIES_CONFIG = {
     "enabled": True,  # Set to False to disable missing modalities simulation
-    "missing_percentages": [0.0, 0.25, 0.5, 0.75],  # Percentages of samples with missing modalities
+    "missing_percentages": [0.0, 0.25],  # Percentages of samples with missing modalities
     "random_seed": 42,  # Base random seed for reproducibility
     "modality_names": ["Gene Expression", "Methylation", "miRNA"],  # Order must match data_modalities
     "cv_fold_seed_offset": 1000  # Offset to add to random seed for each CV fold
@@ -263,66 +263,19 @@ def custom_parse_outcome(val):
 # C) LOADING & PREPARATION
 ###############################################################################
 
-def load_omics_and_clinical(ds_config):
-    odir = ds_config["omics_dir"]
-    
-    def try_read_file(file_path):
-        # Try different separators with optimized data types
-        for sep in ['\t', ',', ';']:
-            try:
-                # First try with C engine and optimized settings
-                df = pd.read_csv(
-                    file_path,
-                    sep=sep,
-                    index_col=0,
-                    header=0,
-                    dtype=MEMORY_OPTIMIZATION["dtype"],
-                    low_memory=False,
-                    engine='c',
-                    memory_map=True,
-                    chunksize=MEMORY_OPTIMIZATION["chunk_size"]
-                )
-                
-                # If chunksize was used, concatenate chunks
-                if isinstance(df, pd.io.parsers.TextFileReader):
-                    chunks = []
-                    for chunk in df:
-                        # Only convert to sparse if memory usage is high and not already sparse
-                        if (MEMORY_OPTIMIZATION["use_sparse"] and 
-                            chunk.memory_usage().sum() > 1e6 and 
-                            not isinstance(chunk, pd.DataFrame.sparse)):
-                            # Convert to numpy array first, then to sparse
-                            chunk = pd.DataFrame.sparse.from_spmatrix(
-                                scipy.sparse.csr_matrix(chunk.values),
-                                index=chunk.index,
-                                columns=chunk.columns
-                            )
-                        chunks.append(chunk)
-                    df = pd.concat(chunks, ignore_index=False)
-                
-                if not df.empty and len(df.columns) > 0:
-                    # Convert to sparse if beneficial and not already sparse
-                    if (MEMORY_OPTIMIZATION["use_sparse"] and 
-                        df.memory_usage().sum() > 1e6 and 
-                        not isinstance(df, pd.DataFrame.sparse)):
-                        df = pd.DataFrame.sparse.from_spmatrix(
-                            scipy.sparse.csr_matrix(df.values),
-                            index=df.index,
-                            columns=df.columns
-                        )
-                    return df
-            except Exception as e:
-                continue
-        
+def try_read_file(file_path):
+    # Try different separators with optimized data types
+    for sep in ['\t', ',', ';']:
         try:
-            # Fallback to python engine without low_memory parameter
+            # First try with C engine and optimized settings
             df = pd.read_csv(
                 file_path,
-                sep=None,
-                engine='python',
+                sep=sep,
                 index_col=0,
                 header=0,
                 dtype=MEMORY_OPTIMIZATION["dtype"],
+                low_memory=False,
+                engine='c',
                 memory_map=True,
                 chunksize=MEMORY_OPTIMIZATION["chunk_size"]
             )
@@ -343,7 +296,7 @@ def load_omics_and_clinical(ds_config):
                         )
                     chunks.append(chunk)
                 df = pd.concat(chunks, ignore_index=False)
-                
+            
             if not df.empty and len(df.columns) > 0:
                 # Convert to sparse if beneficial and not already sparse
                 if (MEMORY_OPTIMIZATION["use_sparse"] and 
@@ -356,12 +309,55 @@ def load_omics_and_clinical(ds_config):
                     )
                 return df
         except Exception as e:
-            raise ValueError(f"Failed to read {os.path.basename(file_path)}: {str(e)}")
+            continue
+    
+    try:
+        # Fallback to python engine without low_memory parameter
+        df = pd.read_csv(
+            file_path,
+            sep=None,
+            engine='python',
+            index_col=0,
+            header=0,
+            dtype=MEMORY_OPTIMIZATION["dtype"],
+            memory_map=True,
+            chunksize=MEMORY_OPTIMIZATION["chunk_size"]
+        )
+        
+        # If chunksize was used, concatenate chunks
+        if isinstance(df, pd.io.parsers.TextFileReader):
+            chunks = []
+            for chunk in df:
+                # Only convert to sparse if memory usage is high and not already sparse
+                if (MEMORY_OPTIMIZATION["use_sparse"] and 
+                    chunk.memory_usage().sum() > 1e6 and 
+                    not isinstance(chunk, pd.DataFrame.sparse)):
+                    # Convert to numpy array first, then to sparse
+                    chunk = pd.DataFrame.sparse.from_spmatrix(
+                        scipy.sparse.csr_matrix(chunk.values),
+                        index=chunk.index,
+                        columns=chunk.columns
+                    )
+                chunks.append(chunk)
+            df = pd.concat(chunks, ignore_index=False)
+            
+        if not df.empty and len(df.columns) > 0:
+            # Convert to sparse if beneficial and not already sparse
+            if (MEMORY_OPTIMIZATION["use_sparse"] and 
+                df.memory_usage().sum() > 1e6 and 
+                not isinstance(df, pd.DataFrame.sparse)):
+                df = pd.DataFrame.sparse.from_spmatrix(
+                    scipy.sparse.csr_matrix(df.values),
+                    index=df.index,
+                    columns=df.columns
+                )
+            return df
+    except Exception as e:
+        raise ValueError(f"Failed to read {os.path.basename(file_path)}: {str(e)}")
 
-    # Read files in parallel with optimized settings
-    def read_file(file_path):
-        return try_read_file(file_path)
-
+def load_omics_and_clinical(ds_config):
+    odir = ds_config["omics_dir"]
+    
     file_paths = [
         os.path.join(odir, "exp.csv"),
         os.path.join(odir, "methy.csv"),
@@ -370,7 +366,7 @@ def load_omics_and_clinical(ds_config):
     
     # Read all files in parallel with optimized settings
     results = Parallel(**JOBLIB_PARALLEL_CONFIG)(
-        delayed(read_file)(path) for path in file_paths
+        delayed(try_read_file)(path) for path in file_paths
     )
     
     exp_df, methy_df, mirna_df = results
