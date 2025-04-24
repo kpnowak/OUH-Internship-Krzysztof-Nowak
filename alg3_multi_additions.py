@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from functools import lru_cache
 import psutil
+from math import floor
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 
@@ -40,6 +41,13 @@ RAM_FRACTION   = 0.80                                 # we allow Python to claim
 MAX_ARRAY_SIZE = int(TOTAL_RAM * RAM_FRACTION)        # bytes
 CACHE_SIZE     = int(TOTAL_RAM * 0.10)                # 10 % for memoised artefacts
 
+# ----- Chunk size for parallel processing ------------------------------------
+CHUNK_SIZE = 50_000  # Optimal chunk size for Windows stability
+
+# ----- Feature and component limits ------------------------------------------
+MAX_COMPONENTS = 1024  # Maximum number of components for dimensionality reduction
+MAX_FEATURES = 1024   # Maximum number of features for feature selection
+
 # ----- BLAS / MKL / NumExpr thread pins --------------------------------------
 os.environ["OMP_NUM_THREADS"]      = str(N_JOBS)      # OpenMP – numpy, sklearn
 os.environ["MKL_NUM_THREADS"]      = str(N_JOBS)      # Intel MKL
@@ -50,20 +58,20 @@ JOBLIB_PARALLEL_CONFIG = {
     "n_jobs": N_JOBS,                 # outer level parallelism
     "backend": "loky",                # robust, sub-processes
     "prefer": "processes",
-    "inner_max_num_threads": 1,       # <-- kills the "nested loop" warnings
     "batch_size": "auto",
     "verbose": 0,
     "max_nbytes": "100M",             # larger shared-mem chunks – fine on 59 GB
     "mmap_mode": None,                # mmap is slower on Windows
-    "temp_folder": os.path.join(os.getcwd(), "temp_joblib"),
+    "temp_folder": os.path.join(os.getcwd(), "temp_joblib")
 }
 
-# Wrap heavy BLAS work in threadpoolctl context (optional but neat)
+# Wrap heavy BLAS work in threadpoolctl context
 from contextlib import contextmanager
 from threadpoolctl import threadpool_limits
 
 @contextmanager
 def heavy_cpu_section(num_threads=N_JOBS):
+    """Context manager to limit thread count in heavy CPU sections."""
     with threadpool_limits(limits=num_threads):
         yield
 
@@ -1953,13 +1961,13 @@ def process_clf_extraction_combo_cv(
         train_list, test_list = [], []
         for modality_name, df_mod in data_modalities.items():
             df_train = df_mod.loc[:, id_temp].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
-            chosen_cols, X_tr = cached_fit_transform_selector_classification(
-                df_train, y_temp, sel_code, n_feats, ds_name, modality_name
+            fitted_extr, X_tr = cached_fit_transform_extractor_classification(
+                df_train, y_temp, extr_obj, ncomps, ds_name, modality_name
             )
             df_test = df_mod.loc[:, id_test].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
-            X_te    = transform_selector_classification(df_test, chosen_cols)
-            train_list.append(np.array(X_tr))
-            test_list.append(np.array(X_te))
+            X_te    = transform_extractor_classification(df_test, fitted_extr)
+            train_list.append(X_tr)
+            test_list.append(X_te)
 
         X_tr_m = merge_modalities(*train_list, strategy=merge_str)
         X_te_m = merge_modalities(*test_list,  strategy=merge_str)
