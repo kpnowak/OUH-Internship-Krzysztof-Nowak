@@ -21,8 +21,8 @@ LOGICAL_THREADS = 40  # Total logical threads (2 sockets × 20 threads)
 # Optimize parallelization settings for maximum CPU utilization
 N_JOBS = LOGICAL_THREADS  # Use all available threads
 CHUNK_SIZE = 100000  # Increased chunk size for better CPU utilization
-MAX_COMPONENTS = 2048  # Increased for better feature utilization
-MAX_FEATURES = 2048  # Increased for better feature utilization
+MAX_COMPONENTS = 1024  # Increased for better feature utilization
+MAX_FEATURES = 1024  # Increased for better feature utilization
 
 # Optimize joblib settings for maximum CPU utilization
 JOBLIB_PARALLEL_CONFIG = {
