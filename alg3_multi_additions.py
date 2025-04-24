@@ -12,6 +12,8 @@ matplotlib.use('Agg')  # Use non-interactive backend
 
 # For parallelization
 from joblib import Parallel, delayed
+import multiprocessing
+multiprocessing.set_start_method('spawn', force=True)  # Required for Windows 10 Enterprise N LTSC
 
 # CPU and Memory specifications
 TOTAL_RAM = 58.6 * 1024 * 1024 * 1024  # Convert GB to bytes
@@ -19,21 +21,21 @@ PHYSICAL_CORES = 20  # Total physical cores (2 sockets × 10 cores)
 LOGICAL_THREADS = 40  # Total logical threads (2 sockets × 20 threads)
 
 # Optimize parallelization settings for maximum CPU utilization
-N_JOBS = LOGICAL_THREADS  # Use all available threads
-CHUNK_SIZE = 100000  # Increased chunk size for better CPU utilization
+N_JOBS = PHYSICAL_CORES  # Use physical cores for better stability
+CHUNK_SIZE = 50000  # Adjusted chunk size for Windows stability
 MAX_COMPONENTS = 1024  # Increased for better feature utilization
 MAX_FEATURES = 1024  # Increased for better feature utilization
 
 # Optimize joblib settings for maximum CPU utilization
 JOBLIB_PARALLEL_CONFIG = {
     "n_jobs": N_JOBS,
-    "prefer": "threads",  # Use threads instead of processes for Windows
-    "backend": "threading",  # Use threading backend for Windows
-    "batch_size": 1,  # Process one job at a time for better CPU utilization
+    "prefer": "processes",  # Use processes for better CPU utilization
+    "backend": "multiprocessing",  # Use multiprocessing backend
+    "batch_size": "auto",  # Let joblib determine optimal batch size
     "verbose": 0,
     "max_nbytes": None,
-    "mmap_mode": None,  # Disable memory mapping for Windows
-    "temp_folder": None
+    "mmap_mode": None,  # Disable memory mapping for Windows stability
+    "temp_folder": os.path.join(os.getcwd(), 'temp_joblib')  # Use local temp folder
 }
 
 # Memory optimization settings for VM with 58.6GB RAM
@@ -41,15 +43,15 @@ MEMORY_OPTIMIZATION = {
     "use_sparse": True,
     "dtype": np.float32,
     "chunk_size": CHUNK_SIZE,
-    "max_memory_usage": 0.95,  # Use 95% of available RAM
-    "max_array_size": int(TOTAL_RAM * 0.9),  # Maximum array size (90% of RAM)
-    "cache_size": int(TOTAL_RAM * 0.1)  # Cache size (10% of RAM)
+    "max_memory_usage": 0.85,  # Conservative memory usage for Windows
+    "max_array_size": int(TOTAL_RAM * 0.8),  # Maximum array size (80% of RAM)
+    "cache_size": int(TOTAL_RAM * 0.15)  # Cache size (15% of RAM)
 }
 
 # Model-specific optimizations
 MODEL_OPTIMIZATIONS = {
     "RandomForest": {
-        "n_estimators": 1000,  # Increased for better performance
+        "n_estimators": 500,  # Adjusted for Windows stability
         "max_depth": None,
         "min_samples_split": 2,
         "min_samples_leaf": 1,
@@ -66,7 +68,7 @@ MODEL_OPTIMIZATIONS = {
     },
     "SVR": {
         "kernel": 'rbf',
-        "cache_size": 10000,  # Increased cache size
+        "cache_size": 5000,  # Adjusted for Windows stability
         "max_iter": -1,
         "tol": 1e-3
     }
