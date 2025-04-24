@@ -554,6 +554,7 @@ def process_with_missing_modalities(data_modalities, common_ids, missing_percent
         dict: Modified data_modalities with missing modalities
     """
     if not MISSING_MODALITIES_CONFIG["enabled"] or missing_percentage == 0:
+        # Return original data when missing modalities are disabled or percentage is 0
         return data_modalities
     
     n_samples = len(common_ids)
@@ -1229,11 +1230,15 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
         # Filter out IDs that don't exist in the DataFrame
         valid_ids = [id_ for id_ in chunk_ids if id_ in modality_df.columns]
         if not valid_ids:
-            return np.zeros((0, modality_df.shape[0]), dtype=MEMORY_OPTIMIZATION["dtype"])
+            return None
         
-        chunk_data = modality_df.loc[:, valid_ids].transpose()
-        chunk_data = chunk_data.fillna(0)
-        return chunk_data.values.astype(MEMORY_OPTIMIZATION["dtype"])
+        try:
+            chunk_data = modality_df.loc[:, valid_ids].transpose()
+            chunk_data = chunk_data.fillna(0)
+            return chunk_data.values.astype(MEMORY_OPTIMIZATION["dtype"])
+        except Exception as e:
+            print(f"Warning: Error processing chunk for {modality_name}: {str(e)}")
+            return None
 
     # Split IDs into larger chunks for better parallelization
     train_chunks = [id_train[i:i + CHUNK_SIZE] for i in range(0, len(id_train), CHUNK_SIZE)]
@@ -1252,54 +1257,50 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
         delayed(process_chunk)(chunk) for chunk in test_chunks
     )
 
-    # Filter out empty chunks
-    X_train_chunks = [chunk for chunk in X_train_chunks if chunk.shape[0] > 0]
-    X_val_chunks = [chunk for chunk in X_val_chunks if chunk.shape[0] > 0]
-    X_test_chunks = [chunk for chunk in X_test_chunks if chunk.shape[0] > 0]
+    # Filter out None chunks
+    X_train_chunks = [chunk for chunk in X_train_chunks if chunk is not None and chunk.shape[0] > 0]
+    X_val_chunks = [chunk for chunk in X_val_chunks if chunk is not None and chunk.shape[0] > 0]
+    X_test_chunks = [chunk for chunk in X_test_chunks if chunk is not None and chunk.shape[0] > 0]
 
     # Check if we have any valid data
     if not X_train_chunks or not X_val_chunks or not X_test_chunks:
         print(f"Warning: No valid data found for modality {modality_name}")
         return None, None, None
 
-    # Concatenate chunks with memory optimization
     try:
+        # Concatenate chunks with memory optimization
         X_train_np = np.vstack(X_train_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
         X_val_np = np.vstack(X_val_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
         X_test_np = np.vstack(X_test_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
-    except ValueError as e:
-        print(f"Error concatenating chunks for modality {modality_name}: {e}")
-        return None, None, None
 
-    # Create extractor copy for safety
-    extr_copy = type(extr_obj)()
-    for key, value in extr_obj.get_params().items():
-        if hasattr(extr_copy, key):
-            setattr(extr_copy, key, value)
+        # Create extractor copy for safety
+        extr_copy = type(extr_obj)()
+        for key, value in extr_obj.get_params().items():
+            if hasattr(extr_copy, key):
+                setattr(extr_copy, key, value)
 
-    if hasattr(extr_copy, "n_components"):
-        if isinstance(extr_copy, PLSRegression):
-            max_components = min(X_train_np.shape[0] - 1, X_train_np.shape[1], ncomps)
-            extr_copy.n_components = max_components
-            extr_copy.max_iter = 1000
-            extr_copy.tol = 1e-6
+        if hasattr(extr_copy, "n_components"):
+            if isinstance(extr_copy, PLSRegression):
+                max_components = min(X_train_np.shape[0] - 1, X_train_np.shape[1], ncomps)
+                extr_copy.n_components = max_components
+                extr_copy.max_iter = 1000
+                extr_copy.tol = 1e-6
+            else:
+                extr_copy.n_components = min(ncomps, X_train_np.shape[1], X_train_np.shape[0])
+
+        if hasattr(extr_copy, "random_state"):
+            extr_copy.random_state = 0
+
+        # Choose scaler based on extractor type
+        if extr_copy.__class__.__name__ == "NMF":
+            train_scaler = MinMaxScaler(feature_range=(0, 1))
+            val_scaler = MinMaxScaler(feature_range=(0, 1))
+            test_scaler = MinMaxScaler(feature_range=(0, 1))
         else:
-            extr_copy.n_components = min(ncomps, X_train_np.shape[1], X_train_np.shape[0])
+            train_scaler = StandardScaler()
+            val_scaler = StandardScaler()
+            test_scaler = StandardScaler()
 
-    if hasattr(extr_copy, "random_state"):
-        extr_copy.random_state = 0
-
-    # Choose scaler based on extractor type
-    if extr_copy.__class__.__name__ == "NMF":
-        train_scaler = MinMaxScaler(feature_range=(0, 1))
-        val_scaler = MinMaxScaler(feature_range=(0, 1))
-        test_scaler = MinMaxScaler(feature_range=(0, 1))
-    else:
-        train_scaler = StandardScaler()
-        val_scaler = StandardScaler()
-        test_scaler = StandardScaler()
-
-    try:
         # Scale the data
         X_train_scaled = train_scaler.fit_transform(X_train_np)
         X_val_scaled = val_scaler.fit_transform(X_val_np)
@@ -1348,7 +1349,7 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
 
         return X_train_trans, X_val_trans, X_test_trans
     except Exception as e:
-        print(f"Error processing modality {modality_name}: {e}")
+        print(f"Error processing modality {modality_name}: {str(e)}")
         return None, None, None
 
 def train_evaluate_model(model_name, model, X_train, y_train, X_val):
