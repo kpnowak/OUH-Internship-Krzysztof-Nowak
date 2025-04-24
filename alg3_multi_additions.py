@@ -16,49 +16,67 @@ matplotlib.use('Agg')  # Use non-interactive backend
 from typing import Dict, List, Tuple, Optional, Union, Any
 
 # For parallelization
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, parallel_config
 import multiprocessing
 
-# Only force spawn on Windows – faster fork elsewhere
+# ──────────────────────────────────────────────────────────────────────────────
+#  📌 HARDWARE-AWARE TUNING  –  Xeon Silver 4114 × 2  (20C/40T, 59 GB RAM)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ----- CPU layout ------------------------------------------------------------
+PHYS_CORES   = psutil.cpu_count(logical=False)        # 20
+LOGI_THREADS = psutil.cpu_count(logical=True)         # 40
+
+# Use 90 % of logical threads – enough parallelism, leaves head-room for the OS
+N_JOBS = max(1, floor(LOGI_THREADS * 0.9))            # → 36  (good empirical sweet-spot)
+
+# Windows must use "spawn"; prefer loky for robustness
 if platform.system() == "Windows":
     multiprocessing.set_start_method("spawn", force=True)
 
-# CPU and Memory specifications
-TOTAL_RAM = psutil.virtual_memory().total  # detect automatically
-PHYSICAL_CORES = psutil.cpu_count(logical=False)
-LOGICAL_THREADS = psutil.cpu_count(logical=True)
+# ----- Memory limits ---------------------------------------------------------
+TOTAL_RAM      = psutil.virtual_memory().total        # bytes
+RAM_FRACTION   = 0.80                                 # we allow Python to claim 80 %
+MAX_ARRAY_SIZE = int(TOTAL_RAM * RAM_FRACTION)        # bytes
+CACHE_SIZE     = int(TOTAL_RAM * 0.10)                # 10 % for memoised artefacts
 
-# Optimize parallelization settings for maximum CPU utilization
-N_JOBS = max(1, PHYSICAL_CORES // 2)  # Reduced for debugging
-CHUNK_SIZE = 50_000  # Adjusted chunk size for Windows stability
-MAX_COMPONENTS = 1_024  # Increased for better feature utilization
-MAX_FEATURES = 1_024  # Increased for better feature utilization
+# ----- BLAS / MKL / NumExpr thread pins --------------------------------------
+os.environ["OMP_NUM_THREADS"]      = str(N_JOBS)      # OpenMP – numpy, sklearn
+os.environ["MKL_NUM_THREADS"]      = str(N_JOBS)      # Intel MKL
+os.environ["NUMEXPR_NUM_THREADS"]  = str(N_JOBS)      # numexpr (if any)
 
-# Set threading environment variables
-os.environ["OMP_NUM_THREADS"] = str(N_JOBS)
-os.environ["MKL_NUM_THREADS"] = str(N_JOBS)
-os.environ["NUMEXPR_NUM_THREADS"] = str(N_JOBS)
-
-# Optimize joblib settings for maximum CPU utilization
+# ----- Joblib default config -------------------------------------------------
 JOBLIB_PARALLEL_CONFIG = {
-    "n_jobs": N_JOBS,
-    "prefer": "processes",  # Use processes for better CPU utilization
-    "backend": "multiprocessing",  # Use multiprocessing backend
-    "batch_size": "auto",  # Let joblib determine optimal batch size
+    "n_jobs": N_JOBS,                 # outer level parallelism
+    "backend": "loky",                # robust, sub-processes
+    "prefer": "processes",
+    "inner_max_num_threads": 1,       # <-- kills the "nested loop" warnings
+    "batch_size": "auto",
     "verbose": 0,
-    "max_nbytes": "10M",  # Increased for better shared memory batching
-    "mmap_mode": None,  # Disable memory mapping for Windows stability
-    "temp_folder": os.path.join(os.getcwd(), 'temp_joblib')  # Use local temp folder
+    "max_nbytes": "100M",             # larger shared-mem chunks – fine on 59 GB
+    "mmap_mode": None,                # mmap is slower on Windows
+    "temp_folder": os.path.join(os.getcwd(), "temp_joblib"),
 }
+
+# Wrap heavy BLAS work in threadpoolctl context (optional but neat)
+from contextlib import contextmanager
+from threadpoolctl import threadpool_limits
+
+@contextmanager
+def heavy_cpu_section(num_threads=N_JOBS):
+    with threadpool_limits(limits=num_threads):
+        yield
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 # Memory optimization settings for VM with 58.6GB RAM
 MEMORY_OPTIMIZATION = {
     "use_sparse": True,
     "dtype": np.float32,
-    "chunk_size": CHUNK_SIZE,
+    "chunk_size": 50_000,  # Adjusted for Windows stability
     "max_memory_usage": 0.85,  # Conservative memory usage for Windows
-    "max_array_size": int(TOTAL_RAM * 0.8),  # Maximum array size (80% of RAM)
-    "cache_size": int(TOTAL_RAM * 0.15)  # Cache size (15% of RAM)
+    "max_array_size": MAX_ARRAY_SIZE,  # Maximum array size (80% of RAM)
+    "cache_size": CACHE_SIZE  # Cache size (10% of RAM)
 }
 
 # Resource monitoring function
@@ -1500,11 +1518,12 @@ def process_cv_fold(
         data_modalities, all_ids, missing_percentage, fold_idx
     )
 
-    # Process modalities in parallel
-    modality_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(
-        delayed(process_modality)(name, df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id)
-        for name, df in modified_modalities.items()
-    )
+    # Process modalities in parallel with threading backend
+    with parallel_config(backend="threading"):
+        modality_results = Parallel(n_jobs=N_JOBS)(
+            delayed(process_modality)(name, df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id)
+            for name, df in modified_modalities.items()
+        )
 
     # Filter out None results
     valid_results = [r for r in modality_results if r is not None and all(x is not None and x.size > 0 for x in r)]
@@ -1523,7 +1542,7 @@ def process_cv_fold(
         print(f"Warning: No valid data after merging in fold {fold_idx}")
         return {}
 
-    # Train and evaluate models in parallel
+    # Train and evaluate models in parallel with threading backend
     model_results = {}
     for model_name in reg_models:
         try:
@@ -1536,8 +1555,9 @@ def process_cv_fold(
             else:
                 continue
 
-            # Train the model
-            model.fit(X_train_merged, y_train)
+            # Train the model with heavy CPU section
+            with heavy_cpu_section():
+                model.fit(X_train_merged, y_train)
 
             # Make predictions
             y_val_pred = model.predict(X_val_merged)
@@ -1664,11 +1684,12 @@ def process_reg_extraction_combo_cv(
         id_test = [idx_to_id[i] for i in idx_test]
         y_train = y_temp
 
-        # Process modalities
-        modality_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(
-            delayed(process_modality)(name, df, id_train, id_test, idx_test, y_train, extr_obj, ncomps, idx_to_id)
-            for name, df in data_modalities.items()
-        )
+        # Process modalities with threading backend
+        with parallel_config(backend="threading"):
+            modality_results = Parallel(n_jobs=N_JOBS)(
+                delayed(process_modality)(name, df, id_train, id_test, idx_test, y_train, extr_obj, ncomps, idx_to_id)
+                for name, df in data_modalities.items()
+            )
 
         # Filter and merge results
         valid_results = [r for r in modality_results if r is not None and all(x is not None and x.size > 0 for x in r)]
@@ -1684,7 +1705,9 @@ def process_reg_extraction_combo_cv(
             elif best_model_name == "SVR":
                 final_model = SVR(**MODEL_OPTIMIZATIONS["SVR"])
 
-            final_model.fit(X_train_merged, y_train)
+            # Train with heavy CPU section
+            with heavy_cpu_section():
+                final_model.fit(X_train_merged, y_train)
             y_test_pred = final_model.predict(X_test_merged)
 
             # Save final model
