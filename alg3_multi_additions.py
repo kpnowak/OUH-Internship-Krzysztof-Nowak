@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import os
+import platform
 import time
+import hashlib
 import joblib
 import numpy as np
 import pandas as pd
@@ -10,21 +12,32 @@ import psutil
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 
+# Type hints
+from typing import Dict, List, Tuple, Optional, Union, Any
+
 # For parallelization
 from joblib import Parallel, delayed
 import multiprocessing
-multiprocessing.set_start_method('spawn', force=True)  # Required for Windows 10 Enterprise N LTSC
+
+# Only force spawn on Windows – faster fork elsewhere
+if platform.system() == "Windows":
+    multiprocessing.set_start_method("spawn", force=True)
 
 # CPU and Memory specifications
-TOTAL_RAM = 58.6 * 1024 * 1024 * 1024  # Convert GB to bytes
-PHYSICAL_CORES = 20  # Total physical cores (2 sockets × 10 cores)
-LOGICAL_THREADS = 40  # Total logical threads (2 sockets × 20 threads)
+TOTAL_RAM = psutil.virtual_memory().total  # detect automatically
+PHYSICAL_CORES = psutil.cpu_count(logical=False)
+LOGICAL_THREADS = psutil.cpu_count(logical=True)
 
 # Optimize parallelization settings for maximum CPU utilization
 N_JOBS = PHYSICAL_CORES  # Use physical cores for better stability
-CHUNK_SIZE = 50000  # Adjusted chunk size for Windows stability
-MAX_COMPONENTS = 1024  # Increased for better feature utilization
-MAX_FEATURES = 1024  # Increased for better feature utilization
+CHUNK_SIZE = 50_000  # Adjusted chunk size for Windows stability
+MAX_COMPONENTS = 1_024  # Increased for better feature utilization
+MAX_FEATURES = 1_024  # Increased for better feature utilization
+
+# Set threading environment variables
+os.environ["OMP_NUM_THREADS"] = str(N_JOBS)
+os.environ["MKL_NUM_THREADS"] = str(N_JOBS)
+os.environ["NUMEXPR_NUM_THREADS"] = str(N_JOBS)
 
 # Optimize joblib settings for maximum CPU utilization
 JOBLIB_PARALLEL_CONFIG = {
@@ -33,7 +46,7 @@ JOBLIB_PARALLEL_CONFIG = {
     "backend": "multiprocessing",  # Use multiprocessing backend
     "batch_size": "auto",  # Let joblib determine optimal batch size
     "verbose": 0,
-    "max_nbytes": None,
+    "max_nbytes": "10M",  # Increased for better shared memory batching
     "mmap_mode": None,  # Disable memory mapping for Windows stability
     "temp_folder": os.path.join(os.getcwd(), 'temp_joblib')  # Use local temp folder
 }
@@ -47,6 +60,13 @@ MEMORY_OPTIMIZATION = {
     "max_array_size": int(TOTAL_RAM * 0.8),  # Maximum array size (80% of RAM)
     "cache_size": int(TOTAL_RAM * 0.15)  # Cache size (15% of RAM)
 }
+
+# Resource monitoring function
+def log_resource_usage(stage: str):
+    """Log current resource usage for diagnostic purposes."""
+    if os.environ.get("DEBUG_RESOURCES", "0") == "1":
+        print(f"[INFO] {stage} - RAM used: {psutil.virtual_memory().percent}%, "
+              f"CPU: {psutil.cpu_percent(interval=1)}%")
 
 # Model-specific optimizations
 MODEL_OPTIMIZATIONS = {
@@ -68,7 +88,7 @@ MODEL_OPTIMIZATIONS = {
     },
     "SVR": {
         "kernel": 'rbf',
-        "cache_size": 5000,  # Adjusted for Windows stability
+        "cache_size": 5_000,  # Adjusted for Windows stability
         "max_iter": -1,
         "tol": 1e-3
     }
@@ -103,8 +123,8 @@ from sklearn.metrics import (
 
 # Feature selection
 from sklearn.feature_selection import (
-    mutual_info_regression, f_regression,
-    mutual_info_classif, f_classif, chi2, SelectKBest
+    mutual_info_regression, mutual_info_classif,
+    f_regression, f_classif, chi2, SelectKBest
 )
 from boruta import BorutaPy
 
@@ -117,6 +137,64 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import scipy.sparse
 import warnings
+
+# Memory caching setup
+from joblib import Memory
+MEM = Memory(location='./cache', verbose=0)
+
+# -----------------------------------------------------------------------------
+# 4. Pipeline helpers – no leakage, consistent dims
+# -----------------------------------------------------------------------------
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.decomposition import (
+    PCA, NMF, FastICA, FactorAnalysis, KernelPCA
+)
+from sklearn.cross_decomposition import PLSRegression
+from sklearn.feature_selection import (
+    SelectKBest, f_regression, f_classif, chi2
+)
+from sklearn.linear_model import Lasso, ElasticNet, LogisticRegression
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.svm import SVR, SVC
+
+# extractors ------------------------------------------------------------------
+EXTRACTOR_FACTORY = {
+    "PCA": lambda n: PCA(n_components=n, random_state=0),
+    "NMF": lambda n: NMF(n_components=n, init="nndsvda", max_iter=10_000, random_state=0),
+    "ICA": lambda n: FastICA(n_components=n, max_iter=10_000, random_state=0),
+    "FA": lambda n: FactorAnalysis(n_components=n, random_state=0),
+    "KPCA": lambda n: KernelPCA(n_components=n, kernel="rbf"),
+    "PLS": lambda n: PLSRegression(n_components=n, max_iter=1_000),
+}
+
+@MEM.cache
+def build_extraction_pipeline(name: str, n_components: int):
+    scaler = MinMaxScaler() if name == "NMF" else StandardScaler()
+    extractor = EXTRACTOR_FACTORY[name](n_components)
+    return Pipeline([("sc", scaler), ("extr", extractor)])
+
+# selectors -------------------------------------------------------------------
+SELECTOR_FACTORY = {
+    "f_reg": lambda k: SelectKBest(f_regression, k=k),
+    "f_clf": lambda k: SelectKBest(f_classif, k=k),
+    "chi2": lambda k: SelectKBest(chi2, k=k),
+}
+
+@MEM.cache
+def build_selection_pipeline(code: str, k: int, task: str):
+    scaler = StandardScaler()
+    if code in {"lasso", "enet", "logistic_l1"}:
+        if code == "lasso":
+            base = Lasso(alpha=0.01, max_iter=10_000, random_state=0)
+        elif code == "enet":
+            base = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=10_000, random_state=0)
+        else:  # logistic_l1
+            base = LogisticRegression(penalty="l1", solver="liblinear", random_state=0)
+        return Pipeline([("sc", scaler), ("sel", base)])
+    if code in SELECTOR_FACTORY:
+        return Pipeline([("sc", scaler), ("sel", SELECTOR_FACTORY[code](k))])
+    raise ValueError(code)
 
 ###############################################################################
 # A) CONFIG OF DATASETS
@@ -219,7 +297,7 @@ MISSING_MODALITIES_CONFIG = {
     "missing_percentages": [0.0, 0.25],  # Percentages of samples with missing modalities
     "random_seed": 42,  # Base random seed for reproducibility
     "modality_names": ["Gene Expression", "Methylation", "miRNA"],  # Order must match data_modalities
-    "cv_fold_seed_offset": 1000  # Offset to add to random seed for each CV fold
+    "cv_fold_seed_offset": 1_000  # Offset to add to random seed for each CV fold
 }
 
 ###############################################################################
@@ -355,186 +433,32 @@ def try_read_file(file_path):
     except Exception as e:
         raise ValueError(f"Failed to read {os.path.basename(file_path)}: {str(e)}")
 
-def load_omics_and_clinical(clinical_file, omics_dir):
-    """Load omics and clinical data with detailed logging."""
-    print(f"\nLoading data from:")
-    print(f"Clinical file: {clinical_file}")
-    print(f"Omics directory: {omics_dir}")
+def load_omics_and_clinical(ds_config):
+    odir = ds_config["omics_dir"]
     
-    # Define file paths
-    exp_file = os.path.join(omics_dir, 'exp.csv')
-    methy_file = os.path.join(omics_dir, 'methy.csv')
-    mirna_file = os.path.join(omics_dir, 'mirna.csv')
+    file_paths = [
+        os.path.join(odir, "exp.csv"),
+        os.path.join(odir, "methy.csv"),
+        os.path.join(odir, "mirna.csv")
+    ]
     
-    print(f"\nExpected files:")
-    print(f"Gene expression: {exp_file}")
-    print(f"Methylation: {methy_file}")
-    print(f"miRNA: {mirna_file}")
+    # Read all files in parallel with optimized settings
+    results = Parallel(**JOBLIB_PARALLEL_CONFIG)(
+        delayed(try_read_file)(path) for path in file_paths
+    )
     
-    # Check if files exist
-    for file_path in [exp_file, methy_file, mirna_file]:
-        if not os.path.exists(file_path):
-            print(f"Warning: File does not exist: {file_path}")
+    exp_df, methy_df, mirna_df = results
     
-    # Load clinical data with robust CSV reading
-    print("\nLoading clinical data...")
-    try:
-        # First try to detect the delimiter
-        with open(clinical_file, 'r') as f:
-            first_line = f.readline()
-            possible_delimiters = [',', '\t', ';']
-            delimiter_counts = {delim: first_line.count(delim) for delim in possible_delimiters}
-            detected_delimiter = max(delimiter_counts.items(), key=lambda x: x[1])[0]
-            
-            # Read the file with the detected delimiter
-            clinical_data = pd.read_csv(
-                clinical_file,
-                sep=detected_delimiter,
-                engine='python',
-                on_bad_lines='warn',
-                low_memory=False
-            )
-            
-            # Clean up column names
-            clinical_data.columns = clinical_data.columns.str.strip()
-            
-            print(f"Clinical data shape: {clinical_data.shape}")
-            print(f"Clinical data columns: {clinical_data.columns.tolist()}")
-            
-    except Exception as e:
-        print(f"Error loading clinical data: {str(e)}")
-        print("Trying alternative loading method...")
-        try:
-            # Fallback method: read as text and parse manually
-            with open(clinical_file, 'r') as f:
-                lines = f.readlines()
-                # Find the header line
-                header_line = next(i for i, line in enumerate(lines) if any(delim in line for delim in possible_delimiters))
-                header = lines[header_line].strip().split(detected_delimiter)
-                data = [line.strip().split(detected_delimiter) for line in lines[header_line+1:]]
-                clinical_data = pd.DataFrame(data, columns=header)
-                print(f"Clinical data loaded with fallback method. Shape: {clinical_data.shape}")
-        except Exception as e2:
-            print(f"Failed to load clinical data: {str(e2)}")
-            return None, None, None, None
+    # Read clinical data with optimized settings
+    clinical_df = pd.read_csv(
+        ds_config["clinical_file"],
+        sep=None,
+        engine='python',
+        dtype={'sampleID': str, ds_config["outcome_col"]: MEMORY_OPTIMIZATION["dtype"]},
+        memory_map=True
+    )
     
-    # Load omics data in parallel
-    print("\nLoading omics data...")
-    try:
-        with Parallel(n_jobs=N_JOBS, backend='threading') as parallel:
-            results = parallel(
-                delayed(try_read_file)(file_path) 
-                for file_path in [exp_file, methy_file, mirna_file]
-            )
-        
-        exp_data, methy_data, mirna_data = results
-        
-        # Log data shapes
-        print("\nData shapes:")
-        print(f"Gene expression: {exp_data.shape if exp_data is not None else 'None'}")
-        print(f"Methylation: {methy_data.shape if methy_data is not None else 'None'}")
-        print(f"miRNA: {mirna_data.shape if mirna_data is not None else 'None'}")
-        
-        return exp_data, methy_data, mirna_data, clinical_data
-    except Exception as e:
-        print(f"Error loading omics data: {str(e)}")
-        return None, None, None, None
-
-def prepare_data(exp_data, methy_data, mirna_data, clinical_data):
-    """Prepare data with detailed logging."""
-    print("\n=== Data Preparation Process ===")
-    
-    # Log initial shapes
-    print("\nInitial data shapes:")
-    print(f"Clinical data: {clinical_data.shape}")
-    print(f"Gene expression: {exp_data.shape if exp_data is not None else 'None'}")
-    print(f"Methylation: {methy_data.shape if methy_data is not None else 'None'}")
-    print(f"miRNA: {mirna_data.shape if mirna_data is not None else 'None'}")
-    
-    # Clean up column names and IDs
-    print("\nStep 1: Cleaning IDs and column names...")
-    print(f"Clinical data columns before cleaning: {clinical_data.columns.tolist()[:5]}...")
-    clinical_data['id'] = clinical_data['id'].astype(str).str.strip()
-    print(f"Clinical data columns after cleaning: {clinical_data.columns.tolist()[:5]}...")
-    
-    for df, name in [(exp_data, "Gene expression"), 
-                     (methy_data, "Methylation"), 
-                     (mirna_data, "miRNA")]:
-        if df is not None:
-            print(f"\n{name} columns before cleaning: {df.columns.tolist()[:5]}...")
-            df.columns = df.columns.astype(str).str.strip()
-            df.columns = df.columns.str.replace('^X', '', regex=True)
-            print(f"{name} columns after cleaning: {df.columns.tolist()[:5]}...")
-    
-    # Find common IDs
-    print("\nStep 2: Finding common IDs...")
-    # Get IDs from each modality
-    clinical_ids = set(clinical_data['id'])
-    exp_ids = set(exp_data.columns) if exp_data is not None else set()
-    methy_ids = set(methy_data.columns) if methy_data is not None else set()
-    mirna_ids = set(mirna_data.columns) if mirna_data is not None else set()
-    
-    # Log number of IDs in each modality
-    print(f"\nNumber of IDs in each modality:")
-    print(f"Clinical IDs: {len(clinical_ids)}")
-    print(f"Gene expression IDs: {len(exp_ids)}")
-    print(f"Methylation IDs: {len(methy_ids)}")
-    print(f"miRNA IDs: {len(mirna_ids)}")
-    
-    # Find intersection of all IDs
-    print("\nStep 3: Finding intersection of IDs...")
-    common_ids = clinical_ids
-    for df, name in [(exp_data, "Gene expression"), 
-                     (methy_data, "Methylation"), 
-                     (mirna_data, "miRNA")]:
-        if df is not None:
-            current_ids = set(df.columns)
-            common_ids = common_ids.intersection(current_ids)
-            print(f"\nAfter {name} intersection:")
-            print(f"  - Common IDs: {len(common_ids)}")
-            print(f"  - Lost samples: {len(current_ids) - len(common_ids)}")
-            print(f"  - Sample overlap: {len(common_ids) / len(current_ids) * 100:.2f}%")
-    
-    print(f"\nFinal number of common IDs: {len(common_ids)}")
-    if len(common_ids) == 0:
-        print("Warning: No common IDs found between clinical and omics data")
-        return None, None, None, None, None
-    
-    # Filter data
-    print("\nStep 4: Filtering data...")
-    clinical_data = clinical_data[clinical_data['id'].isin(common_ids)]
-    outcomes = clinical_data['outcome']
-    print(f"Clinical data after filtering: {clinical_data.shape}")
-    
-    # Filter each modality
-    for i, (df, name) in enumerate([(exp_data, "Gene expression"), 
-                                   (methy_data, "Methylation"), 
-                                   (mirna_data, "miRNA")]):
-        if df is not None:
-            df = df[list(common_ids)]
-            print(f"{name} shape after filtering: {df.shape}")
-            if i == 0:
-                exp_data = df
-            elif i == 1:
-                methy_data = df
-            else:
-                mirna_data = df
-    
-    # Log final shapes
-    print("\nFinal data shapes:")
-    print(f"Clinical data: {clinical_data.shape}")
-    print(f"Gene expression: {exp_data.shape if exp_data is not None else 'None'}")
-    print(f"Methylation: {methy_data.shape if methy_data is not None else 'None'}")
-    print(f"miRNA: {mirna_data.shape if mirna_data is not None else 'None'}")
-    
-    # Verify all modalities have the same number of samples
-    sample_counts = [df.shape[1] for df in [exp_data, methy_data, mirna_data] if df is not None]
-    if len(set(sample_counts)) > 1:
-        print("\nWarning: Inconsistent number of samples across modalities!")
-        print(f"Sample counts: {sample_counts}")
-    
-    print("\n=== Data Preparation Complete ===")
-    return exp_data, methy_data, mirna_data, common_ids, outcomes
+    return exp_df, methy_df, mirna_df, clinical_df
 
 def strip_and_slice_columns(col_list):
     newcols = []
@@ -694,103 +618,49 @@ def apply_missing_modalities(data_modalities, availability_matrix, modality_name
     
     return modified_data
 
-def process_with_missing_modalities(data_modalities, common_ids, missing_percentage, fold_idx):
-    """
-    Process data with simulated missing modalities by removing entire samples from specific modalities.
-    
-    Args:
-        data_modalities: Dictionary of modality dataframes
-        common_ids: List of common sample IDs
-        missing_percentage: Percentage of samples with missing modalities
-        fold_idx: Current fold index for random seed
-    
-    Returns:
-        dict: Modified data_modalities with missing modalities
-    """
-    print(f"\n=== Processing Missing Modalities ===")
-    print(f"Missing percentage: {missing_percentage}")
-    print(f"Fold index: {fold_idx}")
-    print(f"Number of common IDs: {len(common_ids)}")
-    print(f"Available modalities: {list(data_modalities.keys())}")
-    
-    # Only return early if missing modalities are explicitly disabled
-    if not MISSING_MODALITIES_CONFIG["enabled"]:
-        print("Missing modalities simulation is disabled")
-        return data_modalities
-    
+def process_with_missing_modalities(
+    data_modalities: dict,
+    common_ids: list,
+    missing_percentage: float,
+    fold_idx: int,
+):
+    """Return **copies** of the modality dataframes with NaNs for missing columns."""
+    if not (MISSING_MODALITIES_CONFIG["enabled"] and missing_percentage):
+        return {k: v.copy() for k, v in data_modalities.items()}
+
     n_samples = len(common_ids)
     n_modalities = len(MISSING_MODALITIES_CONFIG["modality_names"])
-    
-    print(f"\nInitial data shapes:")
-    for name, df in data_modalities.items():
-        print(f"{name}: {df.shape}")
-    
-    # Calculate random seed for this fold
-    random_seed = MISSING_MODALITIES_CONFIG["random_seed"] + (fold_idx * MISSING_MODALITIES_CONFIG["cv_fold_seed_offset"])
-    np.random.seed(random_seed)
-    print(f"\nUsing random seed: {random_seed}")
-    
-    # Create availability matrix
-    availability_matrix = np.ones((n_samples, n_modalities), dtype=np.int8)
-    
-    if missing_percentage > 0:
-        # Calculate number of samples to modify
-        n_samples_to_modify = int(n_samples * missing_percentage)
-        print(f"\nNumber of samples to modify: {n_samples_to_modify}")
-        
-        # Randomly select samples to modify, ensuring at least one modality remains
-        samples_to_modify = np.random.choice(n_samples, n_samples_to_modify, replace=False)
-        print(f"Selected sample indices: {samples_to_modify}")
-        
-        # For each selected sample, randomly set some modalities to 0
-        for sample_idx in samples_to_modify:
-            # Ensure at least one modality remains (don't drop all modalities)
-            n_modalities_to_drop = np.random.randint(1, n_modalities)
-            modalities_to_drop = np.random.choice(n_modalities, n_modalities_to_drop, replace=False)
-            availability_matrix[sample_idx, modalities_to_drop] = 0
-            print(f"Sample {sample_idx}: Dropping modalities {modalities_to_drop}")
-    
-    print(f"\nAvailability matrix summary:")
-    print(f"Shape: {availability_matrix.shape}")
-    print(f"Number of missing values: {np.sum(availability_matrix == 0)}")
-    print(f"Missing values per modality: {np.sum(availability_matrix == 0, axis=0)}")
-    
-    # Create a mapping from sample IDs to their indices
-    id_to_idx = {id_: idx for idx, id_ in enumerate(common_ids)}
-    
-    # Process each modality
-    modified_data = {}
-    for i, (modality_name, df) in enumerate(data_modalities.items()):
-        print(f"\nProcessing modality: {modality_name}")
-        print(f"Original shape: {df.shape}")
-        
-        # Get the samples that should have this modality
-        available_samples = [id_ for id_ in common_ids if availability_matrix[id_to_idx[id_], i] == 1]
-        print(f"Number of available samples: {len(available_samples)}")
-        
-        # Create a new dataframe with only the available samples
-        if len(available_samples) > 0:
-            # For each available sample, check if it exists in the original dataframe
-            existing_samples = [id_ for id_ in available_samples if id_ in df.columns]
-            print(f"Number of existing samples: {len(existing_samples)}")
-            
-            if len(existing_samples) > 0:
-                modified_df = df[existing_samples].copy()
-                print(f"Modified shape: {modified_df.shape}")
-            else:
-                print("Warning: No existing samples found in original dataframe")
-                modified_df = pd.DataFrame(columns=df.columns)
-        else:
-            print("Warning: No available samples for this modality")
-            modified_df = pd.DataFrame(columns=df.columns)
-        
-        modified_data[modality_name] = modified_df
-    
-    print("\nFinal modified data shapes:")
-    for name, df in modified_data.items():
-        print(f"{name}: {df.shape}")
-    
-    return modified_data
+
+    rng = np.random.RandomState(
+        MISSING_MODALITIES_CONFIG["random_seed"]
+        + fold_idx * MISSING_MODALITIES_CONFIG["cv_fold_seed_offset"]
+    )
+
+    availability = np.ones((n_samples, n_modalities), dtype=np.int8)
+    n_to_modify = int(n_samples * missing_percentage)
+    samples_to_modify = rng.choice(n_samples, n_to_modify, replace=False)
+    for s in samples_to_modify:
+        to_drop = rng.choice(
+            n_modalities, rng.randint(1, n_modalities), replace=False
+        )
+        availability[s, to_drop] = 0
+
+    id_to_idx = {sid: idx for idx, sid in enumerate(common_ids)}
+    modified = {}
+    for i, (name, df) in enumerate(data_modalities.items()):
+        mod_df = df.copy()
+        missing_cols = [sid for sid in common_ids if availability[id_to_idx[sid], i] == 0]
+        if missing_cols:
+            # **keep** the columns, just fill with NaNs so downstream code still sees them
+            mod_df.loc[:, missing_cols] = np.nan
+        modified[name] = mod_df
+    return modified
+
+def _pad(arr: np.ndarray, target_cols: int) -> np.ndarray:
+    diff = target_cols - arr.shape[1]
+    if diff <= 0:
+        return arr
+    return np.pad(arr, ((0, 0), (0, diff)), mode="constant", constant_values=0)
 
 def merge_modalities(mod1, mod2, mod3, strategy="concat"):
     """
@@ -800,44 +670,22 @@ def merge_modalities(mod1, mod2, mod3, strategy="concat"):
       - 'sum'     => element-wise sum (requires same shape; pads if needed)
       - 'max'     => element-wise max (requires same shape; pads if needed)
     """
-    # Filter out None or empty arrays
-    valid_arrays = [arr for arr in [mod1, mod2, mod3] if arr is not None and arr.size > 0]
-    
-    if not valid_arrays:
-        # Return a 2D array with shape (0, 0) instead of an empty 1D array
-        return np.array([[]])
-    
+    valid = [a for a in [mod1, mod2, mod3] if a is not None and a.size]
+    if not valid:
+        return np.empty((0, 0))
     if strategy == "concat":
-        # For concatenation, we can handle arrays with different shapes
-        return np.concatenate(valid_arrays, axis=1)
-    else:
-        # For element-wise operations, we need to ensure all arrays have the same shape
-        # Find the maximum number of columns among valid arrays
-        target_cols = max(arr.shape[1] for arr in valid_arrays)
-        
-        # Pad arrays to match the target number of columns
-        padded_arrays = []
-        for arr in valid_arrays:
-            if arr.shape[1] < target_cols:
-                # Pad with zeros on the right
-                pad_width = ((0, 0), (0, target_cols - arr.shape[1]))
-                padded_arr = np.pad(arr, pad_width, mode='constant', constant_values=0)
-            else:
-                padded_arr = arr
-            padded_arrays.append(padded_arr)
-        
-        if strategy == "average":
-            # Count non-zero arrays for each position
-            count = sum((arr != 0).astype(int) for arr in padded_arrays)
-            # Avoid division by zero
-            count[count == 0] = 1
-            return sum(padded_arrays) / count
-        elif strategy == "sum":
-            return sum(padded_arrays)
-        elif strategy == "max":
-            return np.maximum.reduce(padded_arrays)
-        else:
-            raise ValueError(f"Unknown merging strategy {strategy}")
+        return np.concatenate(valid, axis=1)
+    target = max(a.shape[1] for a in valid)
+    padded = [_pad(a, target) for a in valid]
+    if strategy == "average":
+        count = sum((a != 0).astype(int) for a in padded)
+        count[count == 0] = 1
+        return sum(padded) / count
+    if strategy == "sum":
+        return sum(padded)
+    if strategy == "max":
+        return np.maximum.reduce(padded)
+    raise ValueError(f"Unknown merge strategy {strategy}")
 
 ###############################################################################
 # D) EXTRACTORS & SELECTORS
@@ -934,8 +782,59 @@ def plot_roc_curve_binary(model, X_test, y_test, class_labels, title, out_path):
 # F) TRAIN & EVAL: REGRESSION
 ###############################################################################
 
+def process_modality(
+    df: pd.DataFrame,
+    modality_name: str,
+    task: str,
+    n_components: int,
+    extractor_name: str,
+    selector_code: str,
+    k: int,
+) -> np.ndarray:
+    """Process a single modality using pipeline helpers."""
+    log_resource_usage(f"Processing modality {modality_name}")
+    
+    # Build and fit extraction pipeline
+    extr_pipe = build_extraction_pipeline(extractor_name, n_components)
+    X_extr = extr_pipe.fit_transform(df)
+    
+    # Build and fit selection pipeline
+    sel_pipe = build_selection_pipeline(selector_code, k, task)
+    X_sel = sel_pipe.fit_transform(X_extr)
+    
+    return X_sel
+
+def process_modalities(
+    dfs: Dict[str, pd.DataFrame],
+    task: str,
+    n_components: int,
+    extractor_name: str,
+    selector_code: str,
+    k: int,
+    missing_percentage: Optional[float] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Process all modalities using pipeline helpers."""
+    log_resource_usage("Starting modalities processing")
+    
+    # Handle missing modalities if enabled
+    if missing_percentage is not None:
+        dfs = process_with_missing_modalities(dfs, missing_percentage)
+    
+    # Process each modality
+    processed = {}
+    for name, df in dfs.items():
+        processed[name] = process_modality(
+            df, name, task, n_components, extractor_name, selector_code, k
+        )
+    
+    # Merge modalities
+    return merge_modalities(list(processed.values()))
+
 def train_regression_model(X_train, y_train, X_test, y_test,
                          model_name, out_dir=None, plot_prefix=""):
+    """Train and evaluate a regression model."""
+    log_resource_usage(f"Training {model_name}")
+    
     # Convert to numpy arrays with optimized data types and memory layout
     X_train = np.asarray(X_train, dtype=MEMORY_OPTIMIZATION["dtype"], order='C')
     X_test = np.asarray(X_test, dtype=MEMORY_OPTIMIZATION["dtype"], order='C')
@@ -1371,44 +1270,22 @@ def merge_modalities(mod1, mod2, mod3, strategy="concat"):
       - 'sum'     => element-wise sum (requires same shape; pads if needed)
       - 'max'     => element-wise max (requires same shape; pads if needed)
     """
-    # Filter out None or empty arrays
-    valid_arrays = [arr for arr in [mod1, mod2, mod3] if arr is not None and arr.size > 0]
-    
-    if not valid_arrays:
-        # Return a 2D array with shape (0, 0) instead of an empty 1D array
-        return np.array([[]])
-    
+    valid = [a for a in [mod1, mod2, mod3] if a is not None and a.size]
+    if not valid:
+        return np.empty((0, 0))
     if strategy == "concat":
-        # For concatenation, we can handle arrays with different shapes
-        return np.concatenate(valid_arrays, axis=1)
-    else:
-        # For element-wise operations, we need to ensure all arrays have the same shape
-        # Find the maximum number of columns among valid arrays
-        target_cols = max(arr.shape[1] for arr in valid_arrays)
-        
-        # Pad arrays to match the target number of columns
-        padded_arrays = []
-        for arr in valid_arrays:
-            if arr.shape[1] < target_cols:
-                # Pad with zeros on the right
-                pad_width = ((0, 0), (0, target_cols - arr.shape[1]))
-                padded_arr = np.pad(arr, pad_width, mode='constant', constant_values=0)
-            else:
-                padded_arr = arr
-            padded_arrays.append(padded_arr)
-        
-        if strategy == "average":
-            # Count non-zero arrays for each position
-            count = sum((arr != 0).astype(int) for arr in padded_arrays)
-            # Avoid division by zero
-            count[count == 0] = 1
-            return sum(padded_arrays) / count
-        elif strategy == "sum":
-            return sum(padded_arrays)
-        elif strategy == "max":
-            return np.maximum.reduce(padded_arrays)
-        else:
-            raise ValueError(f"Unknown merging strategy {strategy}")
+        return np.concatenate(valid, axis=1)
+    target = max(a.shape[1] for a in valid)
+    padded = [_pad(a, target) for a in valid]
+    if strategy == "average":
+        count = sum((a != 0).astype(int) for a in padded)
+        count[count == 0] = 1
+        return sum(padded) / count
+    if strategy == "sum":
+        return sum(padded)
+    if strategy == "max":
+        return np.maximum.reduce(padded)
+    raise ValueError(f"Unknown merge strategy {strategy}")
 
 
 ###############################################################################
@@ -1416,61 +1293,28 @@ def merge_modalities(mod1, mod2, mod3, strategy="concat"):
 ###############################################################################
 
 def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id):
-    """Process a single modality with proper validation set handling."""
-    print(f"\n=== Processing Modality: {modality_name} ===")
-    print(f"Initial DataFrame shape: {modality_df.shape if modality_df is not None else 'None'}")
-    print(f"Number of training IDs: {len(id_train)}")
-    print(f"Number of validation IDs: {len(id_val)}")
-    print(f"Number of test indices: {len(idx_test)}")
-    
-    # First, ensure all IDs exist in the modality DataFrame
-    if modality_df is None:
-        print(f"Warning: Modality {modality_name} is None")
-        return None, None, None
-        
-    # Get the intersection of IDs that exist in both the modality and the provided IDs
-    existing_ids = set(modality_df.columns)
-    train_ids = [id_ for id_ in id_train if id_ in existing_ids]
-    val_ids = [id_ for id_ in id_val if id_ in existing_ids]
-    test_ids = [idx_to_id[idx] for idx in idx_test if idx_to_id[idx] in existing_ids]
-    
-    print(f"Existing IDs in modality: {len(existing_ids)}")
-    print(f"Matched training IDs: {len(train_ids)}")
-    print(f"Matched validation IDs: {len(val_ids)}")
-    print(f"Matched test IDs: {len(test_ids)}")
-    
-    if not train_ids or not val_ids or not test_ids:
-        print(f"Warning: Not enough matched IDs for {modality_name}")
-        return None, None, None
-    
     # Process data in chunks for better memory management
     def process_chunk(chunk_ids, is_train=False):
-        print(f"\nProcessing chunk for {modality_name} (is_train={is_train})")
-        print(f"Chunk size: {len(chunk_ids)}")
+        # Filter out IDs that don't exist in the DataFrame
+        valid_ids = [id_ for id_ in chunk_ids if id_ in modality_df.columns]
+        if not valid_ids:
+            return None
         
         try:
-            # Transpose and convert to numeric
-            chunk_data = modality_df.loc[:, chunk_ids].transpose()
-            chunk_data = chunk_data.apply(pd.to_numeric, errors='coerce')
+            chunk_data = modality_df.loc[:, valid_ids].transpose()
             chunk_data = chunk_data.fillna(0)
-            
-            print(f"Chunk data shape after processing: {chunk_data.shape}")
             return chunk_data.values.astype(MEMORY_OPTIMIZATION["dtype"])
         except Exception as e:
-            print(f"Error processing chunk for {modality_name}: {str(e)}")
+            print(f"Warning: Error processing chunk for {modality_name}: {str(e)}")
             return None
 
-    # Split IDs into chunks for better parallelization
-    train_chunks = [train_ids[i:i + CHUNK_SIZE] for i in range(0, len(train_ids), CHUNK_SIZE)]
-    val_chunks = [val_ids[i:i + CHUNK_SIZE] for i in range(0, len(val_ids), CHUNK_SIZE)]
-    test_chunks = [test_ids[i:i + CHUNK_SIZE] for i in range(0, len(test_ids), CHUNK_SIZE)]
-    
-    print(f"\nNumber of train chunks: {len(train_chunks)}")
-    print(f"Number of validation chunks: {len(val_chunks)}")
-    print(f"Number of test chunks: {len(test_chunks)}")
+    # Split IDs into larger chunks for better parallelization
+    train_chunks = [id_train[i:i + CHUNK_SIZE] for i in range(0, len(id_train), CHUNK_SIZE)]
+    val_chunks = [id_val[i:i + CHUNK_SIZE] for i in range(0, len(id_val), CHUNK_SIZE)]
+    test_chunks = [[idx_to_id[idx] for idx in idx_test[i:i + CHUNK_SIZE]] 
+                   for i in range(0, len(idx_test), CHUNK_SIZE)]
 
     # Process chunks in parallel with optimized settings
-    print("\nProcessing chunks in parallel...")
     X_train_chunks = Parallel(**JOBLIB_PARALLEL_CONFIG)(
         delayed(process_chunk)(chunk, True) for chunk in train_chunks
     )
@@ -1485,14 +1329,10 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
     X_train_chunks = [chunk for chunk in X_train_chunks if chunk is not None and chunk.shape[0] > 0]
     X_val_chunks = [chunk for chunk in X_val_chunks if chunk is not None and chunk.shape[0] > 0]
     X_test_chunks = [chunk for chunk in X_test_chunks if chunk is not None and chunk.shape[0] > 0]
-    
-    print(f"\nValid train chunks: {len(X_train_chunks)}")
-    print(f"Valid validation chunks: {len(X_val_chunks)}")
-    print(f"Valid test chunks: {len(X_test_chunks)}")
 
     # Check if we have any valid data
     if not X_train_chunks or not X_val_chunks or not X_test_chunks:
-        print(f"Warning: No valid data found for modality {modality_name} | Algorithm: {extr_obj.__class__.__name__} | Components: {ncomps}")
+        print(f"Warning: No valid data found for modality {modality_name}")
         return None, None, None
 
     try:
@@ -1500,11 +1340,6 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
         X_train_np = np.vstack(X_train_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
         X_val_np = np.vstack(X_val_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
         X_test_np = np.vstack(X_test_chunks).astype(MEMORY_OPTIMIZATION["dtype"])
-        
-        print(f"\nFinal shapes after concatenation:")
-        print(f"X_train_np: {X_train_np.shape}")
-        print(f"X_val_np: {X_val_np.shape}")
-        print(f"X_test_np: {X_test_np.shape}")
 
         # Create extractor copy for safety
         extr_copy = type(extr_obj)()
@@ -1513,10 +1348,13 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
                 setattr(extr_copy, key, value)
 
         if hasattr(extr_copy, "n_components"):
-            extr_copy.n_components = min(ncomps, X_train_np.shape[1], X_train_np.shape[0])
-        
-        print(f"\nExtractor configuration:")
-        print(f"n_components: {extr_copy.n_components if hasattr(extr_copy, 'n_components') else 'N/A'}")
+            if isinstance(extr_copy, PLSRegression):
+                max_components = min(X_train_np.shape[0] - 1, X_train_np.shape[1], ncomps)
+                extr_copy.n_components = max_components
+                extr_copy.max_iter = 1000
+                extr_copy.tol = 1e-6
+            else:
+                extr_copy.n_components = min(ncomps, X_train_np.shape[1], X_train_np.shape[0])
 
         if hasattr(extr_copy, "random_state"):
             extr_copy.random_state = 0
@@ -1532,32 +1370,54 @@ def process_modality(modality_name, modality_df, id_train, id_val, idx_test, y_t
             test_scaler = StandardScaler()
 
         # Scale the data
-        print("\nScaling data...")
         X_train_scaled = train_scaler.fit_transform(X_train_np)
         X_val_scaled = val_scaler.fit_transform(X_val_np)
         X_test_scaled = test_scaler.fit_transform(X_test_np)
-        
-        print(f"Shapes after scaling:")
-        print(f"X_train_scaled: {X_train_scaled.shape}")
-        print(f"X_val_scaled: {X_val_scaled.shape}")
-        print(f"X_test_scaled: {X_test_scaled.shape}")
 
-        # Apply feature extraction
-        print("\nApplying feature extraction...")
-        X_train_trans = extr_copy.fit_transform(X_train_scaled)
-        X_val_trans = extr_copy.transform(X_val_scaled)
-        X_test_trans = extr_copy.transform(X_test_scaled)
-        
-        print(f"\nShapes after feature extraction:")
-        print(f"X_train_trans: {X_train_trans.shape}")
-        print(f"X_val_trans: {X_val_trans.shape}")
-        print(f"X_test_trans: {X_test_trans.shape}")
+        # For PLS => pass y
+        if isinstance(extr_copy, PLSRegression):
+            Y_train_arr = y_train.reshape(-1, 1).astype(MEMORY_OPTIMIZATION["dtype"])
+            X_train_trans = extr_copy.fit_transform(X_train_scaled, Y_train_arr)[0]
+            
+            val_extr = PLSRegression(
+                n_components=min(X_val_scaled.shape[0] - 1, X_val_scaled.shape[1], extr_copy.n_components),
+                max_iter=1000,
+                tol=1e-6
+            )
+            if len(Y_train_arr) > X_val_scaled.shape[0]:
+                Y_val_arr = Y_train_arr[:X_val_scaled.shape[0]]
+            else:
+                Y_val_arr = np.pad(Y_train_arr, ((0, max(0, X_val_scaled.shape[0] - len(Y_train_arr))), (0, 0)), 'constant')
+            
+            val_extr.fit(X_val_scaled, Y_val_arr)
+            X_val_trans = val_extr.transform(X_val_scaled)
+            
+            test_extr = PLSRegression(
+                n_components=min(X_test_scaled.shape[0] - 1, X_test_scaled.shape[1], extr_copy.n_components),
+                max_iter=1000,
+                tol=1e-6
+            )
+            if len(Y_train_arr) > X_test_scaled.shape[0]:
+                Y_test_arr = Y_train_arr[:X_test_scaled.shape[0]]
+            else:
+                Y_test_arr = np.pad(Y_train_arr, ((0, max(0, X_test_scaled.shape[0] - len(Y_train_arr))), (0, 0)), 'constant')
+            
+            test_extr.fit(X_test_scaled, Y_test_arr)
+            X_test_trans = test_extr.transform(X_test_scaled)
+        else:
+            X_train_trans = extr_copy.fit_transform(X_train_scaled)
+            X_val_trans = extr_copy.transform(X_val_scaled)
+            X_test_trans = extr_copy.transform(X_test_scaled)
+
+        # Ensure all have the same number of components
+        target_comps = min(X_train_trans.shape[1], X_val_trans.shape[1], X_test_trans.shape[1])
+        X_train_trans = X_train_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
+        X_val_trans = X_val_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
+        X_test_trans = X_test_trans[:, :target_comps].astype(MEMORY_OPTIMIZATION["dtype"])
 
         return X_train_trans, X_val_trans, X_test_trans
     except Exception as e:
         print(f"Error processing modality {modality_name}: {str(e)}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
         return None, None, None
 
 def train_evaluate_model(model_name, model, X_train, y_train, X_val):
@@ -1573,43 +1433,59 @@ def train_evaluate_model(model_name, model, X_train, y_train, X_val):
     
     return model_name, y_val_pred
 
-def process_cv_fold(train_idx, val_idx, idx_temp, idx_test, y_temp, y_test, 
-                   data_modalities, reg_models, extr_obj, ncomps, id_to_idx, idx_to_id,
-                   missing_percentage=0.0, fold_idx=0, base_out=None, ds_name=None, extr_name=None):
-    # Convert numeric indices back to original IDs
-    id_train = [idx_to_id[idx] for idx in train_idx]
-    id_val = [idx_to_id[idx] for idx in val_idx]
-    
+def process_cv_fold(
+    train_idx,
+    val_idx,
+    idx_temp,
+    idx_test,
+    y_temp,
+    y_test,
+    data_modalities,
+    reg_models,
+    extr_obj,
+    ncomps,
+    id_to_idx,
+    idx_to_id,
+    all_ids,
+    missing_percentage,
+    fold_idx,
+    base_out,
+    ds_name,
+    extr_name,
+):
+    """Process a single CV fold, only saving metrics."""
+    id_train = [idx_to_id[i] for i in train_idx]
+    id_val = [idx_to_id[i] for i in val_idx]
     y_train = y_temp[train_idx]
-    
-    # Process modalities with missing data simulation
-    modified_data_modalities = process_with_missing_modalities(
-        data_modalities, id_train, missing_percentage, fold_idx
+
+    # Use common_ids for missing modality simulation
+    modified_modalities = process_with_missing_modalities(
+        data_modalities, all_ids, missing_percentage, fold_idx
     )
-    
+
     # Process modalities in parallel
     modality_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(
         delayed(process_modality)(name, df, id_train, id_val, idx_test, y_train, extr_obj, ncomps, idx_to_id)
-        for name, df in modified_data_modalities.items()
+        for name, df in modified_modalities.items()
     )
-    
+
     # Filter out None results
     valid_results = [r for r in modality_results if r is not None and all(x is not None and x.size > 0 for x in r)]
-    
+
     if not valid_results:
-        print(f"Warning: No valid data found for any modality in fold {fold_idx} | Algorithm: {extr_obj.__class__.__name__} | Components: {ncomps} | Missing Percentage: {missing_percentage} | Models: {', '.join(reg_models)}")
+        print(f"Warning: No valid data found for any modality in fold {fold_idx}")
         return {}
-    
+
     # Merge modalities
     X_train_merged = merge_modalities(*[r[0] for r in valid_results])
     X_val_merged = merge_modalities(*[r[1] for r in valid_results])
     X_test_merged = merge_modalities(*[r[2] for r in valid_results])
-    
+
     # Skip if no valid data after merging
     if X_train_merged.size == 0 or X_val_merged.size == 0 or X_test_merged.size == 0:
         print(f"Warning: No valid data after merging in fold {fold_idx}")
         return {}
-    
+
     # Train and evaluate models in parallel
     model_results = {}
     for model_name in reg_models:
@@ -1622,34 +1498,25 @@ def process_cv_fold(train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
                 model = SVR(**MODEL_OPTIMIZATIONS["SVR"])
             else:
                 continue
-                
+
             # Train the model
             model.fit(X_train_merged, y_train)
-            
+
             # Make predictions
             y_val_pred = model.predict(X_val_merged)
-            
-            # Calculate metrics for this fold
-            mse = mean_squared_error(y_temp[val_idx], y_val_pred)
-            mae = mean_absolute_error(y_temp[val_idx], y_val_pred)
-            r2 = r2_score(y_temp[val_idx], y_val_pred)
-            
-            model_results[model_name] = {
-                'mse': mse,
-                'mae': mae,
-                'r2': r2,
-                'model': model,  # Keep the model for final evaluation
-                'X_train': X_train_merged,
-                'X_val': X_val_merged,
-                'X_test': X_test_merged,
-                'y_train': y_train,
-                'y_val': y_temp[val_idx]
+
+            # Calculate metrics
+            metrics = {
+                'mse': mean_squared_error(y_temp[val_idx], y_val_pred),
+                'mae': mean_absolute_error(y_temp[val_idx], y_val_pred),
+                'r2': r2_score(y_temp[val_idx], y_val_pred)
             }
             
+            model_results[model_name] = metrics
         except Exception as e:
             print(f"Warning: Failed to train {model_name} in fold {fold_idx}: {str(e)}")
             continue
-    
+
     return model_results
 
 def process_reg_extraction_combo_cv(
@@ -1693,8 +1560,7 @@ def process_reg_extraction_combo_cv(
                 result = process_cv_fold(
                     train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
                     data_modalities, reg_models, extr_obj, ncomps, id_to_idx, idx_to_id,
-                    missing_percentage=missing_percentage, fold_idx=fold_idx,
-                    base_out=base_out, ds_name=ds_name, extr_name=extr_name
+                    all_ids, missing_percentage, fold_idx, base_out, ds_name, extr_name
                 )
             
             # Skip if no valid results
@@ -1715,20 +1581,16 @@ def process_reg_extraction_combo_cv(
             for i, (_, val_idx) in enumerate(cv.split(idx_temp)):
                 if i < len(cv_results) and model_name in cv_results[i]:
                     try:
-                        mse = cv_results[i][model_name]['mse']
-                        mae = cv_results[i][model_name]['mae']
-                        r2 = cv_results[i][model_name]['r2']
-                        valid_results.append({'mse': mse, 'mae': mae, 'r2': r2})
+                        valid_results.append(cv_results[i][model_name])
                     except Exception as e:
-                        print(f"Warning: Failed to calculate metrics for {model_name} in fold {i}: {e}")
+                        print(f"Warning: Failed to get metrics for {model_name} in fold {i}: {e}")
                         continue
             
             if valid_results:
-                # Calculate average metrics across folds
+                # Average metrics across folds
                 avg_metrics = {
-                    'mse': np.mean([r['mse'] for r in valid_results]),
-                    'mae': np.mean([r['mae'] for r in valid_results]),
-                    'r2': np.mean([r['r2'] for r in valid_results])
+                    k: np.mean([m[k] for m in valid_results]) 
+                    for k in valid_results[0].keys()
                 }
                 cv_metrics[model_name] = avg_metrics
 
@@ -1740,74 +1602,9 @@ def process_reg_extraction_combo_cv(
                     "Extractor": extr_name, "n_components": ncomps,
                     "Model": model_name,
                     "Missing_Percentage": missing_percentage,
-                    "CV_MSE": cv_metrics[model_name]['mse'],
-                    "CV_MAE": cv_metrics[model_name]['mae'],
-                    "CV_R2": cv_metrics[model_name]['r2']
+                    **cv_metrics[model_name]  # Include all metrics
                 }
                 all_results.append(avg_mets)
-
-        # Save final model and plots for each model
-        for model_name in reg_models:
-            if model_name in cv_results[0]:  # Use first fold's model for final evaluation
-                try:
-                    # Get the model and data from the first fold
-                    model = cv_results[0][model_name]['model']
-                    X_test = cv_results[0][model_name]['X_test']
-                    
-                    # Make final predictions
-                    y_test_pred = model.predict(X_test)
-                    
-                    # Calculate final metrics
-                    final_mse = mean_squared_error(y_test, y_test_pred)
-                    final_mae = mean_absolute_error(y_test, y_test_pred)
-                    final_r2 = r2_score(y_test, y_test_pred)
-                    
-                    # Save the final model
-                    model_path = os.path.join(
-                        base_out, "models",
-                        f"{ds_name}_{extr_name}_{ncomps}_{model_name}_missing{missing_percentage}.pkl"
-                    )
-                    joblib.dump(model, model_path)
-                    
-                    # Generate and save final plots
-                    plot_prefix = f"{ds_name}_{extr_name}_{ncomps}_{model_name}_missing{missing_percentage}"
-                    plot_dir = os.path.join(base_out, "plots")
-                    
-                    # Scatter plot
-                    plt.figure(figsize=(10, 6))
-                    plt.scatter(y_test, y_test_pred, alpha=0.5)
-                    plt.plot([y_test.min(), y_test.max()], 
-                            [y_test.min(), y_test.max()], 'r--')
-                    plt.xlabel('True Values')
-                    plt.ylabel('Predictions')
-                    plt.title(f'{plot_prefix} - Final Scatter Plot')
-                    plt.savefig(os.path.join(plot_dir, f'{plot_prefix}_final_scatter.png'))
-                    plt.close()
-                    
-                    # Residual plot
-                    residuals = y_test - y_test_pred
-                    plt.figure(figsize=(10, 6))
-                    plt.scatter(y_test_pred, residuals, alpha=0.5)
-                    plt.axhline(y=0, color='r', linestyle='--')
-                    plt.xlabel('Predictions')
-                    plt.ylabel('Residuals')
-                    plt.title(f'{plot_prefix} - Final Residuals Plot')
-                    plt.savefig(os.path.join(plot_dir, f'{plot_prefix}_final_residuals.png'))
-                    plt.close()
-                    
-                    # Add final metrics to results
-                    for result in all_results:
-                        if (result["Model"] == model_name and 
-                            result["Missing_Percentage"] == missing_percentage):
-                            result.update({
-                                "Test_MSE": final_mse,
-                                "Test_MAE": final_mae,
-                                "Test_R2": final_r2
-                            })
-                            
-                except Exception as e:
-                    print(f"Warning: Failed to save final model/plots for {model_name}: {str(e)}")
-                    continue
 
     # Save all results if any were generated
     if all_results:
@@ -1815,90 +1612,210 @@ def process_reg_extraction_combo_cv(
             os.path.join(base_out, "metrics", f"{ds_name}_extraction_cv_metrics.csv"),
             index=False
         )
+
+    # Train and save final model with all training data
+    if all_results:
+        # Get best model based on average MSE across folds
+        best_model_name = min(
+            [(model, np.mean([r['mse'] for r in all_results if r['Model'] == model])) 
+             for model in reg_models],
+            key=lambda x: x[1]
+        )[0]
+
+        # Process all training data
+        id_train = [idx_to_id[i] for i in idx_temp]
+        id_test = [idx_to_id[i] for i in idx_test]
+        y_train = y_temp
+
+        # Process modalities
+        modality_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(
+            delayed(process_modality)(name, df, id_train, id_test, idx_test, y_train, extr_obj, ncomps, idx_to_id)
+            for name, df in data_modalities.items()
+        )
+
+        # Filter and merge results
+        valid_results = [r for r in modality_results if r is not None and all(x is not None and x.size > 0 for x in r)]
+        if valid_results:
+            X_train_merged = merge_modalities(*[r[0] for r in valid_results])
+            X_test_merged = merge_modalities(*[r[2] for r in valid_results])
+
+            # Train final model
+            if best_model_name == "RandomForest":
+                final_model = RandomForestRegressor(**MODEL_OPTIMIZATIONS["RandomForest"])
+            elif best_model_name == "LinearRegression":
+                final_model = LinearRegression(**MODEL_OPTIMIZATIONS["LinearRegression"])
+            elif best_model_name == "SVR":
+                final_model = SVR(**MODEL_OPTIMIZATIONS["SVR"])
+
+            final_model.fit(X_train_merged, y_train)
+            y_test_pred = final_model.predict(X_test_merged)
+
+            # Save final model
+            joblib.dump(
+                final_model,
+                os.path.join(base_out, "models", 
+                           f"{ds_name}_{extr_name}_{ncomps}_{best_model_name}_final.pkl")
+            )
+
+            # Generate and save plots
+            plot_prefix = f"{ds_name}_{extr_name}_{ncomps}_{best_model_name}_final"
+            
+            # Scatter plot
+            plt.figure(figsize=(10, 6))
+            plt.scatter(y_test, y_test_pred, alpha=0.5)
+            plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
+            plt.xlabel('True Values')
+            plt.ylabel('Predictions')
+            plt.title(f'{plot_prefix} - Scatter Plot')
+            plt.savefig(os.path.join(base_out, "plots", f'{plot_prefix}_scatter.png'))
+            plt.close()
+
+            # Residual plot
+            plt.figure(figsize=(10, 6))
+            plt.scatter(y_test_pred, y_test - y_test_pred, alpha=0.5)
+            plt.axhline(y=0, color='r', linestyle='--')
+            plt.xlabel('Predictions')
+            plt.ylabel('Residuals')
+            plt.title(f'{plot_prefix} - Residuals Plot')
+            plt.savefig(os.path.join(base_out, "plots", f'{plot_prefix}_residuals.png'))
+            plt.close()
+
+            # Save final metrics
+            final_metrics = {
+                "Dataset": ds_name,
+                "Workflow": "Extraction-Final",
+                "Extractor": extr_name,
+                "n_components": ncomps,
+                "Model": best_model_name,
+                "mse": mean_squared_error(y_test, y_test_pred),
+                "mae": mean_absolute_error(y_test, y_test_pred),
+                "r2": r2_score(y_test, y_test_pred)
+            }
+            
+            pd.DataFrame([final_metrics]).to_csv(
+                os.path.join(base_out, "metrics", f"{ds_name}_extraction_final_metrics.csv"),
+                index=False
+            )
     
     return all_results
 
-def process_reg_selection_combo_cv(ds_config, missing_percentage=0.0):
-    """Process regression selection with cross-validation and detailed logging."""
-    print("\nStarting regression selection processing...")
-    print(f"Dataset config: {ds_config}")
-    print(f"Missing percentage: {missing_percentage}")
-    
-    # Load data
-    print("\nLoading data...")
-    try:
-        exp_data, methy_data, mirna_data, clinical_data = load_omics_and_clinical(
-            ds_config["clinical_file"],
-            ds_config["omics_dir"]
-        )
-    except Exception as e:
-        print(f"Error loading data: {str(e)}")
-        return None
-    
-    # Prepare data
-    print("\nPreparing data...")
-    try:
-        exp_data, methy_data, mirna_data, common_ids, outcomes = prepare_data(
-            exp_data, methy_data, mirna_data, clinical_data
-        )
-        if exp_data is None:
-            print("Error: No valid data found after preparation")
-            return None
-    except Exception as e:
-        print(f"Error preparing data: {str(e)}")
-        return None
-    
-    # Process modalities
-    print("\nProcessing modalities...")
-    modalities = {
-        'exp': exp_data,
-        'methy': methy_data,
-        'mirna': mirna_data
-    }
-    
-    processed_modalities = {}
-    for name, data in modalities.items():
-        if data is not None:
-            print(f"\nProcessing {name} modality...")
-            try:
-                processed = process_modality(data, name)
-                if processed is not None:
-                    processed_modalities[name] = processed
-                    print(f"Successfully processed {name} modality")
-                else:
-                    print(f"Warning: {name} modality processing returned None")
-            except Exception as e:
-                print(f"Error processing {name} modality: {str(e)}")
-    
-    if not processed_modalities:
-        print("Error: No modalities were successfully processed")
-        return None
-    
-    # Process with missing modalities if needed
-    if missing_percentage > 0:
-        print(f"\nProcessing with {missing_percentage}% missing modalities...")
-        try:
-            processed_modalities = process_with_missing_modalities(
-                processed_modalities,
-                missing_percentage
+def process_reg_selection_combo_cv(
+    ds_name, sel_name, sel_code, n_feats, reg_models,
+    data_modalities, all_ids, y, base_out,
+    progress_count, reg_total_runs, test_size=0.2, n_splits=3
+):
+    progress_count[0] += 1
+    run_idx = progress_count[0]
+    print(f"[SELECT-REG CV] {run_idx}/{reg_total_runs} => {ds_name} | {sel_name}-{n_feats}")
+
+    all_ids_arr = np.array(all_ids)
+    y_arr       = np.array(y)
+
+    id_temp, id_test, y_temp, y_test = train_test_split(
+        all_ids_arr, y_arr, test_size=test_size, random_state=0
+    )
+
+    cv = KFold(n_splits=n_splits, shuffle=True, random_state=0)
+    cv_metrics = {}
+
+    for fold_idx, (train_idx, val_idx) in enumerate(cv.split(id_temp)):
+        id_train, id_val = id_temp[train_idx], id_temp[val_idx]
+        y_train,  y_val  = y_temp[train_idx],  y_temp[val_idx]
+
+        train_list, val_list = [], []
+        for modality_name, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_train].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            chosen, X_tr = cached_fit_transform_selector_regression(
+                df_train, pd.Series(y_train), sel_code, n_feats, ds_name, modality_name
             )
-        except Exception as e:
-            print(f"Error processing missing modalities: {str(e)}")
-            return None
-    
-    # Train models
-    print("\nTraining models...")
-    try:
-        results = train_models(processed_modalities, outcomes)
-        if results is None:
-            print("Error: Model training failed")
-            return None
-    except Exception as e:
-        print(f"Error training models: {str(e)}")
-        return None
-    
-    print("\nProcessing completed successfully")
-    return results
+            df_val   = df_mod.loc[:, id_val].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            X_va     = transform_selector_regression(df_val, chosen)
+            train_list.append(np.array(X_tr))
+            val_list.append(np.array(X_va))
+
+        for merge_str in ["concat", "average", "sum", "max"]:
+            try:
+                X_tr_m = merge_modalities(*train_list, strategy=merge_str)
+                X_va_m = merge_modalities(*val_list,   strategy=merge_str)
+            except Exception as e:
+                print(f"Skipping merge '{merge_str}' fold {fold_idx}: {e}")
+                continue
+
+            # Create model instances from model names
+            model_dict = {}
+            for model_name in reg_models:
+                if model_name == "RandomForest":
+                    model_dict[model_name] = RandomForestRegressor(
+                        n_estimators=100,
+                        max_depth=None,
+                        min_samples_split=2,
+                        min_samples_leaf=1,
+                        n_jobs=N_JOBS,
+                        random_state=0
+                    )
+                elif model_name == "LinearRegression":
+                    model_dict[model_name] = LinearRegression(n_jobs=N_JOBS)
+                elif model_name == "SVR":
+                    model_dict[model_name] = SVR(kernel='rbf', cache_size=2000)
+                else:
+                    raise ValueError(f"Unknown model: {model_name}")
+
+            for model_name, model in model_dict.items():
+                model, mets = train_regression_model(
+                    X_tr_m, y_train, X_va_m, y_val,
+                    model_name,
+                    out_dir=None,
+                    plot_prefix=""
+                )
+                key = (merge_str, model_name)
+                cv_metrics.setdefault(key, []).append(mets)
+
+    avg_cv_results = []
+    for (merge_str, model_name), mets_list in cv_metrics.items():
+        avg_mets = {k: np.mean([m[k] for m in mets_list]) for k in mets_list[0]}
+        avg_mets.update({
+            "Dataset": ds_name, "Workflow": "Selection-CV",
+            "Selector": sel_name, "n_features": n_feats,
+            "MergeStrategy": merge_str, "Model": model_name
+        })
+
+        train_list, test_list = [], []
+        for modality_name, df_mod in data_modalities.items():
+            df_train = df_mod.loc[:, id_temp].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            chosen_cols, X_tr = cached_fit_transform_selector_regression(
+                df_train, pd.Series(y_temp), sel_code, n_feats, ds_name, modality_name
+            )
+            df_test  = df_mod.loc[:, id_test].transpose().apply(pd.to_numeric, errors='coerce').fillna(0)
+            X_te     = transform_selector_regression(df_test, chosen_cols)
+            train_list.append(np.array(X_tr))
+            test_list.append(np.array(X_te))
+
+        X_tr_m = merge_modalities(*train_list, strategy=merge_str)
+        X_te_m = merge_modalities(*test_list,  strategy=merge_str)
+
+        # Create model for final evaluation
+        final_model, test_mets = train_regression_model(
+            X_tr_m, y_temp, X_te_m, y_test,
+            model_name,
+            out_dir=os.path.join(base_out, "plots"),
+            plot_prefix=f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}"
+        )
+        avg_mets.update({f"Test_{k}": v for k, v in test_mets.items()})
+        avg_cv_results.append(avg_mets)
+
+        joblib.dump(final_model,
+                    os.path.join(base_out, "models", f"{ds_name}_FINAL_SELECT_{sel_name}_{n_feats}_{merge_str}_{model_name}.pkl"))
+
+    pd.DataFrame(avg_cv_results).to_csv(
+        os.path.join(base_out, "metrics", f"{ds_name}_selection_cv_metrics.csv"),
+        index=False
+    )
+    return avg_cv_results
+
+
+###############################################################################
+# L) HIGH‑LEVEL PROCESS FUNCTIONS (CLASSIFICATION) WITH CROSS‑VALIDATION
+###############################################################################
 
 def process_clf_extraction_combo_cv(
     ds_name, extr_name, extr_obj, ncomps, clf_models,
@@ -2129,7 +2046,6 @@ def main():
         n_comps_list   = [256, 512, MAX_COMPONENTS]  # Reduced number of components
         n_feats_list   = [256, 512, MAX_FEATURES]    # Reduced number of features
 
-        # Calculate total number of runs
         n_extract_runs = (
             len(REGRESSION_DATASETS) * len(reg_extractors) * len(n_comps_list)
         )
@@ -2137,7 +2053,7 @@ def main():
             len(REGRESSION_DATASETS) * len(reg_selectors) * len(n_feats_list)
         )
         reg_total_runs = n_extract_runs + n_select_runs
-        progress_count_reg = [0]  # Initialize counter at 0
+        progress_count_reg = [0]
 
         print("=== REGRESSION BLOCK (AML, Sarcoma) ===")
         for ds_conf in REGRESSION_DATASETS:
@@ -2150,13 +2066,9 @@ def main():
 
             print(f"\n--- Processing {ds_name} (Regression) ---")
 
-            # Load data
-            exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(
-                ds_conf["clinical_file"],
-                ds_conf["omics_dir"]
-            )
-
-            # Prepare data
+            # load
+            exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
+            # prepare
             try:
                 data_modalities, common_ids, y, clin_f = prepare_data(
                     ds_conf, exp_df, methy_df, mirna_df, is_regression=True
@@ -2169,7 +2081,7 @@ def main():
                 print(f"No overlapping or no valid samples => skipping {ds_name}")
                 continue
 
-            # A) Extraction with CV - Run jobs in parallel with optimized settings
+            # A) Extraction with CV
             extraction_jobs = [
                 delayed(process_reg_extraction_combo_cv)(
                     ds_name, extr_name, extr_obj, nc,
@@ -2180,16 +2092,17 @@ def main():
                 for nc in n_comps_list
             ]
 
-            # Use optimized parallel processing
-            with Parallel(**JOBLIB_PARALLEL_CONFIG) as parallel:
-                all_extraction_results = parallel(extraction_jobs)
+            all_extraction_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(extraction_jobs)
 
             # B) Selection with CV
             selection_jobs = [
                 delayed(process_reg_selection_combo_cv)(
-                    ds_conf, missing_percentage=0.0
+                    ds_name, sel_name, sel_code, nf,
+                    reg_models, data_modalities, common_ids, y, base_out,
+                    progress_count_reg, reg_total_runs, test_size=TEST_SIZE, n_splits=N_SPLITS
                 )
-                for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]
+                for sel_name, sel_code in reg_selectors.items()
+                for nf in n_feats_list
             ]
 
             all_selection_results = Parallel(**JOBLIB_PARALLEL_CONFIG)(selection_jobs)
@@ -2221,10 +2134,9 @@ def main():
 
             print(f"\n--- Processing {ds_name} (Classification) ---")
 
-            # Load data
+            # load
             exp_df, methy_df, mirna_df, clinical_df = load_omics_and_clinical(ds_conf)
-
-            # Prepare data
+            # prepare
             try:
                 data_modalities, common_ids, y, clin_f = prepare_data(
                     ds_conf, exp_df, methy_df, mirna_df, is_regression=False
@@ -2265,28 +2177,31 @@ def main():
 
         print("\nAll done! Regression outputs in 'output_regression/' and classification outputs in 'output_classification/'.")
 
-# Remove the lru_cache decorators and replace with a simpler caching mechanism
-class Cache:
+# Cache helpers – smaller keys (SHA1 of columns)
+class _Cache:
     def __init__(self):
-        self._cache = {}
+        self._d = {}
 
-    def get(self, key):
-        return self._cache.get(key)
+    def get(self, k):
+        return self._d.get(k)
 
-    def set(self, key, value):
-        self._cache[key] = value
+    def set(self, k, v):
+        self._d[k] = v
+
+def _cols_hash(cols):
+    return hashlib.sha1(",".join(map(str, cols)).encode()).hexdigest()
 
 # Create global cache instances
-extractor_regression_cache = Cache()
-selector_regression_cache = Cache()
-extractor_classification_cache = Cache()
-selector_classification_cache = Cache()
+extractor_regression_cache = _Cache()
+selector_regression_cache = _Cache()
+extractor_classification_cache = _Cache()
+selector_classification_cache = _Cache()
 
 def cached_fit_transform_extractor_regression(X_train, y_train, extractor, n_components, dataset_name, modality_name):
     # Create a new instance of the extractor for each modality
     extractor = type(extractor)(**extractor.get_params())
     # Include dataset name, modality name, and number of features in the cache key
-    key = (id(extractor), n_components, X_train.shape[1], dataset_name, modality_name, tuple(X_train.columns), tuple(y_train))
+    key = (id(extractor), n_components, X_train.shape[1], dataset_name, modality_name, _cols_hash(X_train.columns), _cols_hash(y_train))
     cached_result = extractor_regression_cache.get(key)
     if cached_result is not None:
         return cached_result
@@ -2296,7 +2211,7 @@ def cached_fit_transform_extractor_regression(X_train, y_train, extractor, n_com
 
 def cached_fit_transform_selector_regression(X_train, y_train, selector_code, n_feats, dataset_name, modality_name):
     # Include dataset name, modality name, and number of features in the cache key
-    key = (selector_code, n_feats, X_train.shape[1], dataset_name, modality_name, tuple(X_train.columns), tuple(y_train))
+    key = (selector_code, n_feats, X_train.shape[1], dataset_name, modality_name, _cols_hash(X_train.columns), _cols_hash(y_train))
     cached_result = selector_regression_cache.get(key)
     if cached_result is not None:
         return cached_result
@@ -2308,7 +2223,7 @@ def cached_fit_transform_extractor_classification(X_train, y_train, extractor, n
     # Create a new instance of the extractor for each modality
     extractor = type(extractor)(**extractor.get_params())
     # Include dataset name, modality name, and number of features in the cache key
-    key = (id(extractor), n_components, X_train.shape[1], dataset_name, modality_name, tuple(X_train.columns), tuple(y_train))
+    key = (id(extractor), n_components, X_train.shape[1], dataset_name, modality_name, _cols_hash(X_train.columns), _cols_hash(y_train))
     cached_result = extractor_classification_cache.get(key)
     if cached_result is not None:
         return cached_result
@@ -2318,7 +2233,7 @@ def cached_fit_transform_extractor_classification(X_train, y_train, extractor, n
 
 def cached_fit_transform_selector_classification(X_train, y_train, selector_code, n_feats, dataset_name, modality_name):
     # Include dataset name, modality name, and number of features in the cache key
-    key = (selector_code, n_feats, X_train.shape[1], dataset_name, modality_name, tuple(X_train.columns), tuple(y_train))
+    key = (selector_code, n_feats, X_train.shape[1], dataset_name, modality_name, _cols_hash(X_train.columns), _cols_hash(y_train))
     cached_result = selector_classification_cache.get(key)
     if cached_result is not None:
         return cached_result
