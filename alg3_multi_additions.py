@@ -746,7 +746,13 @@ def process_with_missing_modalities(data_modalities, common_ids, missing_percent
         
         # Create a new dataframe with only the available samples
         if len(available_samples) > 0:
-            modified_df = df[available_samples].copy()
+            # For each available sample, check if it exists in the original dataframe
+            existing_samples = [id_ for id_ in available_samples if id_ in df.columns]
+            if len(existing_samples) > 0:
+                modified_df = df[existing_samples].copy()
+            else:
+                # If no samples exist in the original dataframe, create an empty dataframe
+                modified_df = pd.DataFrame(columns=df.columns)
         else:
             # If no samples are available for this modality, create an empty dataframe
             modified_df = pd.DataFrame(columns=df.columns)
