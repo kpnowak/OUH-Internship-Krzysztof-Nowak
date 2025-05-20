@@ -1,0 +1,34 @@
+import os
+import numpy as np
+import pandas as pd
+from Z_alg.models import cached_fit_transform_extractor_classification
+from sklearn.decomposition import PCA
+
+# Test with small data
+X = np.random.rand(10, 5)  # 10 samples, 5 features
+y = np.array([0] * 5 + [1] * 5)  # Binary labels for testing
+
+print("Testing PCA feature extraction with limited data and force_n_components=True")
+print(f"Input data shape: {X.shape}")
+
+# Try with more components than features (which would normally be reduced)
+n_components = 8
+print(f"Requested components: {n_components}")
+
+# Test with force_n_components=False (default behavior)
+print("\nTEST 1: Default behavior (auto-reduction)")
+extractor, X_transformed = cached_fit_transform_extractor_classification(
+    X, y, PCA(), n_components, force_n_components=False, 
+    ds_name="test", modality_name="test_modality", fold_idx=0
+)
+print(f"Transformed data shape: {X_transformed.shape}")
+
+# Test with force_n_components=True (our modification)
+print("\nTEST 2: Modified behavior (force components)")
+extractor, X_transformed = cached_fit_transform_extractor_classification(
+    X, y, PCA(), n_components, force_n_components=True, 
+    ds_name="test", modality_name="test_modality", fold_idx=1
+)
+print(f"Transformed data shape: {X_transformed.shape}")
+
+print("\nTest completed!") 
