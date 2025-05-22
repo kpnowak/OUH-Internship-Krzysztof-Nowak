@@ -13,6 +13,7 @@ class ModalityImputer:
     """
     Imputes missing values in a multimodal dataset.
     Simple implementation that replaces missing values with column means.
+    Memory efficient implementation that avoids unnecessary copies.
     """
     def __init__(self):
         """Initialize the imputer."""
@@ -32,9 +33,13 @@ class ModalityImputer:
         self : object
             Returns self.
         """
-        self.means_ = np.nanmean(X, axis=0)
+        # Calculate means along axis 0 (columnwise)
+        # Use float32 to reduce memory usage
+        self.means_ = np.nanmean(X, axis=0, dtype=np.float32)
+        
         # Replace NaN means with 0 (in case entire column is NaN)
-        self.means_ = np.nan_to_num(self.means_, nan=0)
+        # Use in-place operation to avoid creating new arrays
+        np.nan_to_num(self.means_, copy=False, nan=0.0)
         return self
     
     def transform(self, X: np.ndarray) -> np.ndarray:
@@ -54,20 +59,27 @@ class ModalityImputer:
         if self.means_ is None:
             raise ValueError("ModalityImputer has not been fitted yet. Call 'fit' first.")
         
-        # Create output array
-        X_imputed = X.copy()
+        # Check if there are any NaNs at all - avoid unnecessary operations
+        if not np.isnan(X).any():
+            return X
         
-        # Create mask of NaN values
-        mask = np.isnan(X_imputed)
+        # Create a copy of X with same dtype, preferably float32 to save memory
+        X_imputed = X.copy().astype(np.float32, copy=False)
         
-        # If there are any NaNs, replace them with column means
-        if np.any(mask):
-            # For each column with NaNs, replace with its mean
-            for j in range(X_imputed.shape[1]):
-                col_mask = mask[:, j]
-                if np.any(col_mask):
-                    # Use j-th mean to replace NaNs in j-th column
-                    X_imputed[col_mask, j] = self.means_[j]
+        # Find NaN positions
+        nan_mask = np.isnan(X_imputed)
+        
+        # Only process columns that have NaNs
+        nan_cols = np.where(nan_mask.any(axis=0))[0]
+        
+        # Process each column with NaNs individually to avoid creating large temporary arrays
+        for col in nan_cols:
+            # Get mask for this column
+            col_mask = nan_mask[:, col]
+            
+            # Only replace values if there are NaNs
+            if col_mask.any():
+                X_imputed[col_mask, col] = self.means_[col]
         
         return X_imputed
     
@@ -86,28 +98,6 @@ class ModalityImputer:
             Data with imputed values.
         """
         return self.fit(X).transform(X)
-
-
-def _pad(arr: np.ndarray, target_cols: int) -> np.ndarray:
-    """
-    Pad array with zeros to reach target_cols columns.
-    
-    Parameters
-    ----------
-    arr : np.ndarray
-        Input array
-    target_cols : int
-        Target number of columns
-        
-    Returns
-    -------
-    np.ndarray
-        Padded array with target_cols columns
-    """
-    diff = target_cols - arr.shape[1]
-    if diff <= 0:
-        return arr
-    return np.pad(arr, ((0, 0), (0, diff)), mode="constant", constant_values=0)
 
 
 def merge_modalities(*arrays: np.ndarray, 
@@ -160,6 +150,11 @@ def merge_modalities(*arrays: np.ndarray,
             # Skip problematic arrays
             continue
     
+    # If no arrays remain after processing, return empty array
+    if not processed_arrays:
+        logger.warning("No arrays to merge after processing")
+        return np.zeros((0, 0), dtype=np.float32)
+    
     # Find row counts and check for mismatches
     row_counts = [arr.shape[0] for arr in processed_arrays]
     
@@ -171,52 +166,60 @@ def merge_modalities(*arrays: np.ndarray,
         
         # Truncate all arrays to have the same number of rows
         processed_arrays = [arr[:min_rows] for arr in processed_arrays]
-        
-        # Double-check row counts after truncation
-        new_row_counts = [arr.shape[0] for arr in processed_arrays]
-        if len(set(new_row_counts)) > 1:
-            logger.error(f"Failed to align arrays after truncation: {new_row_counts}. Using first array only.")
-            # Last resort - use only the first array
-            processed_arrays = [processed_arrays[0]]
     
-    # Log array shapes for debugging
-    shapes = [arr.shape for arr in processed_arrays]
-    logger.info(f"Merging {len(processed_arrays)} arrays with shapes: {shapes}, strategy: {strategy}")
-    
-    if len(processed_arrays) == 0:
-        logger.warning("No arrays to merge after processing")
-        return np.zeros((0, 0), dtype=np.float32)
+    # Get final row count after truncation
+    n_rows = processed_arrays[0].shape[0]
     
     # Merge based on strategy
     try:
         if strategy == "concat":
-            # Concatenate along features dimension
+            # Concatenate along features dimension - most memory efficient
             merged = np.column_stack(processed_arrays)
         elif strategy in ["average", "sum", "max"]:
             # For these strategies, we need arrays with the same shape
             # Find the max number of columns across all arrays
             max_cols = max(arr.shape[1] for arr in processed_arrays)
             
-            # Pad each array to have the same number of columns
-            padded_arrays = []
-            for arr in processed_arrays:
-                if arr.shape[1] < max_cols:
-                    pad_width = max_cols - arr.shape[1]
-                    padded = np.pad(arr, ((0, 0), (0, pad_width)), mode='constant', constant_values=0)
-                    padded_arrays.append(padded)
-                else:
-                    padded_arrays.append(arr)
-
-            # Stack arrays along a new axis (making a 3D array)
-            stacked = np.stack(padded_arrays, axis=0)
+            # Initialize result array - we'll fill it directly without intermediate arrays
+            if strategy == "average" or strategy == "sum":
+                # Use zeros for average/sum to accumulate values
+                merged = np.zeros((n_rows, max_cols), dtype=np.float32)
+                # Count number of non-NaN values per position for averaging
+                counts = np.zeros((n_rows, max_cols), dtype=np.int32) if strategy == "average" else None
+            else:  # strategy == "max"
+                # Use negative infinity for max to find maximum values
+                merged = np.full((n_rows, max_cols), -np.inf, dtype=np.float32)
             
-            # Apply the appropriate operation along the first axis (modalities)
+            # Process each array individually to avoid stacking all arrays in memory
+            for arr in processed_arrays:
+                n_cols = arr.shape[1]
+                
+                if strategy == "average":
+                    # Add values to merged array where not NaN
+                    mask = ~np.isnan(arr)
+                    np.add.at(merged[:, :n_cols], np.where(mask), arr[mask])
+                    # Count non-NaN values for averaging
+                    np.add.at(counts[:, :n_cols], np.where(mask), 1)
+                elif strategy == "sum":
+                    # Handle NaNs by replacing with 0 for summation
+                    arr_clean = np.nan_to_num(arr, nan=0.0, copy=True)
+                    merged[:, :n_cols] += arr_clean
+                elif strategy == "max":
+                    # Handle NaNs by replacing with -inf for max
+                    arr_clean = np.nan_to_num(arr, nan=-np.inf, copy=True)
+                    # Update merged with element-wise maximum
+                    merged[:, :n_cols] = np.maximum(merged[:, :n_cols], arr_clean)
+            
+            # Finalize average calculation
             if strategy == "average":
-                merged = np.nanmean(stacked, axis=0)
-            elif strategy == "sum":
-                merged = np.nansum(stacked, axis=0)
+                # Avoid division by zero by setting counts=1 where counts=0
+                counts[counts == 0] = 1
+                merged /= counts
+                # Replace potential NaNs from division
+                merged = np.nan_to_num(merged, nan=0.0, copy=False)
             elif strategy == "max":
-                merged = np.nanmax(stacked, axis=0)
+                # Replace -inf values with 0 where no valid data existed
+                merged[merged == -np.inf] = 0.0
         else:
             # Default to concatenation for unknown strategy
             logger.warning(f"Unknown merge strategy: {strategy}, using concat instead")
@@ -232,22 +235,22 @@ def merge_modalities(*arrays: np.ndarray,
             except Exception as e:
                 logger.warning(f"Imputation failed: {str(e)}, using original data")
                 # Replace NaNs with 0 as a fallback
-                merged = np.nan_to_num(merged, nan=0.0)
+                np.nan_to_num(merged, nan=0.0, copy=False)
         else:
             # Always ensure there are no NaNs in the result
-            merged = np.nan_to_num(merged, nan=0.0)
+            np.nan_to_num(merged, nan=0.0, copy=False)
             
         # Last check for inf values
         if not np.isfinite(merged).all():
             logger.warning("Merged array contains inf values, replacing with 0.")
-            merged = np.nan_to_num(merged, nan=0.0, posinf=0.0, neginf=0.0)
+            np.nan_to_num(merged, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
         
         # Verify the merged array's shape and ensure it's not empty
         if merged.size == 0 or merged.shape[0] == 0:
             logger.warning("Merged array has 0 rows")
             return np.zeros((1, 1), dtype=np.float32)
             
-        logger.info(f"Merged array shape: {merged.shape}")
+        logger.debug(f"Merged array shape: {merged.shape}")
         return merged
         
     except Exception as e:

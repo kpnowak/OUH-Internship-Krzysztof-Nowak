@@ -32,69 +32,10 @@ from Z_alg.models import (
     transform_extractor_classification, get_selector_object
 )
 from Z_alg.utils import TParallel, heavy_cpu_section
+from Z_alg._process_single_modality import align_samples_to_modalities, verify_data_alignment
 
 # Initialize logger
 logger = logging.getLogger(__name__)
-
-# Import our alignment helpers
-try:
-    from Z_alg._process_single_modality import align_samples_to_modalities, verify_data_alignment
-except ImportError:
-    # Create inline versions if import fails
-    logger.warning("Warning: Could not import helper modules, using inline functions")
-    
-    def align_samples_to_modalities(id_train, id_val, data_modalities):
-        """Fallback implementation for alignment function"""
-        valid_train_ids = set(id_train) 
-        valid_val_ids = set(id_val)
-        
-        for name, df in data_modalities.items():
-            if df is None or df.empty:
-                continue
-            avail_ids = set(df.columns)
-            valid_train_ids = valid_train_ids.intersection(avail_ids)
-            valid_val_ids = valid_val_ids.intersection(avail_ids)
-        
-        return sorted(list(valid_train_ids)), sorted(list(valid_val_ids))
-    
-    def verify_data_alignment(X, y, name="unnamed", fold_idx=None):
-        """
-        Verify that X and y have matching first dimensions and fix if needed.
-        
-        Parameters
-        ----------
-        X : array-like
-            Feature matrix
-        y : array-like
-            Target vector
-        name : str, default="unnamed"
-            Name of the dataset (for logging)
-        fold_idx : Optional[int]
-            Fold index (for logging)
-            
-        Returns
-        -------
-        Tuple[array-like, array-like]
-            Aligned X and y arrays
-        """
-        if X is None or y is None:
-            return None, None
-            
-        if X.shape[0] != len(y):
-            logger.warning(f"Warning: Shape mismatch for {name} (fold {fold_idx}): X={X.shape}, y={len(y)}")
-            
-            # Find the minimum length to truncate to
-            min_samples = min(X.shape[0], len(y))
-            
-            # Truncate both arrays
-            X_aligned = X[:min_samples]
-            y_aligned = y[:min_samples]
-            
-            logger.info(f"Aligned shapes: X={X_aligned.shape}, y={len(y_aligned)}")
-            return X_aligned, y_aligned
-        
-        # No adjustment needed
-        return X, y
 
 def _process_single_modality(
     modality_name: str, 
@@ -342,23 +283,15 @@ def process_cv_fold(
         Dictionary of model results
     """
     try:
-        # CRITICAL FIX: Add detailed logging to track the pipeline
         logger.info(f"Starting fold {fold_idx} for {ds_name} with {extr_name} and n_comps={ncomps}")
-        logger.info(f"Initial indices: train={len(train_idx)}, val={len(val_idx)}, test={len(idx_test)}")
         
         # Convert indices to IDs
         id_train = np.array([idx_to_id[i] for i in train_idx if i in idx_to_id])
         id_val = np.array([idx_to_id[i] for i in val_idx if i in idx_to_id])
         
-        # Add detailed logging for initial conversion
-        logger.info(f"After index->ID conversion in fold {fold_idx}: train_ids={len(id_train)}, val_ids={len(id_val)}")
-        
         # Get target values
         y_train = y_temp[train_idx]
         y_val = y_temp[val_idx]
-        
-        # CRITICAL FIX: Confirm y values are correct length
-        logger.info(f"Initial y vectors in fold {fold_idx}: y_train={len(y_train)}, y_val={len(y_val)}")
         
         # Create Series for easier access by ID
         y_train_series = pd.Series(y_train, index=id_train)
@@ -370,11 +303,6 @@ def process_cv_fold(
             data_modalities, all_ids, missing_percentage, 
             random_state=fold_idx, min_overlap_ratio=0.3
         )
-        
-        # CRITICAL FIX: Check sample counts after missing data simulation
-        logger.info(f"After missing data simulation in fold {fold_idx}: {len(modified_modalities)} modalities")
-        for name, df in modified_modalities.items():
-            logger.info(f"  Modality {name} in fold {fold_idx}: {df.shape} with {len(df.columns)} samples")
         
         # Use our new alignment function to find common IDs
         valid_train_ids, valid_val_ids = align_samples_to_modalities(
@@ -391,26 +319,17 @@ def process_cv_fold(
         valid_train_ids = list(valid_train_ids)
         valid_val_ids = list(valid_val_ids)
         
-        # Add detailed logging for aligned IDs
-        logger.info(f"After ID alignment in fold {fold_idx}: train_ids={len(valid_train_ids)}, val_ids={len(valid_val_ids)}")
-        
         # Ensure valid_train_ids only contains IDs that are in y_train_series
         valid_train_ids = [id_ for id_ in valid_train_ids if id_ in y_train_series.index]
         valid_val_ids = [id_ for id_ in valid_val_ids if id_ in y_val_series.index]
-        
-        # Log after filtering by y_train_series index
-        logger.info(f"After y-series filtering in fold {fold_idx}: train_ids={len(valid_train_ids)}, val_ids={len(valid_val_ids)}")
         
         # Get aligned labels for the common samples
         aligned_y_train = y_train_series.loc[valid_train_ids].values
         aligned_y_val = y_val_series.loc[valid_val_ids].values
         
-        # Log y vector sizes after alignment
-        logger.info(f"After alignment to y_series in fold {fold_idx}: y_train={len(aligned_y_train)}, y_val={len(aligned_y_val)}")
-        
         # CRITICAL FIX: Ensure valid_train_ids and aligned_y_train have exactly the same number of samples
         if len(valid_train_ids) != len(aligned_y_train):
-            logger.error(f"Critical alignment error in fold {fold_idx}: train_ids={len(valid_train_ids)}, y_train={len(aligned_y_train)}")
+            logger.warning(f"Alignment error in fold {fold_idx}: train_ids={len(valid_train_ids)}, y_train={len(aligned_y_train)}")
             # Fix the mismatch by truncating to the smaller size
             min_len = min(len(valid_train_ids), len(aligned_y_train))
             valid_train_ids = valid_train_ids[:min_len]
@@ -418,15 +337,11 @@ def process_cv_fold(
             
         # Same for validation
         if len(valid_val_ids) != len(aligned_y_val):
-            logger.error(f"Critical alignment error in fold {fold_idx}: val_ids={len(valid_val_ids)}, y_val={len(aligned_y_val)}")
+            logger.warning(f"Alignment error in fold {fold_idx}: val_ids={len(valid_val_ids)}, y_val={len(aligned_y_val)}")
             # Fix the mismatch by truncating to the smaller size
             min_len = min(len(valid_val_ids), len(aligned_y_val))
             valid_val_ids = valid_val_ids[:min_len]
             aligned_y_val = aligned_y_val[:min_len]
-        
-        # Double check that we have the correct number of samples
-        logger.info(f"Pre-processing alignment in fold {fold_idx}: train_ids={len(valid_train_ids)}, val_ids={len(valid_val_ids)}")
-        logger.info(f"Pre-processing aligned y in fold {fold_idx}: y_train={len(aligned_y_train)}, y_val={len(aligned_y_val)}")
         
         # Final check - ensure we have enough samples to proceed
         if len(valid_train_ids) < 5 or len(valid_val_ids) < 2:
@@ -437,14 +352,14 @@ def process_cv_fold(
         # Selectors are identified by being a string or a dict with 'type' key
         selector_mode = isinstance(extr_obj, str) or (isinstance(extr_obj, dict) and 'type' in extr_obj)
         if selector_mode:
-            logger.info(f"Selector mode detected in fold {fold_idx}: {extr_obj}")
+            logger.debug(f"Selector mode detected in fold {fold_idx}: {extr_obj}")
             
             # For selectors, we need to ensure special alignment for multi-modality selectors
             from sklearn.feature_selection import SelectorMixin
             from boruta import BorutaPy
             selector_types = (SelectorMixin, BorutaPy, str)
             if isinstance(extr_obj, selector_types) or (isinstance(extr_obj, dict) and 'type' in extr_obj):
-                logger.info(f"Before final selector alignment in fold {fold_idx}: train_ids={len(valid_train_ids)}, y_train={len(aligned_y_train)}")
+                logger.debug(f"Before final selector alignment in fold {fold_idx}: train_ids={len(valid_train_ids)}, y_train={len(aligned_y_train)}")
     
         # Process modalities in parallel
         from joblib import Parallel, delayed
@@ -488,11 +403,6 @@ def process_cv_fold(
         # Merge modalities with the fold-specific imputer - fit only once on training data
         try:
             from Z_alg.fusion import merge_modalities
-            
-            # Log shapes of individual modality results before merging
-            logger.info(f"Before merging in fold {fold_idx}: {len(valid_results)} valid modalities")
-            for i, r in enumerate(valid_results):
-                logger.info(f"  Modality {i+1} in fold {fold_idx}: train={r[0].shape}, val={r[1].shape}")
             
             # Check for row count consistency before merging
             train_row_counts = [r[0].shape[0] for r in valid_results]
@@ -548,11 +458,6 @@ def process_cv_fold(
                 min_samples = min(X_train_merged.shape[0], len(aligned_y_train))
                 X_train_merged = X_train_merged[:min_samples]
                 aligned_y_train = aligned_y_train[:min_samples]
-                # Verify that the shapes now match
-                if X_train_merged.shape[0] != len(aligned_y_train):
-                    logger.error(f"Failed to align arrays after truncation in fold {fold_idx}. This should never happen.")
-                    return {}
-                logger.info(f"Successfully fixed shape mismatch in fold {fold_idx}: X_train={X_train_merged.shape}, y_train={len(aligned_y_train)}")
             
             # Ensure X_val_merged and aligned_y_val have the same number of samples
             if X_val_merged.shape[0] != len(aligned_y_val):
@@ -561,15 +466,6 @@ def process_cv_fold(
                 min_samples = min(X_val_merged.shape[0], len(aligned_y_val))
                 X_val_merged = X_val_merged[:min_samples]
                 aligned_y_val = aligned_y_val[:min_samples]
-                # Verify that the shapes now match
-                if X_val_merged.shape[0] != len(aligned_y_val):
-                    logger.error(f"Failed to align validation arrays after truncation in fold {fold_idx}. This should never happen.")
-                    return {}
-                logger.info(f"Successfully fixed shape mismatch in fold {fold_idx}: X_val={X_val_merged.shape}, y_val={len(aligned_y_val)}")
-            
-            # Log shapes after merging, before alignment
-            logger.info(f"After merging in fold {fold_idx}: X_train={X_train_merged.shape}, X_val={X_val_merged.shape}")
-            logger.info(f"After merging in fold {fold_idx}: y_train={len(aligned_y_train)}, y_val={len(aligned_y_val)}")
             
             # Skip if no valid data after merging
             if X_train_merged.size == 0 or X_val_merged.size == 0:
@@ -591,10 +487,6 @@ def process_cv_fold(
             name=f"validation data (fold {fold_idx})", 
             fold_idx=fold_idx
         )
-        
-        # Log shapes after alignment
-        logger.info(f"After first alignment in fold {fold_idx}: X_train={X_train_merged.shape if X_train_merged is not None else 'None'}, y_train={len(aligned_y_train) if aligned_y_train is not None else 'None'}")
-        logger.info(f"After first alignment in fold {fold_idx}: X_val={X_val_merged.shape if X_val_merged is not None else 'None'}, y_val={len(aligned_y_val) if aligned_y_val is not None else 'None'}")
         
         # Save the number of features before extraction/selection
         original_n_features = ncomps  # This ensures n_features matches the intended value in metrics
@@ -686,9 +578,7 @@ def process_cv_fold(
                     name=f"validation data for {model_name} (fold {fold_idx})", 
                     fold_idx=fold_idx
                 )
-                # Log shapes before final model training
-                logger.info(f"Final model data for {model_name} (fold {fold_idx}): X_train={final_X_train.shape if final_X_train is not None else 'None'}, y_train={len(final_y_train) if final_y_train is not None else 'None'}")
-                logger.info(f"Final model data for {model_name} (fold {fold_idx}): X_val={final_X_val.shape if final_X_val is not None else 'None'}, y_val={len(final_y_val) if final_y_val is not None else 'None'}")
+                
                 # Only proceed if we have valid data
                 if (final_X_train is None or final_y_train is None or 
                     final_X_val is None or final_y_val is None):
@@ -833,13 +723,16 @@ def _run_pipeline(
                 indices, y_arr, test_size=test_size, random_state=0, stratify=y_arr
             )
     except ValueError as e:
-        logger.warning(f"Stratification failed for {ds_name}: {str(e)}. Falling back to regular split. Unique values: {len(np.unique(y_arr))}, sample size: {len(indices)}")
+        logger.warning(f"Stratification failed for {ds_name}: {str(e)}. Falling back to regular split.")
         idx_temp, idx_test, y_temp, y_test = train_test_split(
             indices, y_arr, test_size=0.2, random_state=0
         )
     
     # Process each transformer and parameter combination
     from Z_alg.config import MISSING_MODALITIES_CONFIG
+    
+    # Save all results for batch processing
+    all_pipeline_results = []
     
     for trans_name, trans_obj in transformers.items():
         for n_val in n_trans_list:
@@ -862,7 +755,7 @@ def _run_pipeline(
                 logger.info(f"Dataset: {ds_name}, using {n_splits}-fold CV with {len(idx_temp)} training samples")
                 
                 # Results storage
-                all_results = []
+                pipeline_results = []
                 
                 # Process each missing percentage
                 for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
@@ -872,6 +765,8 @@ def _run_pipeline(
                         model_yvals_folds = {model_name: [] for model_name in models}
                         model_ypreds_folds = {model_name: [] for model_name in models}
                         train_val_data = []  # Store (train_idx, val_idx, ...) for each fold
+                        
+                        # Process CV folds
                         for fold_idx, (train_idx, val_idx) in enumerate(cv.split(idx_temp, y_temp)):
                             try:
                                 train_val_data.append((train_idx, val_idx))
@@ -941,7 +836,7 @@ def _run_pipeline(
                             except Exception as e:
                                 logger.error(f"Error processing fold {fold_idx} for {ds_name} with {trans_name}-{n_val} (missing={missing_percentage}): {str(e)}")
                                 continue  # Continue to next fold
-                                
+                        
                         # After all folds, find the best fold and rerun only that fold with make_plots=True, saving model and plots
                         for model_name in models:
                             try:
@@ -995,7 +890,7 @@ def _run_pipeline(
                             except Exception as e:
                                 logger.error(f"Error processing best fold for model {model_name} with {trans_name}-{n_val} (missing={missing_percentage}): {str(e)}")
                                 continue  # Continue to next model
-                                
+                        
                         # Aggregate metrics across folds
                         cv_metrics = {}
                         for model_name in models:
@@ -1049,40 +944,78 @@ def _run_pipeline(
                                     'train_time': metrics.get('train_time', float('nan'))
                                 })
                             
-                            all_results.append(result_entry)
+                            pipeline_results.append(result_entry)
                     except Exception as e:
                         logger.error(f"Error processing missing percentage {missing_percentage} for {ds_name} with {trans_name}-{n_val}: {str(e)}")
                         continue  # Continue to next missing percentage
                 
-                # Save all results
-                if all_results:
+                # Add results to the batch for later processing
+                all_pipeline_results.extend(pipeline_results)
+                
+                # Write results to file every 10 transformers or at the end
+                # This reduces disk I/O while still providing regular checkpoints
+                if len(all_pipeline_results) >= 20 or (trans_name == list(transformers.keys())[-1] and n_val == n_trans_list[-1]):
                     try:
-                        metrics_file = os.path.join(
-                            base_out, "metrics", 
-                            f"{ds_name}_{pipeline_type}_cv_metrics.csv"
-                        )
-                        
-                        # Check if file exists
-                        file_exists = os.path.exists(metrics_file)
-                        
-                        # Append results to CSV
-                        pd.DataFrame(all_results).to_csv(
-                            metrics_file,
-                            mode='a',
-                            header=not file_exists,
-                            index=False
-                        )
-                        logger.info(f"Saved metrics for {ds_name} with {trans_name}-{n_val} to {metrics_file}")
+                        # Save results to CSV in batches
+                        if all_pipeline_results:
+                            metrics_file = os.path.join(
+                                base_out, "metrics", 
+                                f"{ds_name}_{pipeline_type}_cv_metrics.csv"
+                            )
+                            
+                            # Check if file exists
+                            file_exists = os.path.exists(metrics_file)
+                            
+                            # Append results to CSV
+                            pd.DataFrame(all_pipeline_results).to_csv(
+                                metrics_file,
+                                mode='a',
+                                header=not file_exists,
+                                index=False
+                            )
+                            logger.info(f"Saved {len(all_pipeline_results)} results to {metrics_file}")
+                            
+                            # Clear batch after saving
+                            all_pipeline_results = []
+                            
+                            # Force garbage collection to free memory
+                            import gc
+                            gc.collect()
                     except Exception as e:
-                        logger.error(f"Error saving metrics for {ds_name} with {trans_name}-{n_val}: {str(e)}")
-                else:
-                    logger.warning(f"No results to save for {ds_name} with {trans_name}-{n_val}")
+                        logger.error(f"Error saving metrics batch: {str(e)}")
+                
             except KeyboardInterrupt:
                 logger.warning(f"KeyboardInterrupt during {ds_name} with {trans_name}-{n_val}. Aborting all processing.")
                 raise  # Re-raise to abort all processing
             except Exception as e:
                 logger.error(f"Error processing {trans_name}-{n_val} for {ds_name}: {str(e)}")
                 continue  # Continue to next n_val
+    
+    # Final save of any remaining results
+    if all_pipeline_results:
+        try:
+            metrics_file = os.path.join(
+                base_out, "metrics", 
+                f"{ds_name}_{pipeline_type}_cv_metrics.csv"
+            )
+            
+            # Check if file exists
+            file_exists = os.path.exists(metrics_file)
+            
+            # Append results to CSV
+            pd.DataFrame(all_pipeline_results).to_csv(
+                metrics_file,
+                mode='a',
+                header=not file_exists,
+                index=False
+            )
+            logger.info(f"Saved final {len(all_pipeline_results)} results to {metrics_file}")
+        except Exception as e:
+            logger.error(f"Error saving final metrics batch: {str(e)}")
+    
+    # Clean up resources
+    import gc
+    gc.collect()
 
 def run_extraction_pipeline(
     ds_name: str, 

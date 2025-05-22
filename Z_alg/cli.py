@@ -15,7 +15,7 @@ from Z_alg.config import (
     REGRESSION_DATASETS, CLASSIFICATION_DATASETS,
     MAX_COMPONENTS, MAX_FEATURES
 )
-from Z_alg.io import load_dataset
+from Z_alg.data_io import load_dataset
 from Z_alg.models import (
     get_regression_extractors, get_regression_selectors,
     get_classification_extractors, get_classification_selectors,
@@ -284,6 +284,10 @@ def main():
     if args.debug:
         os.environ["DEBUG_RESOURCES"] = "1"
         logger.setLevel(logging.DEBUG)
+        # Also set the file handler to DEBUG
+        for handler in logging.root.handlers:
+            if isinstance(handler, logging.FileHandler):
+                handler.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.WARNING)
         
@@ -297,72 +301,7 @@ def main():
     # Process datasets based on arguments
     if args.dataset:
         # Find and process only the specified dataset
-        target_ds = args.dataset.lower()
-        found = False
-        
-        for ds_conf in REGRESSION_DATASETS:
-            if ds_conf["name"].lower() == target_ds:
-                logger.info(f"Processing single regression dataset: {ds_conf['name']}")
-                result = process_dataset(ds_conf, is_regression=True)
-                if result:
-                    ds_name = result["name"]
-                    base_out = os.path.join(
-                        ds_conf.get("output_dir", "output"), ds_name
-                    )
-                    os.makedirs(base_out, exist_ok=True)
-                    
-                    run_extraction_pipeline(
-                        ds_name, result["modalities"], result["common_ids"], 
-                        result["y_aligned"], base_out,
-                        get_regression_extractors(), [8, 16, 32], 
-                        ["LinearRegression", "RandomForestRegressor", "ElasticNet"], 
-                        [0], 1, is_regression=True
-                    )
-                    
-                    run_selection_pipeline(
-                        ds_name, result["modalities"], result["common_ids"], 
-                        result["y_aligned"], base_out,
-                        get_regression_selectors(), [8, 16, 32], 
-                        ["LinearRegression", "RandomForestRegressor", "ElasticNet"], 
-                        [0], 1, is_regression=True
-                    )
-                found = True
-                break
-                
-        if not found:
-            for ds_conf in CLASSIFICATION_DATASETS:
-                if ds_conf["name"].lower() == target_ds:
-                    logger.info(f"Processing single classification dataset: {ds_conf['name']}")
-                    result = process_dataset(ds_conf, is_regression=False)
-                    if result:
-                        ds_name = result["name"]
-                        base_out = os.path.join(
-                            ds_conf.get("output_dir", "output"), ds_name
-                        )
-                        os.makedirs(base_out, exist_ok=True)
-                        
-                        run_extraction_pipeline(
-                            ds_name, result["modalities"], result["common_ids"], 
-                            result["y_aligned"], base_out,
-                            get_classification_extractors(), [8, 16, 32], 
-                            list(get_classification_models().keys()), 
-                            [0], 1, is_regression=False
-                        )
-                        
-                        run_selection_pipeline(
-                            ds_name, result["modalities"], result["common_ids"], 
-                            result["y_aligned"], base_out,
-                            get_classification_selectors(), [8, 16, 32], 
-                            list(get_classification_models().keys()), 
-                            [0], 1, is_regression=False
-                        )
-                    found = True
-                    break
-                    
-        if not found:
-            logger.error(f"Error: Dataset '{args.dataset}' not found in configurations.")
-            sys.exit(1)
-            
+        process_single_dataset(args.dataset.lower())
     elif args.regression_only:
         # Process only regression datasets
         process_regression_datasets()
@@ -379,12 +318,82 @@ def main():
     hours, remainder = divmod(elapsed_time, 3600)
     minutes, seconds = divmod(remainder, 60)
     
+    completion_msg = f"Pipeline completed in {int(hours)}h {int(minutes)}m {int(seconds)}s"
     logger.info("\n" + "=" * 70)
-    logger.info(f"Pipeline completed in {int(hours)}h {int(minutes)}m {int(seconds)}s")
+    logger.info(completion_msg)
     logger.info("=" * 70)
     print("\n" + "=" * 70)
-    print(f"Pipeline completed in {int(hours)}h {int(minutes)}m {int(seconds)}s")
+    print(completion_msg)
     print("=" * 70)
+
+def process_single_dataset(target_ds):
+    """Process a single dataset specified by name."""
+    found = False
+    
+    # First try regression datasets
+    for ds_conf in REGRESSION_DATASETS:
+        if ds_conf["name"].lower() == target_ds:
+            logger.info(f"Processing single regression dataset: {ds_conf['name']}")
+            result = process_dataset(ds_conf, is_regression=True)
+            if result:
+                ds_name = result["name"]
+                base_out = os.path.join(
+                    ds_conf.get("output_dir", "output"), ds_name
+                )
+                os.makedirs(base_out, exist_ok=True)
+                
+                run_extraction_pipeline(
+                    ds_name, result["modalities"], result["common_ids"], 
+                    result["y_aligned"], base_out,
+                    get_regression_extractors(), [8, 16, 32], 
+                    ["LinearRegression", "RandomForestRegressor", "ElasticNet"], 
+                    [0], 1, is_regression=True
+                )
+                
+                run_selection_pipeline(
+                    ds_name, result["modalities"], result["common_ids"], 
+                    result["y_aligned"], base_out,
+                    get_regression_selectors(), [8, 16, 32], 
+                    ["LinearRegression", "RandomForestRegressor", "ElasticNet"], 
+                    [0], 1, is_regression=True
+                )
+            found = True
+            break
+    
+    # Then try classification datasets if not found
+    if not found:
+        for ds_conf in CLASSIFICATION_DATASETS:
+            if ds_conf["name"].lower() == target_ds:
+                logger.info(f"Processing single classification dataset: {ds_conf['name']}")
+                result = process_dataset(ds_conf, is_regression=False)
+                if result:
+                    ds_name = result["name"]
+                    base_out = os.path.join(
+                        ds_conf.get("output_dir", "output"), ds_name
+                    )
+                    os.makedirs(base_out, exist_ok=True)
+                    
+                    run_extraction_pipeline(
+                        ds_name, result["modalities"], result["common_ids"], 
+                        result["y_aligned"], base_out,
+                        get_classification_extractors(), [8, 16, 32], 
+                        list(get_classification_models().keys()), 
+                        [0], 1, is_regression=False
+                    )
+                    
+                    run_selection_pipeline(
+                        ds_name, result["modalities"], result["common_ids"], 
+                        result["y_aligned"], base_out,
+                        get_classification_selectors(), [8, 16, 32], 
+                        list(get_classification_models().keys()), 
+                        [0], 1, is_regression=False
+                    )
+                found = True
+                break
+    
+    if not found:
+        logger.error(f"Error: Dataset '{target_ds}' not found in configurations.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
