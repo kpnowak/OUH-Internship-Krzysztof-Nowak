@@ -108,13 +108,22 @@ def process_regression_datasets():
     reg_extractors = get_regression_extractors()
     reg_selectors = get_regression_selectors()
     reg_models = ["LinearRegression", "RandomForestRegressor", "ElasticNet"]
-    n_comps_list = [8, 16, 32]  # Reduced from [8, 16, MAX_COMPONENTS]
-    n_feats_list = [8, 16, 32]  # Reduced from [8, 16, MAX_FEATURES]
+    n_shared_list = [8, 16, 32]  # Shared list for both extraction and selection
     
+    # Check if a specific n_val is requested via command line
+    if args.n_val:
+        n_val = int(args.n_val)
+        if n_val in n_shared_list:
+            n_shared_list = [n_val]
+            logger.info(f"Processing only n_val = {n_val} as requested")
+        else:
+            logger.warning(f"Requested n_val = {n_val} not in {n_shared_list}, using all values")
+    
+    # Calculate total runs (now just extractors + selectors) * len(n_shared_list)
     reg_total_runs = (
         len(REGRESSION_DATASETS) * 
-        (len(reg_extractors) * len(n_comps_list) + 
-         len(reg_selectors) * len(n_feats_list))
+        (len(reg_extractors) + len(reg_selectors)) *
+        len(n_shared_list)
     )
     progress_count_reg = [0]
     
@@ -133,20 +142,39 @@ def process_regression_datasets():
             ds_conf.get("output_dir", "output"), ds_name
         )
         os.makedirs(base_out, exist_ok=True)
-            
-        # Run extraction pipeline
-        run_extraction_pipeline(
-            ds_name, modalities, common_ids, y_aligned, base_out,
-            reg_extractors, n_comps_list, reg_models, progress_count_reg, reg_total_runs,
-            is_regression=True
-        )
         
-        # Run selection pipeline
-        run_selection_pipeline(
-            ds_name, modalities, common_ids, y_aligned, base_out,
-            reg_selectors, n_feats_list, reg_models, progress_count_reg, reg_total_runs,
-            is_regression=True
-        )
+        # Run extraction and selection with matching n_val pairs
+        for n_val in n_shared_list:
+            try:
+                # Add debug logging
+                print(f"===> Processing n_val = {n_val} for dataset {ds_name}")
+                logger.info(f"===> Processing n_val = {n_val} for dataset {ds_name}")
+                
+                # Run extraction pipeline with n_val as n_components
+                run_extraction_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    reg_extractors, [n_val], reg_models, progress_count_reg, reg_total_runs,
+                    is_regression=True
+                )
+                
+                # Run selection pipeline with the same n_val as n_features
+                run_selection_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    reg_selectors, [n_val], reg_models, progress_count_reg, reg_total_runs,
+                    is_regression=True
+                )
+                
+                print(f"===> COMPLETED n_val = {n_val} for dataset {ds_name}")
+                logger.info(f"===> COMPLETED n_val = {n_val} for dataset {ds_name}")
+            except KeyboardInterrupt:
+                logger.warning(f"KeyboardInterrupt during n_val = {n_val}. Aborting all processing.")
+                raise  # Re-raise to abort all processing
+            except Exception as e:
+                logger.error(f"Error processing n_val = {n_val}: {str(e)}")
+                logger.error(f"Continuing with next n_val")
+                import traceback
+                traceback.print_exc()
+                continue  # Continue to next n_val
 
 def process_classification_datasets():
     """Process all classification datasets."""
@@ -154,13 +182,22 @@ def process_classification_datasets():
     clf_extractors = get_classification_extractors()
     clf_selectors = get_classification_selectors()
     clf_models = get_classification_models()
-    n_comps_list = [8, 16, 32]  # Reduced from [8, 16, MAX_COMPONENTS]
-    n_feats_list = [8, 16, 32]  # Reduced from [8, 16, MAX_FEATURES]
+    n_shared_list = [8, 16, 32]  # Shared list for both extraction and selection
     
+    # Check if a specific n_val is requested via command line
+    if args.n_val:
+        n_val = int(args.n_val)
+        if n_val in n_shared_list:
+            n_shared_list = [n_val]
+            logger.info(f"Processing only n_val = {n_val} as requested")
+        else:
+            logger.warning(f"Requested n_val = {n_val} not in {n_shared_list}, using all values")
+    
+    # Calculate total runs (now just extractors + selectors) * len(n_shared_list)
     clf_total_runs = (
         len(CLASSIFICATION_DATASETS) * 
-        (len(clf_extractors) * len(n_comps_list) + 
-         len(clf_selectors) * len(n_feats_list))
+        (len(clf_extractors) + len(clf_selectors)) *
+        len(n_shared_list)
     )
     progress_count_clf = [0]
     
@@ -179,20 +216,39 @@ def process_classification_datasets():
             ds_conf.get("output_dir", "output"), ds_name
         )
         os.makedirs(base_out, exist_ok=True)
-            
-        # Run extraction pipeline
-        run_extraction_pipeline(
-            ds_name, modalities, common_ids, y_aligned, base_out,
-            clf_extractors, n_comps_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
-            is_regression=False
-        )
         
-        # Run selection pipeline
-        run_selection_pipeline(
-            ds_name, modalities, common_ids, y_aligned, base_out,
-            clf_selectors, n_feats_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
-            is_regression=False
-        )
+        # Run extraction and selection with matching n_val pairs
+        for n_val in n_shared_list:
+            try:
+                # Add debug logging
+                print(f"===> Processing n_val = {n_val} for dataset {ds_name}")
+                logger.info(f"===> Processing n_val = {n_val} for dataset {ds_name}")
+                
+                # Run extraction pipeline with n_val as n_components
+                run_extraction_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    clf_extractors, [n_val], list(clf_models.keys()), progress_count_clf, clf_total_runs,
+                    is_regression=False
+                )
+                
+                # Run selection pipeline with the same n_val as n_features
+                run_selection_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    clf_selectors, [n_val], list(clf_models.keys()), progress_count_clf, clf_total_runs,
+                    is_regression=False
+                )
+                
+                print(f"===> COMPLETED n_val = {n_val} for dataset {ds_name}")
+                logger.info(f"===> COMPLETED n_val = {n_val} for dataset {ds_name}")
+            except KeyboardInterrupt:
+                logger.warning(f"KeyboardInterrupt during n_val = {n_val}. Aborting all processing.")
+                raise  # Re-raise to abort all processing
+            except Exception as e:
+                logger.error(f"Error processing n_val = {n_val}: {str(e)}")
+                logger.error(f"Continuing with next n_val")
+                import traceback
+                traceback.print_exc()
+                continue  # Continue to next n_val
 
 def main():
     """Main function for running the pipeline."""
@@ -211,7 +267,11 @@ def main():
     parser.add_argument(
         "--debug", action="store_true", help="Enable debug mode with more logging"
     )
+    parser.add_argument(
+        "--n-val", type=int, help="Run only a specific n_val (8, 16, or 32)"
+    )
     
+    global args
     args = parser.parse_args()
     
     # Set up debug mode if requested

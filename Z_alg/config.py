@@ -106,7 +106,7 @@ class DatasetConfig:
     outcome_type: str = "os"
     output_dir: str = "output"
     fix_tcga_ids: bool = False
-    nfeats_list: List[int] = field(default_factory=lambda: [4, 8, 16])
+    nfeats_list: List[int] = field(default_factory=lambda: [8, 16, 32])
     ncomps_list: List[int] = field(default_factory=lambda: [4, 8, 16])
     
     def to_dict(self) -> Dict[str, Any]:
@@ -132,7 +132,7 @@ class DatasetConfig:
 REGRESSION_DATASETS = [
     DatasetConfig(
         name="TestRegression",
-        base_path="test_data/regression",  # Direct path, no "../"
+        base_path="test_data/regression",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
@@ -150,7 +150,7 @@ REGRESSION_DATASETS = [
 """
     DatasetConfig(
         name="TestRegression",
-        base_path="test_data/regression",  # Direct path, no "../"
+        base_path="test_data/regression",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
@@ -166,13 +166,13 @@ REGRESSION_DATASETS = [
 
     DatasetConfig(
         name="AML",
-        base_path="../aml",
+        base_path="data/aml",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="../clinical/aml.csv",
+        outcome_file="data/clinical/aml.csv",
         outcome_col="lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
         id_col="sampleID",
         outcome_type="continuous",
@@ -181,13 +181,13 @@ REGRESSION_DATASETS = [
     
     DatasetConfig(
         name="Sarcoma",
-        base_path="../sarcoma",
+        base_path="data/sarcoma",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="../clinical/sarcoma.csv",
+        outcome_file="data/clinical/sarcoma.csv",
         outcome_col="pathologic_tumor_length",
         id_col="metsampleID",
         outcome_type="continuous",
@@ -200,7 +200,7 @@ REGRESSION_DATASETS = [
 CLASSIFICATION_DATASETS = [
     DatasetConfig(
         name="TestClassification",
-        base_path="test_data/classification",  # Direct path, no "../"
+        base_path="test_data/classification",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
@@ -218,7 +218,7 @@ CLASSIFICATION_DATASETS = [
 """
     DatasetConfig(
         name="TestClassification",
-        base_path="test_data/classification",  # Direct path, no "../"
+        base_path="test_data/classification",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
@@ -234,13 +234,13 @@ CLASSIFICATION_DATASETS = [
 
     DatasetConfig(
         name="Breast",
-        base_path="../breast",
+        base_path="data/breast",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="../clinical/breast.csv",
+        outcome_file="data/clinical/breast.csv",
         outcome_col="pathologic_T",
         id_col="sampleID",
         outcome_type="class",
@@ -249,13 +249,13 @@ CLASSIFICATION_DATASETS = [
     
     DatasetConfig(
         name="Colon",
-        base_path="../colon",
+        base_path="data/colon",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="../clinical/colon.csv",
+        outcome_file="data/clinical/colon.csv",
         outcome_col="pathologic_T",
         id_col="sampleID",
         outcome_type="class",
@@ -264,13 +264,13 @@ CLASSIFICATION_DATASETS = [
     
     DatasetConfig(
         name="Kidney",
-        base_path="../kidney",
+        base_path="data/kidney",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="../clinical/kidney.csv",
+        outcome_file="data/clinical/kidney.csv",
         outcome_col="pathologic_T",
         id_col="submitter_id.samples",
         outcome_type="class",
@@ -279,13 +279,13 @@ CLASSIFICATION_DATASETS = [
     
     DatasetConfig(
         name="Liver",
-        base_path="../liver",
+        base_path="data/liver",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="../clinical/liver.csv",
+        outcome_file="data/clinical/liver.csv",
         outcome_col="pathologic_T",
         id_col="sampleID",
         outcome_type="class",
@@ -294,13 +294,13 @@ CLASSIFICATION_DATASETS = [
     
     DatasetConfig(
         name="Lung",
-        base_path="../lung",
+        base_path="data/lung",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="../clinical/lung.csv",
+        outcome_file="data/clinical/lung.csv",
         outcome_col="pathologic_T",
         id_col="sampleID",
         outcome_type="class",
@@ -309,13 +309,13 @@ CLASSIFICATION_DATASETS = [
     
     DatasetConfig(
         name="Melanoma",
-        base_path="../melanoma",
+        base_path="data/melanoma",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="../clinical/melanoma.csv",
+        outcome_file="data/clinical/melanoma.csv",
         outcome_col="pathologic_T",
         id_col="sampleID",
         outcome_type="class",
@@ -324,13 +324,13 @@ CLASSIFICATION_DATASETS = [
     
     DatasetConfig(
         name="Ovarian",
-        base_path="../ovarian",
+        base_path="data/ovarian",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="../clinical/ovarian.csv",
+        outcome_file="data/clinical/ovarian.csv",
         outcome_col="clinical_stage",
         id_col="sampleID",
         outcome_type="class",

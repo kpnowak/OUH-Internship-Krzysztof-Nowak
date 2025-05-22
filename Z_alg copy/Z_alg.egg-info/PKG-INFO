@@ -1,0 +1,12 @@
+Metadata-Version: 2.1
+Name: Z_alg
+Version: 0.1
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: scikit-learn
+Requires-Dist: matplotlib
+Requires-Dist: seaborn
+Requires-Dist: joblib
+Requires-Dist: threadpoolctl
+Requires-Dist: boruta
+Requires-Dist: psutil

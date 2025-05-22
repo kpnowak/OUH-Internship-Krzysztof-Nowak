@@ -17,6 +17,9 @@ from sklearn.metrics import (
 from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 import logging
 import time
+import joblib
+import shutil
+import glob
 
 # Local imports
 from Z_alg.config import N_JOBS, DatasetConfig, FEATURE_EXTRACTION_CONFIG
@@ -278,7 +281,10 @@ def process_cv_fold(
     base_out,
     ds_name,
     extr_name,
-    is_regression=True
+    pipeline_type,
+    is_regression=True,
+    make_plots=True,
+    plot_prefix_override=None
 ):
     """
     Process a single CV fold, handling all modalities and models.
@@ -321,8 +327,14 @@ def process_cv_fold(
         Dataset name
     extr_name : str
         Extractor name
+    pipeline_type : str
+        Type of pipeline ("extraction" or "selection")
     is_regression : bool
         Whether this is a regression task
+    make_plots : bool
+        Whether to generate plots for the best fold
+    plot_prefix_override : Optional[str]
+        Override for the plot prefix
         
     Returns
     -------
@@ -584,19 +596,75 @@ def process_cv_fold(
         logger.info(f"After first alignment in fold {fold_idx}: X_train={X_train_merged.shape if X_train_merged is not None else 'None'}, y_train={len(aligned_y_train) if aligned_y_train is not None else 'None'}")
         logger.info(f"After first alignment in fold {fold_idx}: X_val={X_val_merged.shape if X_val_merged is not None else 'None'}, y_val={len(aligned_y_val) if aligned_y_val is not None else 'None'}")
         
-        # Skip fold if we don't have enough samples after alignment
-        if (X_train_merged is None or aligned_y_train is None or 
-            X_val_merged is None or aligned_y_val is None):
-            logger.warning(f"Warning: Invalid data after alignment in fold {fold_idx}")
-            return {}
-            
-        # Final validation - skip fold if we don't have enough samples after alignment
-        if len(aligned_y_train) < 4 or len(aligned_y_val) < 2:
-            logger.warning(f"Warning: Too few samples remaining after alignment in fold {fold_idx}")
-            return {}
-    
-        # Train and evaluate models
+        # Save the number of features before extraction/selection
+        original_n_features = ncomps  # This ensures n_features matches the intended value in metrics
+
+        # Apply extraction/selection to merged data
+        # --- ENFORCE ncomps after reduction ---
+        if is_regression:
+            # Extraction pipeline
+            if pipeline_type == "extraction":
+                from Z_alg.models import cached_fit_transform_extractor_regression, transform_extractor_regression
+                extractor, X_train_reduced = cached_fit_transform_extractor_regression(
+                    X_train_merged, aligned_y_train, extr_obj, ncomps, ds_name=ds_name, modality_name=None, fold_idx=fold_idx
+                )
+                X_val_reduced = transform_extractor_regression(X_val_merged, extractor)
+                # ENFORCE ncomps
+                if X_train_reduced is not None and X_train_reduced.shape[1] > ncomps:
+                    X_train_reduced = X_train_reduced[:, :ncomps]
+                if X_val_reduced is not None and X_val_reduced.shape[1] > ncomps:
+                    X_val_reduced = X_val_reduced[:, :ncomps]
+                train_n_components = X_train_reduced.shape[1] if X_train_reduced is not None else -1
+                final_X_train, final_X_val = X_train_reduced, X_val_reduced
+            else:
+                # Selection pipeline
+                from Z_alg.models import cached_fit_transform_selector_regression, transform_selector_regression
+                selected_features, X_train_reduced = cached_fit_transform_selector_regression(
+                    extr_obj, X_train_merged, aligned_y_train, ncomps, fold_idx=fold_idx, ds_name=ds_name
+                )
+                X_val_reduced = transform_selector_regression(X_val_merged, selected_features)
+                # ENFORCE ncomps
+                if X_train_reduced is not None and X_train_reduced.shape[1] > ncomps:
+                    X_train_reduced = X_train_reduced[:, :ncomps]
+                if X_val_reduced is not None and X_val_reduced.shape[1] > ncomps:
+                    X_val_reduced = X_val_reduced[:, :ncomps]
+                train_n_components = X_train_reduced.shape[1] if X_train_reduced is not None else -1
+                final_X_train, final_X_val = X_train_reduced, X_val_reduced
+        else:
+            # Classification
+            if pipeline_type == "extraction":
+                from Z_alg.models import cached_fit_transform_extractor_classification, transform_extractor_classification
+                extractor, X_train_reduced = cached_fit_transform_extractor_classification(
+                    X_train_merged, aligned_y_train, extr_obj, ncomps, ds_name=ds_name, modality_name=None, fold_idx=fold_idx
+                )
+                X_val_reduced = transform_extractor_classification(X_val_merged, extractor)
+                # ENFORCE ncomps
+                if X_train_reduced is not None and X_train_reduced.shape[1] > ncomps:
+                    X_train_reduced = X_train_reduced[:, :ncomps]
+                if X_val_reduced is not None and X_val_reduced.shape[1] > ncomps:
+                    X_val_reduced = X_val_reduced[:, :ncomps]
+                train_n_components = X_train_reduced.shape[1] if X_train_reduced is not None else -1
+                final_X_train, final_X_val = X_train_reduced, X_val_reduced
+            else:
+                # Selection pipeline
+                from Z_alg.models import cached_fit_transform_selector_classification, transform_selector_classification
+                selected_features, X_train_reduced = cached_fit_transform_selector_classification(
+                    X_train_merged, aligned_y_train, extr_obj, ncomps, ds_name=ds_name, modality_name=None, fold_idx=fold_idx
+                )
+                X_val_reduced = transform_selector_classification(X_val_merged, selected_features)
+                # ENFORCE ncomps
+                if X_train_reduced is not None and X_train_reduced.shape[1] > ncomps:
+                    X_train_reduced = X_train_reduced[:, :ncomps]
+                if X_val_reduced is not None and X_val_reduced.shape[1] > ncomps:
+                    X_val_reduced = X_val_reduced[:, :ncomps]
+                train_n_components = X_train_reduced.shape[1] if X_train_reduced is not None else -1
+                final_X_train, final_X_val = X_train_reduced, X_val_reduced
+
+        # Now pass n_features and train_n_components to the model training functions
         model_results = {}
+        model_objects = {}
+        model_yvals = {}
+        model_ypreds = {}
         
         # Import the correct function based on the task type
         if is_regression:
@@ -609,48 +677,73 @@ def process_cv_fold(
                 # Perform one final verification before training the model
                 # This is critical to ensure X and y have the same number of samples
                 final_X_train, final_y_train = verify_data_alignment(
-                    X_train_merged, aligned_y_train, 
+                    final_X_train, aligned_y_train, 
                     name=f"training data for {model_name} (fold {fold_idx})", 
                     fold_idx=fold_idx
                 )
-                
                 final_X_val, final_y_val = verify_data_alignment(
-                    X_val_merged, aligned_y_val, 
+                    final_X_val, aligned_y_val, 
                     name=f"validation data for {model_name} (fold {fold_idx})", 
                     fold_idx=fold_idx
                 )
-                
                 # Log shapes before final model training
                 logger.info(f"Final model data for {model_name} (fold {fold_idx}): X_train={final_X_train.shape if final_X_train is not None else 'None'}, y_train={len(final_y_train) if final_y_train is not None else 'None'}")
                 logger.info(f"Final model data for {model_name} (fold {fold_idx}): X_val={final_X_val.shape if final_X_val is not None else 'None'}, y_val={len(final_y_val) if final_y_val is not None else 'None'}")
-                
                 # Only proceed if we have valid data
                 if (final_X_train is None or final_y_train is None or 
                     final_X_val is None or final_y_val is None):
                     logger.warning(f"Warning: Invalid data for {model_name} in fold {fold_idx}")
                     continue
-                    
                 # Train and evaluate
-                model, metrics = train_model(
-                    final_X_train, final_y_train, 
-                    final_X_val, final_y_val,
-                    model_name, 
-                    out_dir=os.path.join(base_out, "plots"),
-                    plot_prefix=f"{ds_name}_fold_{fold_idx}_{extr_name}_{ncomps}_{model_name}",
-                    fold_idx=fold_idx
-                )
-                
-                # Store results if valid
-                if model is not None and metrics:
+                if is_regression:
+                    if plot_prefix_override:
+                        current_plot_prefix = plot_prefix_override
+                    else:
+                        current_plot_prefix = f"{ds_name}_fold_{fold_idx}_{extr_name}_{ncomps}_{model_name}"
+                    model, metrics = train_model(
+                        final_X_train, final_y_train, 
+                        final_X_val, final_y_val,
+                        model_name, 
+                        out_dir=os.path.join(base_out, "plots"),
+                        plot_prefix=current_plot_prefix,
+                        fold_idx=fold_idx,
+                        make_plots=make_plots,
+                        n_features=original_n_features,
+                        train_n_components=train_n_components
+                    )
                     model_results[model_name] = metrics
+                    model_objects[model_name] = model
+                else:
+                    if plot_prefix_override:
+                        current_plot_prefix = plot_prefix_override
+                    else:
+                        current_plot_prefix = f"{ds_name}_fold_{fold_idx}_{extr_name}_{ncomps}_{model_name}"
+                    model, metrics, y_val_out, y_pred_out = train_model(
+                        final_X_train, final_y_train, 
+                        final_X_val, final_y_val,
+                        model_name, 
+                        out_dir=os.path.join(base_out, "plots"),
+                        plot_prefix=current_plot_prefix,
+                        fold_idx=fold_idx,
+                        make_plots=make_plots,
+                        n_features=original_n_features,
+                        train_n_components=train_n_components
+                    )
+                    model_results[model_name] = metrics
+                    model_objects[model_name] = model
+                    model_yvals[model_name] = y_val_out
+                    model_ypreds[model_name] = y_pred_out
             except Exception as e:
                 logger.warning(f"Warning: Failed to train {model_name} in fold {fold_idx}: {str(e)}")
                 continue
                 
-        return model_results
+        if is_regression:
+            return model_results, model_objects
+        else:
+            return model_results, model_objects, model_yvals, model_ypreds
     except Exception as e:
         logger.warning(f"Warning: Error processing fold {fold_idx}: {str(e)}")
-        return {}
+        return {}, {}
 
 def _run_pipeline(
     ds_name: str, 
@@ -750,108 +843,246 @@ def _run_pipeline(
     
     for trans_name, trans_obj in transformers.items():
         for n_val in n_trans_list:
-            # Update and report progress
-            progress_count[0] += 1
-            run_idx = progress_count[0]
-            trans_type = "EXTRACT" if pipeline_type == "extraction" else "SELECT"
-            task_type = "REG" if is_regression else "CLF"
-            progress_msg = f"[{trans_type}-{task_type} CV] {run_idx}/{total_runs} => {ds_name} | {trans_name}-{n_val}"
-            # Always show progress in terminal
-            print(progress_msg)
-            logger.info(progress_msg)
+            try:
+                # Update and report progress
+                progress_count[0] += 1
+                run_idx = progress_count[0]
+                trans_type = "EXTRACT" if pipeline_type == "extraction" else "SELECT"
+                task_type = "REG" if is_regression else "CLF"
+                progress_msg = f"[{trans_type}-{task_type} CV] {run_idx}/{total_runs} => {ds_name} | {trans_name}-{n_val}"
+                # Always show progress in terminal
+                print(progress_msg)
+                logger.info(progress_msg)
 
-            # Choose appropriate CV splitter based on dataset size and task
-            n_splits = 2 if len(idx_temp) < 15 else 3  # Use fewer splits for small datasets
-            cv_cls = KFold if is_regression else StratifiedKFold
-            cv = cv_cls(n_splits=n_splits, shuffle=True, random_state=0)
-            
-            logger.info(f"Dataset: {ds_name}, using {n_splits}-fold CV with {len(idx_temp)} training samples")
-            
-            # Results storage
-            all_results = []
-            
-            # Process each missing percentage
-            for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
-                cv_results = []
+                # Choose appropriate CV splitter based on dataset size and task
+                n_splits = 2 if len(idx_temp) < 15 else 3  # Use fewer splits for small datasets
+                cv_cls = KFold if is_regression else StratifiedKFold
+                cv = cv_cls(n_splits=n_splits, shuffle=True, random_state=0)
                 
-                # Process each CV fold
-                for fold_idx, (train_idx, val_idx) in enumerate(cv.split(idx_temp, y_temp)):
-                    # Suppress warnings during fold processing
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", UserWarning)
+                logger.info(f"Dataset: {ds_name}, using {n_splits}-fold CV with {len(idx_temp)} training samples")
+                
+                # Results storage
+                all_results = []
+                
+                # Process each missing percentage
+                for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
+                    try:
+                        cv_results = []
+                        model_candidates = {model_name: {"metric": None, "model": None, "fold_idx": None, "train_val": None} for model_name in models}
+                        model_yvals_folds = {model_name: [] for model_name in models}
+                        model_ypreds_folds = {model_name: [] for model_name in models}
+                        train_val_data = []  # Store (train_idx, val_idx, ...) for each fold
+                        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(idx_temp, y_temp)):
+                            try:
+                                train_val_data.append((train_idx, val_idx))
+                                with warnings.catch_warnings():
+                                    warnings.simplefilter("ignore", UserWarning)
+                                    if pipeline_type == "extraction":
+                                        if is_regression:
+                                            result, model_objs = process_cv_fold(
+                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                data_modalities, models, trans_obj, n_val, 
+                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                is_regression,
+                                                make_plots=False
+                                            )
+                                        else:
+                                            result, model_objs, yvals, ypreds = process_cv_fold(
+                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                data_modalities, models, trans_obj, n_val, 
+                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                is_regression,
+                                                make_plots=False
+                                            )
+                                    else:
+                                        if is_regression:
+                                            result, model_objs = process_cv_fold(
+                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                data_modalities, models, trans_obj, n_val, 
+                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                is_regression,
+                                                make_plots=False
+                                            )
+                                        else:
+                                            result, model_objs, yvals, ypreds = process_cv_fold(
+                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                data_modalities, models, trans_obj, n_val, 
+                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                is_regression,
+                                                make_plots=False
+                                            )
+                                if result:
+                                    cv_results.append(result)
+                                    for model_name in models:
+                                        if not is_regression and model_name in yvals and model_name in ypreds:
+                                            model_yvals_folds[model_name].append(yvals[model_name])
+                                            model_ypreds_folds[model_name].append(ypreds[model_name])
+                                        
+                                        # Add this missing code to update model_candidates based on model performance
+                                        if model_name in result:
+                                            # Get key metric for comparing model performance
+                                            metric_name = 'r2' if is_regression else 'f1'  # Use R² for regression, F1 for classification
+                                            current_metric = result[model_name].get(metric_name)
+                                            
+                                            if current_metric is not None:
+                                                # For regression, higher R² is better; for classification, higher F1 is better
+                                                current_best = model_candidates[model_name]["metric"]
+                                                
+                                                # If we don't have a best model yet or this one is better, update
+                                                if current_best is None or current_metric > current_best:
+                                                    model_candidates[model_name]["metric"] = current_metric
+                                                    model_candidates[model_name]["model"] = model_objs.get(model_name)
+                                                    model_candidates[model_name]["fold_idx"] = fold_idx
+                                                    model_candidates[model_name]["train_val"] = (train_idx, val_idx)
+                            except Exception as e:
+                                logger.error(f"Error processing fold {fold_idx} for {ds_name} with {trans_name}-{n_val} (missing={missing_percentage}): {str(e)}")
+                                continue  # Continue to next fold
+                                
+                        # After all folds, find the best fold and rerun only that fold with make_plots=True, saving model and plots
+                        for model_name in models:
+                            try:
+                                best_model = model_candidates[model_name]["model"]
+                                best_metric = model_candidates[model_name]["metric"]
+                                best_fold_idx = model_candidates[model_name]["fold_idx"]
+                                if best_model is not None and best_fold_idx is not None:
+                                    # Get the train/val indices for the best fold
+                                    train_idx, val_idx = train_val_data[best_fold_idx]
+                                    # Rerun process_cv_fold for the best fold, but with make_plots=True
+                                    if is_regression:
+                                        # Use a modified plot prefix with "best_fold", pipeline_type, and missing_percentage
+                                        best_plot_prefix = f"{ds_name}_best_fold_{pipeline_type}_{trans_name}_{n_val}_{model_name}_{missing_percentage}"
+                                        
+                                        _, best_model_obj = process_cv_fold(
+                                            train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                            data_modalities, [model_name], trans_obj, n_val, 
+                                            id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                            best_fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                            is_regression,
+                                            make_plots=True,
+                                            plot_prefix_override=best_plot_prefix
+                                        )
+                                    else:
+                                        # Use a modified plot prefix with "best_fold", pipeline_type, and missing_percentage
+                                        best_plot_prefix = f"{ds_name}_best_fold_{pipeline_type}_{trans_name}_{n_val}_{model_name}_{missing_percentage}"
+                                        
+                                        _, best_model_obj, _, _ = process_cv_fold(
+                                            train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                            data_modalities, [model_name], trans_obj, n_val, 
+                                            id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                            best_fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                            is_regression,
+                                            make_plots=True,
+                                            plot_prefix_override=best_plot_prefix
+                                        )
+                                    # Save the best model
+                                    model_path = os.path.join(
+                                        base_out, "models",
+                                        f"best_model_{pipeline_type}_{model_name}_{trans_name}_{n_val}_{missing_percentage}.pkl"
+                                    )
+                                    # Save best_model_obj instead of best_model since it's the freshly retrained model
+                                    # with make_plots=True
+                                    if model_name in best_model_obj:
+                                        joblib.dump(best_model_obj[model_name], model_path)
+                                        logger.info(f"Saved best model for {model_name} to {model_path}")
+                                    else:
+                                        # Fallback to the original model if something went wrong
+                                        joblib.dump(best_model, model_path)
+                                        logger.info(f"Fallback: Saved original best model for {model_name} to {model_path}")
+                            except Exception as e:
+                                logger.error(f"Error processing best fold for model {model_name} with {trans_name}-{n_val} (missing={missing_percentage}): {str(e)}")
+                                continue  # Continue to next model
+                                
+                        # Aggregate metrics across folds
+                        cv_metrics = {}
+                        for model_name in models:
+                            valid_results = []
+                            for i in range(n_splits):  # <- Use n_splits instead of cv.n_splits
+                                if i < len(cv_results) and model_name in cv_results[i]:
+                                    valid_results.append(cv_results[i][model_name])
+                            
+                            if valid_results:
+                                # Average metrics across folds
+                                metric_keys = valid_results[0].keys()
+                                avg_metrics = {
+                                    k: np.mean([m[k] for m in valid_results if k in m and not np.isnan(m[k])]) 
+                                    for k in metric_keys
+                                }
+                                cv_metrics[model_name] = avg_metrics
                         
-                        if pipeline_type == "extraction":
-                            # For extraction pipeline
-                            result = process_cv_fold(
-                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
-                                data_modalities, models, trans_obj, n_val, 
-                                id_to_idx, idx_to_id, common_ids, missing_percentage,
-                                fold_idx, base_out, ds_name, trans_name, is_regression
-                            )
-                        else:
-                            # For selection pipeline, call process_cv_fold as well
-                            result = process_cv_fold(
-                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
-                                data_modalities, models, trans_obj, n_val, 
-                                id_to_idx, idx_to_id, common_ids, missing_percentage,
-                                fold_idx, base_out, ds_name, trans_name, is_regression
-                            )
+                        # Add combined results
+                        for model_name, metrics in cv_metrics.items():
+                            # Add additional metrics to the result entry
+                            result_entry = {
+                                "Dataset": ds_name, 
+                                "Workflow": f"{pipeline_type.title()}-CV",
+                                f"{pipeline_type.title()[:-3]}tor": trans_name,
+                                "n_features": metrics.get('n_features', -1),  # Original feature count
+                                "n_components": n_val,  # Intended number of components/features
+                                "train_n_components": metrics.get('train_n_components', -1),  # Actual components used in training
+                                "Model": model_name,
+                                "Missing_Percentage": missing_percentage
+                            }
+                            
+                            # Add the performance metrics
+                            if is_regression:
+                                # For regression metrics
+                                result_entry.update({
+                                    'mse': metrics.get('mse', float('nan')),
+                                    'rmse': metrics.get('rmse', float('nan')),
+                                    'mae': metrics.get('mae', float('nan')),
+                                    'r2': metrics.get('r2', float('nan')),
+                                    'train_time': metrics.get('train_time', float('nan'))
+                                })
+                            else:
+                                # For classification metrics
+                                result_entry.update({
+                                    'accuracy': metrics.get('accuracy', float('nan')),
+                                    'precision': metrics.get('precision', float('nan')),
+                                    'recall': metrics.get('recall', float('nan')),
+                                    'f1': metrics.get('f1', float('nan')),
+                                    'auc': metrics.get('auc', float('nan')),
+                                    'mcc': metrics.get('mcc', float('nan')),
+                                    'train_time': metrics.get('train_time', float('nan'))
+                                })
+                            
+                            all_results.append(result_entry)
+                    except Exception as e:
+                        logger.error(f"Error processing missing percentage {missing_percentage} for {ds_name} with {trans_name}-{n_val}: {str(e)}")
+                        continue  # Continue to next missing percentage
+                
+                # Save all results
+                if all_results:
+                    try:
+                        metrics_file = os.path.join(
+                            base_out, "metrics", 
+                            f"{ds_name}_{pipeline_type}_cv_metrics.csv"
+                        )
                         
-                    # Only add valid results
-                    if result:
-                        cv_results.append(result)
-                
-                # Skip if no valid results for this missing percentage
-                if not cv_results:
-                    continue
-                
-                # Aggregate metrics across folds
-                cv_metrics = {}
-                for model_name in models:
-                    valid_results = []
-                    for i in range(n_splits):  # <- Use n_splits instead of cv.n_splits
-                        if i < len(cv_results) and model_name in cv_results[i]:
-                            valid_results.append(cv_results[i][model_name])
-                    
-                    if valid_results:
-                        # Average metrics across folds
-                        metric_keys = valid_results[0].keys()
-                        avg_metrics = {
-                            k: np.mean([m[k] for m in valid_results if k in m and not np.isnan(m[k])]) 
-                            for k in metric_keys
-                        }
-                        cv_metrics[model_name] = avg_metrics
-                
-                # Add combined results
-                for model_name, metrics in cv_metrics.items():
-                    result_entry = {
-                        "Dataset": ds_name, 
-                        "Workflow": f"{pipeline_type.title()}-CV",
-                        f"{pipeline_type.title()[:-3]}tor": trans_name, 
-                        f"n_{pipeline_type == 'extraction' and 'components' or 'features'}": n_val,
-                        "Model": model_name,
-                        "Missing_Percentage": missing_percentage,
-                        **metrics
-                    }
-                    all_results.append(result_entry)
-            
-            # Save all results
-            if all_results:
-                metrics_file = os.path.join(
-                    base_out, "metrics", 
-                    f"{ds_name}_{pipeline_type}_cv_metrics.csv"
-                )
-                
-                # Check if file exists
-                file_exists = os.path.exists(metrics_file)
-                
-                # Append results to CSV
-                pd.DataFrame(all_results).to_csv(
-                    metrics_file,
-                    mode='a',
-                    header=not file_exists,
-                    index=False
-                )
+                        # Check if file exists
+                        file_exists = os.path.exists(metrics_file)
+                        
+                        # Append results to CSV
+                        pd.DataFrame(all_results).to_csv(
+                            metrics_file,
+                            mode='a',
+                            header=not file_exists,
+                            index=False
+                        )
+                        logger.info(f"Saved metrics for {ds_name} with {trans_name}-{n_val} to {metrics_file}")
+                    except Exception as e:
+                        logger.error(f"Error saving metrics for {ds_name} with {trans_name}-{n_val}: {str(e)}")
+                else:
+                    logger.warning(f"No results to save for {ds_name} with {trans_name}-{n_val}")
+            except KeyboardInterrupt:
+                logger.warning(f"KeyboardInterrupt during {ds_name} with {trans_name}-{n_val}. Aborting all processing.")
+                raise  # Re-raise to abort all processing
+            except Exception as e:
+                logger.error(f"Error processing {trans_name}-{n_val} for {ds_name}: {str(e)}")
+                continue  # Continue to next n_val
 
 def run_extraction_pipeline(
     ds_name: str, 
@@ -965,10 +1196,10 @@ def run_selection_pipeline(
         pipeline_type="selection"
     )
 
-def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None):
+def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None, make_plots=True, n_features=None, train_n_components=None):
     """Train regression model and evaluate it."""
     from Z_alg.models import get_model_object
-    from Z_alg.plots import plot_regression_scatter, plot_regression_residuals
+    from Z_alg.plots import plot_regression_scatter, plot_regression_residuals, plot_feature_importance
     import os
     import numpy as np
     import time
@@ -1005,11 +1236,22 @@ def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, 
     mae = mean_absolute_error(y_val, y_pred)
     r2 = r2_score(y_val, y_pred)
     
+    # Use passed train_n_components if provided, else fallback to X_train.shape[1]
+    if train_n_components is None:
+        train_n_components = X_train.shape[1]
+    
     # Create plots
-    if out_dir:
+    if out_dir and make_plots:
         os.makedirs(out_dir, exist_ok=True)
         plot_regression_scatter(y_val, y_pred, f"{model_name} Scatter", os.path.join(out_dir, f"{plot_prefix}_scatter.png"))
         plot_regression_residuals(y_val, y_pred, f"{model_name} Residuals", os.path.join(out_dir, f"{plot_prefix}_residuals.png"))
+        # Feature importance plot
+        if hasattr(model, 'feature_importances_') or hasattr(model, 'coef_'):
+            if hasattr(X_train, 'columns'):
+                feat_names = list(X_train.columns)
+            else:
+                feat_names = [f"Feature {i}" for i in range(X_train.shape[1])]
+            plot_feature_importance(model, feat_names, f"{model_name} Feature Importance", os.path.join(out_dir, f"{plot_prefix}_featimp.png"))
     
     # Return model and metrics
     metrics = {
@@ -1017,16 +1259,18 @@ def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, 
         'rmse': rmse,
         'mae': mae,
         'r2': r2,
-        'train_time': train_time
+        'train_time': train_time,
+        'n_features': n_features if n_features is not None else -1,  # Original feature count or -1 if unknown
+        'train_n_components': train_n_components  # Actual feature count used in training
     }
     
     return model, metrics
 
 
-def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None):
+def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None, make_plots=True, n_features=None, train_n_components=None):
     """Train classification model and evaluate it."""
     from Z_alg.models import get_model_object
-    from Z_alg.plots import plot_confusion_matrix, plot_roc_curve_binary
+    from Z_alg.plots import plot_confusion_matrix, plot_roc_curve_binary, plot_feature_importance
     import os
     import numpy as np
     import time
@@ -1044,7 +1288,7 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
     # Return if any data is invalid
     if X_train is None or y_train is None or X_val is None or y_val is None:
         logger.warning(f"Final data alignment failed for {model_name} in fold {fold_idx}")
-        return None, {}
+        return None, {}, None, None
     
     # Create the model
     model = get_model_object(model_name)
@@ -1067,8 +1311,12 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
     # Calculate MCC (Matthews Correlation Coefficient)
     mcc = matthews_corrcoef(y_val, y_pred)
     
+    # Use passed train_n_components if provided, else fallback to X_train.shape[1]
+    if train_n_components is None:
+        train_n_components = X_train.shape[1]
+    
     # Try to calculate ROC AUC if applicable (binary classification with proba method)
-    auc = 0.5  # Default value
+    auc = 0.5
     try:
         if hasattr(model, 'predict_proba') and len(np.unique(y_val)) == 2:
             y_score = model.predict_proba(X_val)[:, 1]
@@ -1077,7 +1325,7 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         logger.warning(f"Could not calculate AUC: {str(e)}")
     
     # Create plots if directory is provided
-    if out_dir:
+    if out_dir and make_plots:
         os.makedirs(out_dir, exist_ok=True)
         
         # Confusion matrix
@@ -1090,8 +1338,15 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
             plot_roc_curve_binary(model, X_val, y_val, class_labels, 
                                  f"{model_name} ROC Curve", 
                                  os.path.join(out_dir, f"{plot_prefix}_roc.png"))
+        # Feature importance plot
+        if hasattr(model, 'feature_importances_') or hasattr(model, 'coef_'):
+            if hasattr(X_train, 'columns'):
+                feat_names = list(X_train.columns)
+            else:
+                feat_names = [f"Feature {i}" for i in range(X_train.shape[1])]
+            plot_feature_importance(model, feat_names, f"{model_name} Feature Importance", os.path.join(out_dir, f"{plot_prefix}_featimp.png"))
     
-    # Return model and metrics
+    # Return model, metrics, y_val, y_pred
     metrics = {
         'accuracy': accuracy,
         'precision': precision,
@@ -1099,7 +1354,9 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         'f1': f1,
         'auc': auc,
         'mcc': mcc,
-        'train_time': train_time
+        'train_time': train_time,
+        'n_features': n_features if n_features is not None else -1,  # Original feature count or -1 if unknown
+        'train_n_components': train_n_components  # Actual feature count used in training
     }
     
-    return model, metrics 
+    return model, metrics, y_val, y_pred 

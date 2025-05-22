@@ -242,4 +242,41 @@ def plot_roc_curve_binary(model: Any, X_test: np.ndarray, y_test: np.ndarray, cl
     except Exception as e:
         print(f"Error creating ROC curve for {title}: {str(e)}")
         plt.close('all')  # Ensure all figures are closed on error
-        return False 
+        return False
+
+def plot_feature_importance(model, feature_names, title, out_path, top_n=20):
+    """
+    Plot feature importances for a trained model.
+    Supports tree-based models (feature_importances_) and linear models (coef_).
+    """
+    # Try to get feature importances
+    if hasattr(model, 'feature_importances_'):
+        importances = model.feature_importances_
+    elif hasattr(model, 'coef_'):
+        importances = np.abs(model.coef_)
+        if importances.ndim > 1:
+            importances = np.sum(importances, axis=0)
+    else:
+        print(f"Model does not have feature importances or coefficients: {type(model)}")
+        return False
+    
+    # If feature_names is None or too short, use generic names
+    if feature_names is None or len(feature_names) != len(importances):
+        feature_names = [f"Feature {i}" for i in range(len(importances))]
+    
+    # Get top N features
+    top_n = min(top_n, len(importances))
+    indices = np.argsort(importances)[-top_n:][::-1]
+    top_features = [feature_names[i] for i in indices]
+    top_importances = importances[indices]
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(7, max(4, int(top_n/2))))
+    sns.barplot(x=top_importances, y=top_features, ax=ax, orient='h')
+    ax.set_title(title)
+    ax.set_xlabel('Importance')
+    ax.set_ylabel('Feature')
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close(fig)
+    return os.path.exists(out_path) and os.path.getsize(out_path) > 0 
