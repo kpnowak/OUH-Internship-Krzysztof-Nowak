@@ -143,38 +143,41 @@ def process_regression_datasets():
         )
         os.makedirs(base_out, exist_ok=True)
         
-        # Run extraction and selection with matching n_val pairs
-        for n_val in n_shared_list:
-            try:
-                # Add debug logging
-                print(f"===> Processing n_val = {n_val} for dataset {ds_name}")
-                logger.info(f"===> Processing n_val = {n_val} for dataset {ds_name}")
-                
-                # Run extraction pipeline with n_val as n_components
-                run_extraction_pipeline(
-                    ds_name, modalities, common_ids, y_aligned, base_out,
-                    reg_extractors, [n_val], reg_models, progress_count_reg, reg_total_runs,
-                    is_regression=True
-                )
-                
-                # Run selection pipeline with the same n_val as n_features
-                run_selection_pipeline(
-                    ds_name, modalities, common_ids, y_aligned, base_out,
-                    reg_selectors, [n_val], reg_models, progress_count_reg, reg_total_runs,
-                    is_regression=True
-                )
-                
-                print(f"===> COMPLETED n_val = {n_val} for dataset {ds_name}")
-                logger.info(f"===> COMPLETED n_val = {n_val} for dataset {ds_name}")
-            except KeyboardInterrupt:
-                logger.warning(f"KeyboardInterrupt during n_val = {n_val}. Aborting all processing.")
-                raise  # Re-raise to abort all processing
-            except Exception as e:
-                logger.error(f"Error processing n_val = {n_val}: {str(e)}")
-                logger.error(f"Continuing with next n_val")
-                import traceback
-                traceback.print_exc()
-                continue  # Continue to next n_val
+        try:
+            # First, run extraction pipeline for all n_values
+            print(f"===> Processing EXTRACTION for dataset {ds_name}")
+            logger.info(f"===> Processing EXTRACTION for dataset {ds_name}")
+            
+            run_extraction_pipeline(
+                ds_name, modalities, common_ids, y_aligned, base_out,
+                reg_extractors, n_shared_list, reg_models, progress_count_reg, reg_total_runs,
+                is_regression=True
+            )
+            
+            print(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
+            logger.info(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
+            
+            # Then, run selection pipeline for all n_values
+            print(f"===> Processing SELECTION for dataset {ds_name}")
+            logger.info(f"===> Processing SELECTION for dataset {ds_name}")
+            
+            run_selection_pipeline(
+                ds_name, modalities, common_ids, y_aligned, base_out,
+                reg_selectors, n_shared_list, reg_models, progress_count_reg, reg_total_runs,
+                is_regression=True
+            )
+            
+            print(f"===> COMPLETED SELECTION for dataset {ds_name}")
+            logger.info(f"===> COMPLETED SELECTION for dataset {ds_name}")
+        except KeyboardInterrupt:
+            logger.warning(f"KeyboardInterrupt during processing dataset {ds_name}. Aborting all processing.")
+            raise  # Re-raise to abort all processing
+        except Exception as e:
+            logger.error(f"Error processing dataset {ds_name}: {str(e)}")
+            logger.error(f"Continuing with next dataset")
+            import traceback
+            traceback.print_exc()
+            continue  # Continue to next dataset
 
 def process_classification_datasets():
     """Process all classification datasets."""
@@ -217,38 +220,41 @@ def process_classification_datasets():
         )
         os.makedirs(base_out, exist_ok=True)
         
-        # Run extraction and selection with matching n_val pairs
-        for n_val in n_shared_list:
-            try:
-                # Add debug logging
-                print(f"===> Processing n_val = {n_val} for dataset {ds_name}")
-                logger.info(f"===> Processing n_val = {n_val} for dataset {ds_name}")
-                
-                # Run extraction pipeline with n_val as n_components
-                run_extraction_pipeline(
-                    ds_name, modalities, common_ids, y_aligned, base_out,
-                    clf_extractors, [n_val], list(clf_models.keys()), progress_count_clf, clf_total_runs,
-                    is_regression=False
-                )
-                
-                # Run selection pipeline with the same n_val as n_features
-                run_selection_pipeline(
-                    ds_name, modalities, common_ids, y_aligned, base_out,
-                    clf_selectors, [n_val], list(clf_models.keys()), progress_count_clf, clf_total_runs,
-                    is_regression=False
-                )
-                
-                print(f"===> COMPLETED n_val = {n_val} for dataset {ds_name}")
-                logger.info(f"===> COMPLETED n_val = {n_val} for dataset {ds_name}")
-            except KeyboardInterrupt:
-                logger.warning(f"KeyboardInterrupt during n_val = {n_val}. Aborting all processing.")
-                raise  # Re-raise to abort all processing
-            except Exception as e:
-                logger.error(f"Error processing n_val = {n_val}: {str(e)}")
-                logger.error(f"Continuing with next n_val")
-                import traceback
-                traceback.print_exc()
-                continue  # Continue to next n_val
+        try:
+            # First, run extraction pipeline for all n_values
+            print(f"===> Processing EXTRACTION for dataset {ds_name}")
+            logger.info(f"===> Processing EXTRACTION for dataset {ds_name}")
+            
+            run_extraction_pipeline(
+                ds_name, modalities, common_ids, y_aligned, base_out,
+                clf_extractors, n_shared_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
+                is_regression=False
+            )
+            
+            print(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
+            logger.info(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
+            
+            # Then, run selection pipeline for all n_values
+            print(f"===> Processing SELECTION for dataset {ds_name}")
+            logger.info(f"===> Processing SELECTION for dataset {ds_name}")
+            
+            run_selection_pipeline(
+                ds_name, modalities, common_ids, y_aligned, base_out,
+                clf_selectors, n_shared_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
+                is_regression=False
+            )
+            
+            print(f"===> COMPLETED SELECTION for dataset {ds_name}")
+            logger.info(f"===> COMPLETED SELECTION for dataset {ds_name}")
+        except KeyboardInterrupt:
+            logger.warning(f"KeyboardInterrupt during processing dataset {ds_name}. Aborting all processing.")
+            raise  # Re-raise to abort all processing
+        except Exception as e:
+            logger.error(f"Error processing dataset {ds_name}: {str(e)}")
+            logger.error(f"Continuing with next dataset")
+            import traceback
+            traceback.print_exc()
+            continue  # Continue to next dataset
 
 def main():
     """Main function for running the pipeline."""
