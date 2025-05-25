@@ -92,7 +92,7 @@ def verify_data_alignment(X: np.ndarray, y: np.ndarray, name: str = "unnamed", f
     fold_str = f" in fold {fold_idx}" if fold_idx is not None else ""
     
     if X is None or y is None:
-        logger.warning(f"Warning: Null data for {name}{fold_str}")
+        logger.warning(f"Null data for {name}{fold_str}")
         return None, None
     
     # Convert y to numpy array if it's not already
@@ -108,7 +108,7 @@ def verify_data_alignment(X: np.ndarray, y: np.ndarray, name: str = "unnamed", f
         
     if X.shape[0] != len(y):
         # Shape mismatch detected
-        logger.warning(f"Warning: Shape mismatch for {name}{fold_str}: X={X.shape}, y={len(y)}")
+        logger.warning(f"Shape mismatch for {name}{fold_str}: X={X.shape}, y={len(y)}")
         
         # Use the minimum length and truncate both
         min_samples = min(X.shape[0], len(y))

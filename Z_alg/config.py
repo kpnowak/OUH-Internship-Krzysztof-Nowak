@@ -5,8 +5,18 @@ Contains constants and configurations used across the application.
 """
 
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Union
+
+# Suppress convergence warnings for cleaner output
+try:
+    from sklearn.exceptions import ConvergenceWarning
+    warnings.filterwarnings('ignore', category=ConvergenceWarning)
+except ImportError:
+    # Fallback for older sklearn versions
+    warnings.filterwarnings('ignore', message='.*did not converge.*')
+    warnings.filterwarnings('ignore', message='.*Objective did not converge.*')
 
 # Constants
 MAX_VARIABLE_FEATURES = 5000
@@ -15,11 +25,28 @@ MAX_FEATURES = 32
 N_JOBS = min(os.cpu_count() or 4, 4)  # Limit to 4 cores
 OMP_BLAS_THREADS = min(4, os.cpu_count() or 4)
 
-# Memory optimization settings
+# Memory optimization settings - Enhanced with 2GB limits per cache type
 MEMORY_OPTIMIZATION = {
     "chunk_size": 1000,  # Process data in chunks of this size
     "cache_dir": "./.cache",  # Cache directory
-    "cache_size": "2GB"  # Maximum cache size
+    "cache_size": "2GB",  # Maximum cache size per type
+    "total_cache_limit": "8GB",  # Total cache limit across all types
+    "auto_clear_threshold": 0.9,  # Clear caches when 90% of limit is reached
+    "memory_monitor_interval": 60,  # Monitor memory every 60 seconds
+    "shape_mismatch_auto_fix": True,  # Enable automatic shape mismatch fixing
+    "alignment_loss_threshold": 0.5,  # Maximum allowed data loss during alignment (50%)
+    "min_samples_threshold": 2,  # Minimum samples required after alignment
+}
+
+# Enhanced caching configuration with memory-aware limits
+CACHE_CONFIG = {
+    "selector_regression": {"maxsize": 64, "maxmemory_mb": 2000},  # 2GB limit
+    "selector_classification": {"maxsize": 64, "maxmemory_mb": 2000},  # 2GB limit  
+    "extractor_regression": {"maxsize": 64, "maxmemory_mb": 2000},  # 2GB limit
+    "extractor_classification": {"maxsize": 64, "maxmemory_mb": 2000},  # 2GB limit
+    "total_limit_mb": 8000,  # 8GB total limit
+    "eviction_strategy": "lru",  # Least Recently Used eviction
+    "memory_check_interval": 300,  # Check memory usage every 5 minutes
 }
 
 # Parallel processing configuration
@@ -62,6 +89,21 @@ MODEL_OPTIMIZATIONS = {
         "cache_size": 500,
         "random_state": 42
     },
+    "ElasticNet": {
+        "alpha": 0.1,  # Higher regularization for better convergence
+        "l1_ratio": 0.5,  # Balanced L1/L2 ratio
+        "max_iter": 5000,  # Increased iterations for convergence
+        "tol": 1e-4,  # Tolerance for convergence
+        "selection": "cyclic",  # Coordinate descent selection
+        "random_state": 42
+    },
+    "Lasso": {
+        "alpha": 0.01,  # Lower alpha for better convergence (more aggressive than ElasticNet)
+        "max_iter": 5000,  # Increased iterations for convergence
+        "tol": 1e-4,  # Tolerance for convergence
+        "selection": "cyclic",  # Coordinate descent selection
+        "random_state": 42
+    },
     "LogisticRegression": {
         "penalty": "l2",
         "C": 1.0,
@@ -79,6 +121,82 @@ MODEL_OPTIMIZATIONS = {
         "cache_size": 500,
         "random_state": 42
     }
+}
+
+# Enhanced early stopping configuration
+EARLY_STOPPING_CONFIG = {
+    "enabled": True,  # Enable/disable early stopping globally
+    "patience": 10,  # Number of epochs to wait for improvement
+    "min_delta": 1e-4,  # Minimum change to qualify as improvement
+    "validation_split": 0.2,  # Fraction of training data to use for early stopping validation
+    "restore_best_weights": True,  # Whether to restore best model weights
+    "monitor_metric": "auto",  # Metric to monitor: "auto", "neg_mse", "accuracy", "r2"
+    "verbose": 1,  # Verbosity level for early stopping (0=silent, 1=progress, 2=detailed)
+    "adaptive_patience": True,  # Increase patience for complex models
+    "max_patience": 50,  # Maximum patience for adaptive early stopping
+}
+
+# Enhanced shape mismatch handling configuration
+SHAPE_MISMATCH_CONFIG = {
+    "auto_fix_enabled": True,  # Enable automatic shape mismatch fixing
+    "max_data_loss_percent": 50,  # Maximum allowed data loss percentage
+    "min_samples_after_fix": 2,  # Minimum samples required after fixing
+    "truncation_strategy": "min",  # "min" = use minimum length, "intersection" = use sample intersection
+    "log_all_fixes": True,  # Log all shape mismatch fixes
+    "fallback_on_failure": True,  # Use fallback strategies when fixing fails
+    "cache_invalidation": False,  # Disable frequent cache clearing - only clear on major errors
+    "cache_clear_threshold": 25,  # Only clear caches if data loss > 25%
+}
+
+# Sample retention warning configuration
+SAMPLE_RETENTION_CONFIG = {
+    "suppress_warnings_for_datasets": ["colon", "kidney", "liver"],  # Datasets with expected low retention
+    "low_retention_threshold": 40,  # Threshold for low retention warnings (%)
+    "moderate_retention_threshold": 70,  # Threshold for moderate retention warnings (%)
+    "log_retention_details": True,  # Log detailed retention information
+    "expected_low_retention_message": "Expected low sample retention for this dataset type",
+}
+
+# Robust feature selection configuration
+FEATURE_SELECTION_CONFIG = {
+    "fallback_enabled": True,  # Enable fallback feature selection methods
+    "fallback_methods": ["mutual_info", "f_test", "variance"],  # Fallback methods in order
+    "min_features": 1,  # Minimum number of features to select
+    "max_features_ratio": 0.8,  # Maximum ratio of features to samples
+    "error_tolerance": 3,  # Number of retries before giving up
+    "adaptive_selection": True,  # Adapt selection based on data characteristics
+}
+
+# Improved extractor stability configuration  
+EXTRACTOR_CONFIG = {
+    "adaptive_components": True,  # Enable adaptive component selection
+    "min_explained_variance": 0.8,  # Minimum explained variance for PCA
+    "max_components_ratio": 0.9,  # Maximum ratio of components to features
+    "fallback_to_pca": True,  # Fall back to PCA if other extractors fail
+    "stability_checks": True,  # Perform stability checks on extracted features
+    "numerical_stability": True,  # Enable numerical stability improvements
+}
+
+# Comprehensive logging configuration
+LOGGING_CONFIG = {
+    "level": "INFO",  # Default logging level
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "memory_logging": True,  # Log memory usage
+    "performance_logging": True,  # Log performance metrics
+    "shape_mismatch_logging": True,  # Log shape mismatch fixes
+    "cache_logging": True,  # Log cache operations
+    "feature_selection_logging": True,  # Log feature selection details
+    "extractor_logging": True,  # Log extractor operations
+    "model_training_logging": True,  # Log model training details
+}
+
+# MRMR Feature Selection Configuration
+MRMR_CONFIG = {
+    "fast_mode": True,  # Use fast approximations (correlation instead of MI for redundancy)
+    "max_features_prefilter": 1000,  # Pre-filter to top N features before MRMR (0 = no prefilter)
+    "n_neighbors": 3,  # Number of neighbors for MI estimation (lower = faster)
+    "progress_logging": True,  # Log MRMR selection progress
+    "fallback_on_error": True  # Fall back to mutual_info if MRMR fails
 }
 
 # Configuration for missing modalities simulation
@@ -131,20 +249,19 @@ class DatasetConfig:
 # Regression datasets
 REGRESSION_DATASETS = [
     DatasetConfig(
-        name="TestRegression",
-        base_path="test_data/regression",
+        name="AML",
+        base_path="data/aml",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="clinical.csv",
-        outcome_col="survival_time",
-        id_col="sample_id",
+        outcome_file="data/clinical/aml.csv",
+        outcome_col="lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
+        id_col="sampleID",
         outcome_type="continuous",
-        output_dir="output_regression",
         fix_tcga_ids=True
-    ).to_dict()
+    ).to_dict(),
 ]
 
 """
@@ -199,20 +316,19 @@ REGRESSION_DATASETS = [
 # Classification datasets
 CLASSIFICATION_DATASETS = [
     DatasetConfig(
-        name="TestClassification",
-        base_path="test_data/classification",
+        name="Colon",
+        base_path="data/colon",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="clinical.csv",
-        outcome_col="status",
-        id_col="sample_id",
+        outcome_file="data/clinical/colon.csv",
+        outcome_col="pathologic_T",
+        id_col="sampleID",
         outcome_type="class",
-        output_dir="output_classification",
         fix_tcga_ids=True
-    ).to_dict()
+    ).to_dict(),
 ]
 
 """

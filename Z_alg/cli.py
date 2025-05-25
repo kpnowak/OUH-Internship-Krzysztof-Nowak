@@ -9,6 +9,7 @@ import time
 import argparse
 from typing import Dict, List, Optional, Any
 import logging
+import numpy as np
 
 # Local imports
 from Z_alg.config import (
@@ -24,7 +25,7 @@ from Z_alg.models import (
 from Z_alg.cv import (
     run_extraction_pipeline, run_selection_pipeline
 )
-from Z_alg.utils import log_resource_usage
+from Z_alg.utils import comprehensive_logger
 
 # Remove any existing handlers
 for handler in logging.root.handlers[:]:
@@ -61,30 +62,129 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
     Optional[Dict[str, Any]]
         Dictionary containing processed dataset information or None if loading failed
     """
-    log_resource_usage(f"Starting {ds_conf['name']}")
+    comprehensive_logger.log_memory_usage(f"dataset_start_{ds_conf['name']}", force=True)
     
     try:
         # Extract the dataset name
         ds_name = ds_conf["name"]
         logger.info(f"\n>> Processing {ds_name} dataset...")
         
-        # Load the dataset
-        result = load_dataset(ds_conf)
+        # Load the dataset using the new optimized function
+        ds_name = ds_conf["name"]
+        modalities_list = list(ds_conf["modalities"].keys())
+        # Convert modality names to short names for the new function
+        modality_short_names = []
+        for mod_name in modalities_list:
+            if "Gene Expression" in mod_name or "exp" in mod_name.lower():
+                modality_short_names.append("exp")
+            elif "miRNA" in mod_name or "mirna" in mod_name.lower():
+                modality_short_names.append("mirna")
+            elif "Methylation" in mod_name or "methy" in mod_name.lower():
+                modality_short_names.append("methy")
+            else:
+                # Default to the original name if no match
+                modality_short_names.append(mod_name.lower())
         
-        if result is None:
+        outcome_col = ds_conf["outcome_col"]
+        task_type = 'regression' if is_regression else 'classification'
+        
+        # Call the new optimized load_dataset function
+        modalities_data, y_aligned, common_ids = load_dataset(
+            ds_name.lower(), 
+            modality_short_names, 
+            outcome_col, 
+            task_type,
+            parallel=True,
+            use_cache=True
+        )
+        
+        # Check if loading was successful
+        if modalities_data is None or len(common_ids) == 0:
             logger.warning(f"Error: Failed to load dataset {ds_name}")
             return None
             
-        modalities, common_ids, y_aligned = result
+        # Data is already in the correct format
+        modalities = modalities_data
+        
+        # Convert pandas Series to numpy array for compatibility with existing code
+        if hasattr(y_aligned, 'values'):
+            y_aligned = y_aligned.values
         
         # Verify data integrity
         if len(common_ids) < 10:
             logger.warning(f"Warning: Too few samples ({len(common_ids)}) in {ds_name}, skipping")
             return None
             
-        if not y_aligned.size:
+        if len(y_aligned) == 0:
             logger.warning(f"Error: No target values available for {ds_name}")
             return None
+        
+        # For classification datasets, validate class distribution
+        if not is_regression:
+            unique, counts = np.unique(y_aligned, return_counts=True)
+            min_samples = np.min(counts)
+            n_classes = len(unique)
+            
+            logger.info(f"Class distribution for {ds_name}: {dict(zip(unique, counts))}")
+            
+            # Check for problematic class distributions
+            classes_with_few_samples = unique[counts < 2]
+            if len(classes_with_few_samples) > 0:
+                logger.info(f"Dataset {ds_name} has classes with < 2 samples: {classes_with_few_samples}")
+                logger.info(f"Original class distribution: {dict(zip(unique, counts))}")
+                logger.info(f"Filtering out these classes to ensure proper cross-validation")
+                
+                # Actually filter out classes with insufficient samples
+                valid_classes = unique[counts >= 2]
+                if len(valid_classes) < 2:
+                    logger.error(f"Dataset {ds_name} has insufficient valid classes for classification (< 2 classes with >= 2 samples)")
+                    logger.error(f"Cannot proceed with this dataset")
+                    return None
+                
+                # Filter samples to only include valid classes
+                valid_mask = np.isin(y_aligned, valid_classes)
+                filtered_common_ids = [common_ids[i] for i in range(len(common_ids)) if valid_mask[i]]
+                filtered_y_aligned = y_aligned[valid_mask]
+                
+                # Filter modalities to match the filtered samples
+                filtered_modalities = {}
+                for mod_name, mod_df in modalities.items():
+                    # Keep only columns (samples) that correspond to filtered_common_ids
+                    available_cols = [col for col in filtered_common_ids if col in mod_df.columns]
+                    if len(available_cols) > 0:
+                        filtered_modalities[mod_name] = mod_df[available_cols]
+                    else:
+                        logger.warning(f"No samples remaining in modality {mod_name} after class filtering")
+                
+                # Update the dataset with filtered data
+                modalities = filtered_modalities
+                common_ids = filtered_common_ids
+                y_aligned = filtered_y_aligned
+                
+                # Relabel classes to be consecutive integers starting from 0
+                # Sort valid_classes to ensure consistent mapping
+                valid_classes_sorted = np.sort(valid_classes)
+                label_mapping = {old_label: new_label for new_label, old_label in enumerate(valid_classes_sorted)}
+                y_aligned = np.array([label_mapping[label] for label in y_aligned])
+                
+                logger.info(f"Filtered dataset from {len(y_aligned) + np.sum(~valid_mask)} to {len(y_aligned)} samples")
+                logger.info(f"Reduced from {n_classes} to {len(valid_classes)} classes")
+                logger.info(f"Class relabeling mapping: {label_mapping}")
+                logger.info(f"Final class distribution: {dict(zip(range(len(valid_classes_sorted)), np.bincount(y_aligned)))}")
+            else:
+                logger.info(f"All classes have sufficient samples (>= 2)")
+        
+        # Final validation after any filtering
+        if not is_regression:
+            unique_final, counts_final = np.unique(y_aligned, return_counts=True)
+            if len(unique_final) < 2:
+                logger.error(f"Dataset {ds_name} has insufficient classes after processing (< 2)")
+                return None
+            
+            # Warn about very small classes that might still cause issues
+            problematic_classes = unique_final[(counts_final >= 2) & (counts_final < 5)]
+            if len(problematic_classes) > 0:
+                logger.warning(f"Dataset {ds_name} has classes with few samples that may cause CV issues: {dict(zip(problematic_classes, counts_final[np.isin(unique_final, problematic_classes)]))}")
         
         for mod_name, mod_df in modalities.items():
             if mod_df.empty:
@@ -102,7 +202,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         logger.error(f"Error processing dataset {ds_conf['name']}: {str(e)}")
         return None
 
-def process_regression_datasets():
+def process_regression_datasets(args):
     """Process all regression datasets."""
     logger.info("=== REGRESSION BLOCK (AML, Sarcoma) ===")
     reg_extractors = get_regression_extractors()
@@ -169,6 +269,14 @@ def process_regression_datasets():
             
             print(f"===> COMPLETED SELECTION for dataset {ds_name}")
             logger.info(f"===> COMPLETED SELECTION for dataset {ds_name}")
+            
+            # Combine best fold metrics from both extraction and selection
+            print(f"===> Combining best fold metrics for dataset {ds_name}")
+            logger.info(f"===> Combining best fold metrics for dataset {ds_name}")
+            from Z_alg.cv import combine_best_fold_metrics
+            combine_best_fold_metrics(ds_name, base_out)
+            print(f"===> COMPLETED combining best fold metrics for dataset {ds_name}")
+            logger.info(f"===> COMPLETED combining best fold metrics for dataset {ds_name}")
         except KeyboardInterrupt:
             logger.warning(f"KeyboardInterrupt during processing dataset {ds_name}. Aborting all processing.")
             raise  # Re-raise to abort all processing
@@ -179,7 +287,7 @@ def process_regression_datasets():
             traceback.print_exc()
             continue  # Continue to next dataset
 
-def process_classification_datasets():
+def process_classification_datasets(args):
     """Process all classification datasets."""
     logger.info("\n=== CLASSIFICATION BLOCK (Breast, Colon, Kidney, etc.) ===")
     clf_extractors = get_classification_extractors()
@@ -246,6 +354,14 @@ def process_classification_datasets():
             
             print(f"===> COMPLETED SELECTION for dataset {ds_name}")
             logger.info(f"===> COMPLETED SELECTION for dataset {ds_name}")
+            
+            # Combine best fold metrics from both extraction and selection
+            print(f"===> Combining best fold metrics for dataset {ds_name}")
+            logger.info(f"===> Combining best fold metrics for dataset {ds_name}")
+            from Z_alg.cv import combine_best_fold_metrics
+            combine_best_fold_metrics(ds_name, base_out)
+            print(f"===> COMPLETED combining best fold metrics for dataset {ds_name}")
+            logger.info(f"===> COMPLETED combining best fold metrics for dataset {ds_name}")
         except KeyboardInterrupt:
             logger.warning(f"KeyboardInterrupt during processing dataset {ds_name}. Aborting all processing.")
             raise  # Re-raise to abort all processing
@@ -274,20 +390,31 @@ def main():
         "--debug", action="store_true", help="Enable debug mode with more logging"
     )
     parser.add_argument(
+        "--verbose", action="store_true", help="Enable verbose mode with detailed logging"
+    )
+    parser.add_argument(
         "--n-val", type=int, help="Run only a specific n_val (8, 16, or 32)"
     )
     
-    global args
+    # Parse arguments
     args = parser.parse_args()
     
-    # Set up debug mode if requested
+    # Set up logging levels based on arguments
     if args.debug:
+        os.environ["Z_ALG_DEBUG"] = "1"
         os.environ["DEBUG_RESOURCES"] = "1"
         logger.setLevel(logging.DEBUG)
         # Also set the file handler to DEBUG
         for handler in logging.root.handlers:
             if isinstance(handler, logging.FileHandler):
                 handler.setLevel(logging.DEBUG)
+    elif args.verbose:
+        os.environ["Z_ALG_VERBOSE"] = "1"
+        logger.setLevel(logging.INFO)
+        # Also set the file handler to INFO
+        for handler in logging.root.handlers:
+            if isinstance(handler, logging.FileHandler):
+                handler.setLevel(logging.INFO)
     else:
         logger.setLevel(logging.WARNING)
         
@@ -301,17 +428,17 @@ def main():
     # Process datasets based on arguments
     if args.dataset:
         # Find and process only the specified dataset
-        process_single_dataset(args.dataset.lower())
+        process_single_dataset(args.dataset.lower(), args)
     elif args.regression_only:
         # Process only regression datasets
-        process_regression_datasets()
+        process_regression_datasets(args)
     elif args.classification_only:
         # Process only classification datasets
-        process_classification_datasets()
+        process_classification_datasets(args)
     else:
         # Process all datasets
-        process_regression_datasets()
-        process_classification_datasets()
+        process_regression_datasets(args)
+        process_classification_datasets(args)
     
     # Print completion information
     elapsed_time = time.time() - start_time
@@ -326,7 +453,7 @@ def main():
     print(completion_msg)
     print("=" * 70)
 
-def process_single_dataset(target_ds):
+def process_single_dataset(target_ds, args):
     """Process a single dataset specified by name."""
     found = False
     
@@ -342,10 +469,15 @@ def process_single_dataset(target_ds):
                 )
                 os.makedirs(base_out, exist_ok=True)
                 
+                # Get n_val list (filtered if requested via args)
+                n_val_list = [8, 16, 32]
+                if args.n_val and args.n_val in n_val_list:
+                    n_val_list = [args.n_val]
+                
                 run_extraction_pipeline(
                     ds_name, result["modalities"], result["common_ids"], 
                     result["y_aligned"], base_out,
-                    get_regression_extractors(), [8, 16, 32], 
+                    get_regression_extractors(), n_val_list, 
                     ["LinearRegression", "RandomForestRegressor", "ElasticNet"], 
                     [0], 1, is_regression=True
                 )
@@ -353,10 +485,14 @@ def process_single_dataset(target_ds):
                 run_selection_pipeline(
                     ds_name, result["modalities"], result["common_ids"], 
                     result["y_aligned"], base_out,
-                    get_regression_selectors(), [8, 16, 32], 
+                    get_regression_selectors(), n_val_list, 
                     ["LinearRegression", "RandomForestRegressor", "ElasticNet"], 
                     [0], 1, is_regression=True
                 )
+                
+                # Combine best fold metrics from both extraction and selection
+                from Z_alg.cv import combine_best_fold_metrics
+                combine_best_fold_metrics(ds_name, base_out)
             found = True
             break
     
@@ -373,10 +509,15 @@ def process_single_dataset(target_ds):
                     )
                     os.makedirs(base_out, exist_ok=True)
                     
+                    # Get n_val list (filtered if requested via args)
+                    n_val_list = [8, 16, 32]
+                    if args.n_val and args.n_val in n_val_list:
+                        n_val_list = [args.n_val]
+                    
                     run_extraction_pipeline(
                         ds_name, result["modalities"], result["common_ids"], 
                         result["y_aligned"], base_out,
-                        get_classification_extractors(), [8, 16, 32], 
+                        get_classification_extractors(), n_val_list, 
                         list(get_classification_models().keys()), 
                         [0], 1, is_regression=False
                     )
@@ -384,10 +525,14 @@ def process_single_dataset(target_ds):
                     run_selection_pipeline(
                         ds_name, result["modalities"], result["common_ids"], 
                         result["y_aligned"], base_out,
-                        get_classification_selectors(), [8, 16, 32], 
+                        get_classification_selectors(), n_val_list, 
                         list(get_classification_models().keys()), 
                         [0], 1, is_regression=False
                     )
+                    
+                    # Combine best fold metrics from both extraction and selection
+                    from Z_alg.cv import combine_best_fold_metrics
+                    combine_best_fold_metrics(ds_name, base_out)
                 found = True
                 break
     

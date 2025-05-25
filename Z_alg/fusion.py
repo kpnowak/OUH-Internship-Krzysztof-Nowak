@@ -128,15 +128,20 @@ def merge_modalities(*arrays: np.ndarray,
     
     # Check if we have any arrays to merge
     if not filtered_arrays:
-        logger.warning("Warning: No valid arrays provided for merging")
+        logger.warning("No valid arrays provided for merging")
         return np.zeros((0, 0), dtype=np.float32)
     
     # Convert all arrays to float32 numpy arrays and ensure they're 2D
     processed_arrays = []
     for i, arr in enumerate(filtered_arrays):
         try:
-            # Convert to numpy array if not already
-            arr_np = np.asarray(arr, dtype=np.float32)
+            # Convert to numpy array if not already - use float32 to reduce memory usage
+            if not isinstance(arr, np.ndarray):
+                arr_np = np.asarray(arr, dtype=np.float32)
+            else:
+                # If already numpy array, just ensure it's float32 without extra copy
+                arr_np = arr if arr.dtype == np.float32 else arr.astype(np.float32)
+                
             # Ensure 2D - if 1D, reshape to column vector
             if arr_np.ndim == 1:
                 arr_np = arr_np.reshape(-1, 1)
@@ -164,7 +169,7 @@ def merge_modalities(*arrays: np.ndarray,
         max_rows = max(row_counts)
         logger.warning(f"Arrays have different row counts: min={min_rows}, max={max_rows}. Truncating to {min_rows} rows.")
         
-        # Truncate all arrays to have the same number of rows
+        # Truncate all arrays to have the same number of rows - view when possible
         processed_arrays = [arr[:min_rows] for arr in processed_arrays]
     
     # Get final row count after truncation
@@ -195,18 +200,27 @@ def merge_modalities(*arrays: np.ndarray,
                 n_cols = arr.shape[1]
                 
                 if strategy == "average":
-                    # Add values to merged array where not NaN
+                    # Create mask for non-NaN values - avoid copying the array if possible
                     mask = ~np.isnan(arr)
-                    np.add.at(merged[:, :n_cols], np.where(mask), arr[mask])
-                    # Count non-NaN values for averaging
-                    np.add.at(counts[:, :n_cols], np.where(mask), 1)
+                    # Only process columns with non-NaN values to avoid unnecessary operations
+                    if np.any(mask):
+                        # Add values to merged array where not NaN
+                        np.add.at(merged[:, :n_cols], np.where(mask), arr[mask])
+                        # Count non-NaN values for averaging
+                        np.add.at(counts[:, :n_cols], np.where(mask), 1)
                 elif strategy == "sum":
-                    # Handle NaNs by replacing with 0 for summation
-                    arr_clean = np.nan_to_num(arr, nan=0.0, copy=True)
+                    # Handle NaNs by replacing with 0 for summation - avoid copy if no NaNs
+                    if np.isnan(arr).any():
+                        arr_clean = np.nan_to_num(arr, nan=0.0, copy=True)
+                    else:
+                        arr_clean = arr
                     merged[:, :n_cols] += arr_clean
                 elif strategy == "max":
-                    # Handle NaNs by replacing with -inf for max
-                    arr_clean = np.nan_to_num(arr, nan=-np.inf, copy=True)
+                    # Handle NaNs by replacing with -inf for max - avoid copy if no NaNs
+                    if np.isnan(arr).any():
+                        arr_clean = np.nan_to_num(arr, nan=-np.inf, copy=True)
+                    else:
+                        arr_clean = arr
                     # Update merged with element-wise maximum
                     merged[:, :n_cols] = np.maximum(merged[:, :n_cols], arr_clean)
             
@@ -234,15 +248,14 @@ def merge_modalities(*arrays: np.ndarray,
                     merged = imputer.transform(merged)
             except Exception as e:
                 logger.warning(f"Imputation failed: {str(e)}, using original data")
-                # Replace NaNs with 0 as a fallback
+                # Replace NaNs with 0 as a fallback - do in-place if possible
                 np.nan_to_num(merged, nan=0.0, copy=False)
         else:
-            # Always ensure there are no NaNs in the result
+            # Always ensure there are no NaNs in the result - in-place operation
             np.nan_to_num(merged, nan=0.0, copy=False)
             
-        # Last check for inf values
+        # Last check for inf values - in-place operation
         if not np.isfinite(merged).all():
-            logger.warning("Merged array contains inf values, replacing with 0.")
             np.nan_to_num(merged, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
         
         # Verify the merged array's shape and ensure it's not empty

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Input/Output module for reading and writing data files.
+Enhanced with parallel processing and caching for optimal performance.
 """
 
 import numpy as np
@@ -9,12 +10,393 @@ import warnings
 from pathlib import Path
 from typing import Optional, List, Dict, Union, Tuple, Any
 import logging
+import re
+import hashlib
+import pickle
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from functools import lru_cache
 
 # Local imports
-from Z_alg.config import DatasetConfig, MAX_VARIABLE_FEATURES
-from Z_alg.preprocessing import _keep_top_variable_rows, fix_tcga_id_slicing, custom_parse_outcome
+from Z_alg.config import DatasetConfig, MAX_VARIABLE_FEATURES, SAMPLE_RETENTION_CONFIG
+from Z_alg.preprocessing import _keep_top_variable_rows, fix_tcga_id_slicing, custom_parse_outcome, normalize_sample_ids
 
 logger = logging.getLogger(__name__)
+
+# Global cache for loaded modalities
+_modality_cache = {}
+_cache_lock = threading.Lock()
+
+def get_file_hash(file_path: Path) -> str:
+    """Generate a hash for file caching based on path and modification time."""
+    stat = file_path.stat()
+    content = f"{file_path}_{stat.st_size}_{stat.st_mtime}"
+    return hashlib.md5(content.encode()).hexdigest()
+
+def cache_modality(cache_key: str, data: pd.DataFrame) -> None:
+    """Cache modality data with thread safety."""
+    with _cache_lock:
+        _modality_cache[cache_key] = data.copy()
+
+def get_cached_modality(cache_key: str) -> Optional[pd.DataFrame]:
+    """Retrieve cached modality data with thread safety."""
+    with _cache_lock:
+        return _modality_cache.get(cache_key)
+
+def clear_modality_cache() -> None:
+    """Clear the modality cache to free memory."""
+    with _cache_lock:
+        _modality_cache.clear()
+        logger.info("Cleared modality cache")
+
+def parse_malformed_header(header_string: str) -> List[str]:
+    """
+    Parse a malformed header string that contains multiple sample IDs.
+    Optimized for the specific format seen in TCGA data files.
+    
+    Parameters
+    ----------
+    header_string : str
+        Header string containing sample IDs (possibly quoted and concatenated)
+        
+    Returns
+    -------
+    List[str]
+        List of extracted sample IDs
+    """
+    # Remove quotes and clean the string
+    cleaned = header_string.replace('"', '').replace("'", '').strip()
+    
+    # Strategy 1: Split by spaces (most common for malformed headers like the AML data)
+    if ' ' in cleaned:
+        potential_ids = [id_str.strip() for id_str in cleaned.split() if id_str.strip()]
+        # Validate that these look like TCGA IDs
+        tcga_ids = [id_str for id_str in potential_ids if re.match(r'TCGA[.\-_][A-Z0-9]+[.\-_][A-Z0-9]+[.\-_][0-9]+', id_str)]
+        if len(tcga_ids) > 5:  # If we found many TCGA IDs, use them
+            logger.debug(f"Extracted {len(tcga_ids)} TCGA sample IDs from space-separated header")
+            return tcga_ids
+        elif len(potential_ids) > 5:  # Otherwise use all potential IDs
+            logger.debug(f"Extracted {len(potential_ids)} sample IDs from space-separated header")
+            return potential_ids
+    
+    # Strategy 2: Use regex to find TCGA-like patterns
+    tcga_pattern = r'TCGA[.\-_][A-Z0-9]+[.\-_][A-Z0-9]+[.\-_][0-9]+'
+    regex_matches = re.findall(tcga_pattern, cleaned)
+    if len(regex_matches) > 5:
+        logger.debug(f"Extracted {len(regex_matches)} TCGA sample IDs using regex")
+        return regex_matches
+    
+    # Strategy 3: Split by common separators if no spaces
+    for sep in ['\t', ',', ';', '|']:
+        if sep in cleaned:
+            potential_ids = [id_str.strip() for id_str in cleaned.split(sep) if id_str.strip()]
+            if len(potential_ids) > 5:
+                logger.debug(f"Extracted {len(potential_ids)} sample IDs using separator '{sep}'")
+                return potential_ids
+    
+    logger.debug("Could not extract sample IDs from malformed header")
+    return []
+
+def fix_malformed_data_file(file_path: Path, modality_name: str) -> Optional[pd.DataFrame]:
+    """
+    Attempt to fix malformed data files where sample IDs are in a single header string.
+    Optimized for the specific format seen in TCGA data files.
+    
+    Parameters
+    ----------
+    file_path : Path
+        Path to the malformed data file
+    modality_name : str
+        Name of the modality for logging
+        
+    Returns
+    -------
+    pd.DataFrame or None
+        Fixed DataFrame with proper sample columns, or None if unfixable
+    """
+    try:
+        logger.info(f"Attempting to repair malformed {modality_name} file: {file_path}")
+        
+        # Read the file as text to examine structure
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        if len(lines) < 2:
+            logger.warning(f"File {file_path} has insufficient lines")
+            return None
+        
+        # Extract sample IDs from the malformed header
+        first_line = lines[0].strip()
+        sample_ids = parse_malformed_header(first_line)
+        
+        if len(sample_ids) < 5:  # Not enough samples to be worth fixing
+            logger.warning(f"Not enough sample IDs found in header for {modality_name}: {len(sample_ids)}")
+            return None
+        
+        logger.info(f"Found {len(sample_ids)} sample IDs in malformed header")
+        
+        # Try different strategies to read the data part
+        df_data = None
+        
+        # Strategy 1: Try reading without header, then manually assign columns
+        try:
+            df_data = pd.read_csv(file_path, sep=None, engine='python', header=None, 
+                                skiprows=1, index_col=0, low_memory=False)
+            logger.debug(f"Successfully read data part: {df_data.shape}")
+        except Exception as e:
+            logger.debug(f"Strategy 1 failed: {str(e)}")
+        
+        # Strategy 2: If that fails, try with specific delimiter
+        if df_data is None:
+            for delimiter in [',', '\t', ' ']:
+                try:
+                    df_data = pd.read_csv(file_path, sep=delimiter, header=None, 
+                                        skiprows=1, index_col=0, low_memory=False)
+                    if not df_data.empty:
+                        logger.debug(f"Successfully read data with delimiter '{delimiter}': {df_data.shape}")
+                        break
+                except Exception as e:
+                    logger.debug(f"Failed with delimiter '{delimiter}': {str(e)}")
+                    continue
+        
+        if df_data is None or df_data.empty:
+            logger.warning(f"Could not read data part of malformed file")
+            return None
+        
+        # Adjust dimensions if needed
+        if df_data.shape[1] != len(sample_ids):
+            logger.warning(f"Dimension mismatch: data has {df_data.shape[1]} columns, header has {len(sample_ids)} sample IDs")
+            
+            if df_data.shape[1] < len(sample_ids):
+                # Truncate sample IDs to match data
+                sample_ids = sample_ids[:df_data.shape[1]]
+                logger.info(f"Truncated sample IDs to {len(sample_ids)} to match data columns")
+            else:
+                # Pad with generic names or truncate data
+                if df_data.shape[1] - len(sample_ids) < 10:  # Small difference, pad sample IDs
+                    while len(sample_ids) < df_data.shape[1]:
+                        sample_ids.append(f"Sample_{len(sample_ids)+1}")
+                    logger.info(f"Padded sample IDs to {len(sample_ids)}")
+                else:
+                    # Large difference, truncate data
+                    df_data = df_data.iloc[:, :len(sample_ids)]
+                    logger.info(f"Truncated data to {df_data.shape[1]} columns to match sample IDs")
+        
+        # Assign the sample IDs as column names
+        df_data.columns = sample_ids
+        
+        # Validate the result
+        if df_data.empty or df_data.shape[1] == 0:
+            logger.warning(f"Repaired data is empty")
+            return None
+        
+        # Check for reasonable data values
+        if modality_name.lower() in ['gene expression', 'mirna']:
+            # Expression data should be mostly positive
+            negative_ratio = (df_data < 0).sum().sum() / (df_data.shape[0] * df_data.shape[1])
+            if negative_ratio > 0.5:
+                logger.warning(f"High proportion of negative values ({negative_ratio:.1%}) in {modality_name} - data may be corrupted")
+        
+        logger.info(f"Successfully repaired malformed {modality_name} file: {df_data.shape}")
+        return df_data
+        
+    except Exception as e:
+        logger.error(f"Failed to repair malformed file {file_path}: {str(e)}")
+        return None
+
+def standardize_sample_ids(sample_ids: List[str], target_format: str = 'hyphen') -> Dict[str, str]:
+    """
+    Standardize sample IDs to a consistent format.
+    
+    Parameters
+    ----------
+    sample_ids : List[str]
+        List of sample IDs to standardize
+    target_format : str
+        Target format: 'hyphen' for TCGA-XX-XXXX, 'dot' for TCGA.XX.XXXX
+        
+    Returns
+    -------
+    Dict[str, str]
+        Mapping from original ID to standardized ID
+    """
+    target_sep = '-' if target_format == 'hyphen' else '.'
+    mapping = {}
+    
+    for original_id in sample_ids:
+        if not isinstance(original_id, str):
+            continue
+            
+        # Convert separators to target format
+        standardized = original_id
+        for sep in ['.', '-', '_']:
+            if sep != target_sep:
+                standardized = standardized.replace(sep, target_sep)
+        
+        mapping[original_id] = standardized
+    
+    return mapping
+
+def validate_data_quality(df: pd.DataFrame, modality_name: str) -> Tuple[bool, str]:
+    """
+    Validate data quality and return issues found.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame to validate
+    modality_name : str
+        Name of the modality for logging
+        
+    Returns
+    -------
+    Tuple[bool, str]
+        (is_valid, issues_description)
+    """
+    issues = []
+    
+    # Check basic structure
+    if df.empty:
+        issues.append("DataFrame is empty")
+    
+    if df.shape[0] == 0:
+        issues.append("No features/rows")
+    
+    if df.shape[1] == 0:
+        issues.append("No samples/columns")
+    
+    # Check for excessive missing data
+    missing_ratio = df.isnull().sum().sum() / (df.shape[0] * df.shape[1])
+    if missing_ratio > 0.8:
+        issues.append(f"Excessive missing data: {missing_ratio:.1%}")
+    
+    # Check sample ID format
+    sample_pattern = r'TCGA[.\-_][A-Z0-9]+[.\-_][A-Z0-9]+[.\-_][0-9]+'
+    valid_samples = sum(1 for col in df.columns if re.match(sample_pattern, str(col)))
+    if valid_samples < df.shape[1] * 0.5:
+        issues.append(f"Many invalid sample IDs: only {valid_samples}/{df.shape[1]} match TCGA pattern")
+    
+    # Check for duplicate columns
+    if df.columns.duplicated().any():
+        issues.append("Duplicate sample IDs found")
+    
+    is_valid = len(issues) == 0
+    issues_str = "; ".join(issues) if issues else "No issues found"
+    
+    logger.info(f"Data quality check for {modality_name}: {'PASS' if is_valid else 'ISSUES'} - {issues_str}")
+    return is_valid, issues_str
+
+def find_fuzzy_id_matches(outcome_ids: List[str], modality_ids: List[str], 
+                         similarity_threshold: float = 0.8) -> Dict[str, str]:
+    """
+    Find fuzzy matches between outcome and modality sample IDs.
+    
+    Parameters
+    ----------
+    outcome_ids : List[str]
+        List of outcome sample IDs
+    modality_ids : List[str]
+        List of modality sample IDs
+    similarity_threshold : float
+        Minimum similarity score for a match
+        
+    Returns
+    -------
+    Dict[str, str]
+        Mapping from outcome ID to best matching modality ID
+    """
+    from difflib import SequenceMatcher
+    
+    matches = {}
+    
+    for outcome_id in outcome_ids:
+        best_match = None
+        best_score = 0
+        
+        for modality_id in modality_ids:
+            # Calculate similarity
+            similarity = SequenceMatcher(None, outcome_id.lower(), modality_id.lower()).ratio()
+            
+            if similarity > best_score and similarity >= similarity_threshold:
+                best_score = similarity
+                best_match = modality_id
+        
+        if best_match:
+            matches[outcome_id] = best_match
+    
+    return matches
+
+def find_pattern_matches(outcome_ids: List[str], modality_ids: List[str]) -> Dict[str, str]:
+    """
+    Find pattern-based matches for TCGA-style IDs.
+    
+    Parameters
+    ----------
+    outcome_ids : List[str]
+        List of outcome sample IDs
+    modality_ids : List[str]
+        List of modality sample IDs
+        
+    Returns
+    -------
+    Dict[str, str]
+        Mapping from outcome ID to best matching modality ID
+    """
+    matches = {}
+    
+    # Extract core patterns (first 3 parts of TCGA IDs)
+    def extract_core_pattern(id_str):
+        parts = re.split(r'[.\-_]', id_str)
+        if len(parts) >= 3:
+            return '-'.join(parts[:3])
+        return id_str
+    
+    # Create pattern mappings
+    outcome_patterns = {extract_core_pattern(id_): id_ for id_ in outcome_ids}
+    modality_patterns = {extract_core_pattern(id_): id_ for id_ in modality_ids}
+    
+    # Find matches
+    for pattern, outcome_id in outcome_patterns.items():
+        if pattern in modality_patterns:
+            matches[outcome_id] = modality_patterns[pattern]
+    
+    return matches
+
+def find_relaxed_intersection(outcome_ids: List[str], modalities: Dict[str, pd.DataFrame], 
+                             min_modalities: int = 2) -> List[str]:
+    """
+    Find samples present in at least min_modalities modalities.
+    
+    Parameters
+    ----------
+    outcome_ids : List[str]
+        List of outcome sample IDs
+    modalities : Dict[str, pd.DataFrame]
+        Dictionary of modality DataFrames
+    min_modalities : int
+        Minimum number of modalities a sample must be present in
+        
+    Returns
+    -------
+    List[str]
+        List of sample IDs meeting the criteria
+    """
+    sample_counts = {}
+    
+    # Count how many modalities each sample appears in
+    for outcome_id in outcome_ids:
+        count = 0
+        for mod_name, df in modalities.items():
+            if outcome_id in df.columns:
+                count += 1
+        sample_counts[outcome_id] = count
+    
+    # Return samples present in at least min_modalities
+    relaxed_samples = [id_ for id_, count in sample_counts.items() if count >= min_modalities]
+    
+    logger.info(f"Relaxed intersection: {len(relaxed_samples)} samples present in >= {min_modalities} modalities")
+    return relaxed_samples
 
 def try_read_file(path: Union[str, Path], 
                  clinical_cols: Optional[List[str]] = None, 
@@ -70,12 +452,202 @@ def try_read_file(path: Union[str, Path],
     logger.error(f"Error reading {path}: Could not parse with any delimiter")
     return None
 
+def optimize_data_types(df: pd.DataFrame, modality_name: str) -> pd.DataFrame:
+    """
+    Optimize data types for memory efficiency and performance.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame to optimize
+    modality_name : str
+        Name of the modality for logging
+        
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with optimized data types
+    """
+    original_memory = df.memory_usage(deep=True).sum() / 1024**2  # MB
+    
+    # Convert numeric columns to more efficient types
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            # Try to convert to numeric
+            try:
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+            except:
+                pass
+        
+        # Optimize numeric types
+        if df[col].dtype in ['int64', 'int32']:
+            # Check if we can use smaller integer types
+            col_min, col_max = df[col].min(), df[col].max()
+            if col_min >= -128 and col_max <= 127:
+                df[col] = df[col].astype('int8')
+            elif col_min >= -32768 and col_max <= 32767:
+                df[col] = df[col].astype('int16')
+            elif col_min >= -2147483648 and col_max <= 2147483647:
+                df[col] = df[col].astype('int32')
+        
+        elif df[col].dtype in ['float64', 'float32']:
+            # Use float32 for most genomic data (sufficient precision)
+            if df[col].dtype == 'float64':
+                # Check if we can safely convert to float32
+                try:
+                    df_test = df[col].astype('float32')
+                    if np.allclose(df[col].values, df_test.values, equal_nan=True):
+                        df[col] = df_test
+                except:
+                    pass  # Keep as float64 if conversion fails
+    
+    new_memory = df.memory_usage(deep=True).sum() / 1024**2  # MB
+    memory_saved = original_memory - new_memory
+    
+    if memory_saved > 0.1:  # Only log if significant savings
+        logger.info(f"Memory optimization for {modality_name}: {original_memory:.1f}MB -> {new_memory:.1f}MB (saved {memory_saved:.1f}MB)")
+    
+    return df
+
+def load_modality_chunked(file_path: Path, modality_name: str, chunk_size: int = 10000) -> Optional[pd.DataFrame]:
+    """
+    Load large modality files in chunks for memory efficiency.
+    
+    Parameters
+    ----------
+    file_path : Path
+        Path to the data file
+    modality_name : str
+        Name of the modality
+    chunk_size : int
+        Number of rows to read at a time
+        
+    Returns
+    -------
+    pd.DataFrame or None
+        Loaded DataFrame or None if failed
+    """
+    try:
+        # First, try to determine file size and structure
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        
+        # If file is small enough, load normally
+        if file_size_mb < 100:  # Less than 100MB
+            return None  # Signal to use normal loading
+        
+        logger.info(f"Large file detected ({file_size_mb:.1f}MB), using chunked loading for {modality_name}")
+        
+        # Check for malformed header first by reading the first line
+        with open(file_path, 'r', encoding='utf-8') as f:
+            first_line = f.readline().strip()
+        
+        # If the first line has many TCGA IDs, it's malformed
+        if first_line.count('TCGA') > 10:
+            logger.info(f"Malformed large file detected for {modality_name} ({first_line.count('TCGA')} TCGA IDs in header), falling back to repair method")
+            return None  # Let the repair method handle it
+        
+        # Read first chunk to determine structure for normal files
+        first_chunk = pd.read_csv(file_path, nrows=100, index_col=0)
+        
+        # Additional check for other malformed patterns
+        if first_chunk.shape[1] == 0:
+            logger.info(f"Empty columns detected for {modality_name}, falling back to repair method")
+            return None
+        
+        # Read the file in chunks
+        chunks = []
+        total_rows = 0
+        
+        for chunk in pd.read_csv(file_path, chunksize=chunk_size, index_col=0):
+            chunks.append(chunk)
+            total_rows += len(chunk)
+            
+            # Progress logging for very large files
+            if len(chunks) % 10 == 0:
+                logger.debug(f"Loaded {total_rows} rows for {modality_name}")
+        
+        # Concatenate all chunks
+        df = pd.concat(chunks, axis=0)
+        logger.info(f"Successfully loaded {modality_name} in {len(chunks)} chunks: {df.shape}")
+        
+        return df
+        
+    except Exception as e:
+        logger.warning(f"Chunked loading failed for {modality_name}: {str(e)}")
+        return None
+
+def preprocess_genomic_data(df: pd.DataFrame, modality_name: str) -> pd.DataFrame:
+    """
+    Apply genomic data-specific preprocessing optimizations.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw genomic data
+    modality_name : str
+        Type of genomic data (Gene Expression, miRNA, Methylation)
+        
+    Returns
+    -------
+    pd.DataFrame
+        Preprocessed data
+    """
+    logger.info(f"Applying genomic preprocessing for {modality_name}")
+    
+    # Remove features with too many missing values
+    missing_threshold = 0.5  # Remove features missing in >50% of samples
+    missing_ratio = df.isnull().sum(axis=1) / df.shape[1]
+    features_to_keep = missing_ratio <= missing_threshold
+    
+    if not features_to_keep.all():
+        removed_count = (~features_to_keep).sum()
+        logger.info(f"Removing {removed_count} features with >{missing_threshold*100}% missing values")
+        df = df[features_to_keep]
+    
+    # Handle remaining missing values
+    if df.isnull().any().any():
+        if modality_name.lower() in ['gene expression', 'mirna']:
+            # For expression data, use 0 (no expression)
+            df = df.fillna(0)
+            logger.debug(f"Filled missing values with 0 for {modality_name}")
+        elif modality_name.lower() == 'methylation':
+            # For methylation, use median (more appropriate than 0)
+            df = df.fillna(df.median(axis=1), axis=0)
+            logger.debug(f"Filled missing values with median for {modality_name}")
+        else:
+            # For other data types, use median
+            df = df.fillna(df.median(axis=1), axis=0)
+            logger.debug(f"Filled missing values with median for {modality_name}")
+    
+    # Remove constant features (no variance)
+    if modality_name.lower() != 'methylation':  # Methylation can have legitimate constant values
+        feature_variance = df.var(axis=1)
+        non_constant = feature_variance > 1e-8  # Very small threshold for numerical stability
+        
+        if not non_constant.all():
+            removed_count = (~non_constant).sum()
+            logger.info(f"Removing {removed_count} constant features from {modality_name}")
+            df = df[non_constant]
+    
+    # Apply log transformation for expression data
+    if modality_name.lower() in ['gene expression', 'mirna']:
+        # Check if data appears to be already log-transformed
+        max_val = df.max().max()
+        if max_val > 50:  # Likely not log-transformed
+            logger.info(f"Applying log2(x+1) transformation to {modality_name}")
+            df = np.log2(df + 1)
+    
+    return df
+
 def load_modality(base_path: Union[str, Path], 
                  modality_path: Union[str, Path], 
                  modality_name: str,
-                 k_features: int = MAX_VARIABLE_FEATURES) -> Optional[pd.DataFrame]:
+                 k_features: int = MAX_VARIABLE_FEATURES,
+                 chunk_size: int = 10000,
+                 use_cache: bool = True) -> Optional[pd.DataFrame]:
     """
-    Load a single modality file, apply preprocessing, and return DataFrame.
+    Load a single modality file with comprehensive optimizations.
+    Enhanced with malformed file detection, memory optimization, genomic preprocessing, and caching.
     
     Parameters
     ----------
@@ -83,6 +655,8 @@ def load_modality(base_path: Union[str, Path],
     modality_path   Path to modality file (relative to base_path)
     modality_name   Name of the modality
     k_features      Maximum number of features to keep
+    chunk_size      Number of rows to read at a time when loading large files
+    use_cache       Whether to use caching for faster repeated loads
     
     Returns
     -------
@@ -95,237 +669,968 @@ def load_modality(base_path: Union[str, Path],
         Path(modality_path)  # Direct path as last resort
     ]
     
-    df = None
+    # Find the first valid path
+    valid_path = None
     for path in paths_to_try:
         if path.exists():
-            df = try_read_file(path)
-            if df is not None:
+            valid_path = path
+            logger.debug(f"Found valid path for {modality_name}: {path}")
+            break
+    
+    if valid_path is None:
+        logger.warning(f"Warning: Could not find valid path for modality {modality_name}")
+        return None
+    
+    # Check cache first if enabled (before any processing)
+    cache_key = None
+    if use_cache:
+        cache_key = f"{get_file_hash(valid_path)}_{modality_name}_{k_features}"
+        cached_data = get_cached_modality(cache_key)
+        if cached_data is not None:
+            logger.info(f"Using cached data for {modality_name}: {cached_data.shape}")
+            return cached_data.copy()
+    
+    # Try chunked loading for large files first
+    df = load_modality_chunked(valid_path, modality_name, chunk_size)
+    
+    # If chunked loading didn't work or wasn't needed, try normal loading
+    if df is None:
+        encodings_to_try = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+        malformed_detected = False
+        
+        for delimiter in [',', '\t', ' ', ';']:
+            for encoding in encodings_to_try:
+                try:
+                    # Try reading first line to detect malformed headers
+                    with open(valid_path, 'r', encoding=encoding) as f:
+                        first_line = f.readline().strip()
+                    
+                    # Check for malformed header pattern (like in AML data)
+                    if first_line.count('"TCGA') > 5:  # Multiple quoted TCGA IDs in one line
+                        logger.info(f"Detected malformed header in {modality_name}, attempting repair")
+                        malformed_detected = True
+                        break
+                    
+                    # Try normal loading
+                    df = pd.read_csv(valid_path, sep=delimiter, index_col=0, encoding=encoding, low_memory=False)
+                    if not df.empty:
+                        logger.debug(f"Successfully loaded {modality_name} with delimiter='{delimiter}', encoding='{encoding}'")
+                        
+                        # Additional check for malformed structure
+                        if df.shape[1] == 1 and len(parse_malformed_header(df.columns[0])) > 5:
+                            logger.info(f"Detected malformed structure in {modality_name}, attempting repair")
+                            malformed_detected = True
+                            df = None
+                        else:
+                            break
+                            
+                except pd.errors.EmptyDataError:
+                    continue
+                except Exception as e:
+                    logger.debug(f"Failed with delimiter='{delimiter}', encoding='{encoding}': {str(e)}")
+                    continue
+            
+            if df is not None and not df.empty:
                 break
+            elif malformed_detected:
+                break
+        
+        # If normal loading failed or malformed file detected, try to repair
+        if df is None or malformed_detected:
+            logger.info(f"Attempting to repair malformed {modality_name} file")
+            df = fix_malformed_data_file(valid_path, modality_name)
     
     if df is None or df.empty:
         logger.warning(f"Warning: Could not load modality {modality_name}")
         return None
     
-    # Brief debug info
-    logger.debug(f"Loaded {modality_name} data: shape={df.shape}")
+    # Data quality validation
+    is_valid, issues = validate_data_quality(df, modality_name)
+    if not is_valid:
+        logger.warning(f"Data quality issues in {modality_name}: {issues}")
     
-    # Check if index/row names look like sample IDs (TCGA-XX-XXXX format)
-    # and columns look like features (gene symbols, miRNA names, cpg sites)
-    # We want features in rows, samples in columns
+    logger.info(f"Loaded {modality_name} data: shape={df.shape}")
     
-    # If first column name contains TCGA or sample, transpose (samples in columns)
-    sample_pattern = ['TCGA', 'sample', 'SAMPLE_']
+    # Ensure correct orientation (features in rows, samples in columns)
+    sample_pattern = ['TCGA', 'sample', 'SAMPLE_', 'patient', 'PATIENT']
     
     # Check if samples are in rows (need to transpose)
     if any(x in str(df.index[0]) for x in sample_pattern):
         logger.debug(f"Transposing {modality_name}: samples detected in rows")
         df = df.T
     
-    # Check if samples are in columns (already correct orientation)
-    elif any(x in str(df.columns[0]) for x in sample_pattern):
-        logger.debug(f"Correct orientation for {modality_name}: samples in columns")
+    # More thorough orientation check
+    tcga_in_columns = sum(1 for col in df.columns if isinstance(col, str) 
+                         and any(pattern in col for pattern in sample_pattern))
     
-    # More thorough orientation check based on sample ID patterns in columns
-    tcga_pattern = sum(1 for col in df.columns if isinstance(col, str) 
-                       and any(pattern in col for pattern in sample_pattern))
-    
-    # If no TCGA pattern in columns but found in rows, transpose
-    if tcga_pattern < 5:
-        tcga_rows = sum(1 for idx in df.index if isinstance(idx, str) 
-                        and any(pattern in idx for pattern in sample_pattern))
-        if tcga_rows > 5:
-            logger.debug(f"Transposing {modality_name}: {tcga_rows} sample IDs detected in rows")
+    if tcga_in_columns < 5:
+        tcga_in_rows = sum(1 for idx in df.index if isinstance(idx, str) 
+                          and any(pattern in idx for pattern in sample_pattern))
+        if tcga_in_rows > 5:
+            logger.debug(f"Transposing {modality_name}: {tcga_in_rows} sample IDs detected in rows")
             df = df.T
     
     # Ensure index/column names are strings
     df.index = df.index.astype(str)
     df.columns = df.columns.astype(str)
     
+    # Standardize sample IDs to use hyphens (clinical data format)
+    logger.info(f"Standardizing sample IDs for {modality_name}")
+    id_mapping = standardize_sample_ids(df.columns.tolist(), target_format='hyphen')
+    if id_mapping:
+        df = df.rename(columns=id_mapping)
+        logger.info(f"Standardized {len(id_mapping)} sample IDs in {modality_name}")
+    
+    # Handle duplicate indices and columns
+    if df.index.duplicated().any():
+        logger.warning(f"Found duplicate feature names in {modality_name}, making them unique")
+        df.index = pd.Index([f"{idx}_{i}" if i > 0 else idx 
+                            for i, idx in enumerate(df.groupby(df.index).cumcount().add(df.index))])
+    
+    if df.columns.duplicated().any():
+        logger.warning(f"Found duplicate sample IDs in {modality_name}, making them unique")
+        df.columns = pd.Index([f"{col}_{i}" if i > 0 else col 
+                              for i, col in enumerate(df.groupby(df.columns).cumcount().add(df.columns))])
+    
+    # Apply genomic data preprocessing
+    df = preprocess_genomic_data(df, modality_name)
+    
+    # Optimize data types for memory efficiency
+    df = optimize_data_types(df, modality_name)
+    
     # Variance filtering if needed
     if df.shape[0] > k_features:
         logger.info(f"Applying variance filtering to {modality_name}, keeping top {k_features} features")
         df = _keep_top_variable_rows(df, k=k_features)
     
+    # Final validation and logging
+    logger.info(f"Final {modality_name} data: {df.shape[0]} features x {df.shape[1]} samples")
+    logger.info(f"Memory usage: {df.memory_usage(deep=True).sum() / 1024**2:.1f}MB")
+    
+    # Cache the processed data if caching is enabled
+    if use_cache:
+        cache_modality(cache_key, df)
+        logger.debug(f"Cached processed data for {modality_name}")
+    
     return df
 
 def load_outcome(base_path: Union[str, Path], 
-                outcome_file: Union[str, Path], 
-                outcome_col: str,
+                outcome_file: str, 
+                outcome_col: str, 
                 id_col: str,
-                outcome_type: str = 'os') -> Tuple[Optional[pd.Series], Optional[pd.DataFrame]]:
+                outcome_type: str = "os") -> Tuple[Optional[pd.Series], Optional[pd.DataFrame]]:
     """
-    Load outcome data from file.
+    Load outcome data from a CSV file.
     
     Parameters
     ----------
     base_path       Base path for the dataset
     outcome_file    Path to outcome file (relative to base_path)
-    outcome_col     Column name for the outcome variable
-    id_col          Column name for sample IDs
-    outcome_type    Type of outcome (os, pfs, response, etc.)
+    outcome_col     Column name containing outcome data
+    id_col          Column name containing sample IDs
+    outcome_type    Type of outcome data
     
     Returns
     -------
-    Tuple of (outcome Series, full outcomes DataFrame) or (None, None)
+    Tuple of (outcome Series, full DataFrame) or (None, None)
     """
-    # Combine base path and outcome file path
     try:
-        # Try standard path joining
-        full_path = Path(base_path) / outcome_file
+        # Construct full file path - handle absolute vs relative paths
+        outcome_file_str = str(outcome_file).replace('\\', '/')
         
-        # For Windows, also try explicit string path with forward slashes
-        if not full_path.exists():
-            base_str = str(base_path).replace('\\', '/')
-            outcome_str = str(outcome_file).replace('\\', '/')
-            if outcome_str.startswith('/'):
-                outcome_str = outcome_str[1:]
-            alt_path = Path(f"{base_str}/{outcome_str}")
-            if alt_path.exists():
-                logger.info(f"Using alternate path for outcome: {alt_path}")
-                full_path = alt_path
+        if outcome_file_str.startswith('data/') or Path(outcome_file).is_absolute():
+            # If outcome_file is already a full path from project root or absolute, use as-is
+            outcome_path = Path(outcome_file)
+        else:
+            # Otherwise, join with base_path
+            outcome_path = Path(base_path) / outcome_file
+        
+        logger.info(f"Loading outcome data from: {outcome_path}")
+        
+        # Try different delimiters and encodings
+        delimiters = ['\t', ',', ';', ' ']
+        encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+        
+        outcome_df = None
+        for delimiter in delimiters:
+            for encoding in encodings:
+                try:
+                    outcome_df = pd.read_csv(outcome_path, sep=delimiter, encoding=encoding, index_col=False)
+                    if len(outcome_df.columns) > 1 and not outcome_df.empty:
+                        logger.info(f"Successfully loaded outcome file with delimiter='{delimiter}', encoding='{encoding}'")
+                        break
+                except Exception:
+                    continue
+            if outcome_df is not None and len(outcome_df.columns) > 1:
+                break
+        
+        if outcome_df is None or outcome_df.empty:
+            logger.error(f"Failed to load outcome file: {outcome_path}")
+            return None, None
+        
+        logger.info(f"Outcome data shape: {outcome_df.shape}")
+        logger.info(f"Available columns: {list(outcome_df.columns)}")
+        logger.info(f"Looking for ID column: '{id_col}' and outcome column: '{outcome_col}'")
+        
+        # Check if the required columns exist
+        if id_col not in outcome_df.columns:
+            logger.error(f"ID column '{id_col}' not found in outcome data")
+            return None, None
+        
+        if outcome_col not in outcome_df.columns:
+            logger.error(f"Outcome column '{outcome_col}' not found in outcome data")
+            return None, None
+        
+        # Extract the outcome column safely
+        try:
+            logger.info(f"Extracting outcome column: {outcome_col}")
+            outcome_series = outcome_df[outcome_col]
+            logger.info(f"Outcome series type: {type(outcome_series)}")
+            logger.info(f"Outcome series dtype: {outcome_series.dtype}")
+            logger.info(f"First few outcome values: {outcome_series.head()}")
+            
+            # Add safety check before calling custom_parse_outcome
+            if isinstance(outcome_series, np.ndarray):
+                logger.info("Converting numpy.ndarray to pandas Series before parsing")
+                outcome_series = pd.Series(outcome_series, name=outcome_col)
+            
+            # Parse the outcome based on its type
+            logger.info(f"Parsing outcome with type: {outcome_type}")
+            parsed_outcome = custom_parse_outcome(outcome_series, outcome_type)
+            logger.info(f"Parsed outcome type: {type(parsed_outcome)}")
+            
+        except Exception as e:
+            logger.error(f"Error extracting/parsing outcome column: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None, None
+        
+        # Extract sample IDs
+        try:
+            logger.info(f"Extracting ID column: {id_col}")
+            sample_ids = outcome_df[id_col]
+            logger.info(f"Sample IDs type: {type(sample_ids)}")
+            logger.info(f"Sample IDs dtype: {sample_ids.dtype}")
+            logger.info(f"First few sample IDs: {sample_ids.head()}")
+            logger.info(f"Sample IDs length: {len(sample_ids)}")
+            
+            # Add safety check for sample IDs as well
+            if isinstance(sample_ids, np.ndarray):
+                logger.info("Converting numpy.ndarray sample IDs to pandas Series")
+                sample_ids = pd.Series(sample_ids, name=id_col)
+            
+            # Get the values safely - handle both pandas Series and numpy arrays
+            if hasattr(parsed_outcome, 'values'):
+                outcome_values = parsed_outcome.values
+            else:
+                outcome_values = np.array(parsed_outcome)
+                
+            if hasattr(sample_ids, 'values'):
+                id_values = sample_ids.values
+            else:
+                id_values = np.array(sample_ids)
+            
+            logger.info(f"ID values type: {type(id_values)}")
+            logger.info(f"First few ID values: {id_values[:5]}")
+            logger.info(f"Outcome values type: {type(outcome_values)}")
+            logger.info(f"First few outcome values: {outcome_values[:5]}")
+            
+            # Create indexed outcome series
+            outcome_indexed = pd.Series(outcome_values, index=id_values, name=outcome_col)
+            logger.info(f"Outcome indexed shape: {outcome_indexed.shape}")
+            logger.info(f"First few outcome indexed index: {outcome_indexed.index[:5].tolist()}")
+            
+        except Exception as e:
+            logger.error(f"Error extracting sample IDs: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None, None
+        
+        # Remove samples with missing outcome data
+        outcome_clean = outcome_indexed.dropna()
+        logger.info(f"Loaded {len(outcome_clean)} samples with valid outcome data (removed {len(outcome_indexed) - len(outcome_clean)} missing values)")
+        
+        return outcome_clean, outcome_df
+        
     except Exception as e:
-        logger.info(f"Error constructing outcome path: {str(e)}, trying direct path")
-        full_path = Path(outcome_file)  # Last resort - direct path
-    
-    # Try to read the file
-    df = try_read_file(full_path)
-    if df is None:
+        logger.error(f"Error loading outcome data: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None, None
-    
-    # Skip if empty
-    if df.empty:
-        logger.warning(f"Warning: Empty outcome DataFrame")
-        return None, None
-    
-    # Check if outcome column exists
-    if outcome_col not in df.columns:
-        logger.warning(f"Warning: Outcome column '{outcome_col}' not found in {outcome_file}")
-        return None, None
-        
-    # Check if ID column exists
-    if id_col not in df.columns and df.index.name != id_col:
-        logger.warning(f"Warning: ID column '{id_col}' not found in {outcome_file}")
-        return None, None
-    
-    # If ID column is not the index, set it as index
-    if id_col in df.columns and df.index.name != id_col:
-        df = df.set_index(id_col)
-    
-    # Extract outcome series and apply custom parsing
-    outcome_series = df[outcome_col]
-    parsed_outcome = custom_parse_outcome(outcome_series, outcome_type)
-    
-    # Handle NaN values
-    if parsed_outcome.isna().all():
-        logger.warning(f"Warning: All outcome values are NaN in {outcome_file}")
-        return None, None
-    
-    # Ensure that index (sample IDs) are strings
-    df.index = df.index.astype(str)
-    parsed_outcome.index = parsed_outcome.index.astype(str)
-    
-    # Debug information
-    logger.info(f"Loaded outcomes for {len(parsed_outcome)} samples, sample IDs: {parsed_outcome.index[:5]}...")
-    
-    # Return both the parsed outcome series and the full DataFrame
-    return parsed_outcome, df
 
-def load_dataset(ds_conf: Dict[str, Any]) -> Optional[Tuple[Dict[str, pd.DataFrame], List[str], np.ndarray]]:
+def normalize_sample_ids(sample_ids: List[str], target_separator: str = '-') -> Dict[str, str]:
     """
-    Load a complete dataset with all modalities and outcomes.
+    Normalize sample IDs to use a consistent separator format.
     
     Parameters
     ----------
-    ds_conf         Dataset configuration dictionary
-    
+    sample_ids : List[str]
+        List of sample IDs to normalize
+    target_separator : str
+        Target separator to use (default: '-')
+        
     Returns
     -------
-    Tuple of (modalities dict, common_ids list, y array) or None
+    Dict[str, str]
+        Mapping from original ID to normalized ID
     """
-    # Extract configuration values
-    ds_name = ds_conf["name"]
-    base_path = ds_conf["base_path"]
-    modality_paths = ds_conf["modalities"]
-    outcome_file = ds_conf["outcome_file"]
-    outcome_col = ds_conf["outcome_col"]
-    id_col = ds_conf["id_col"]
-    outcome_type = ds_conf.get("outcome_type", "os")
+    id_mapping = {}
     
-    # Load outcome data
-    y_series, outcome_df = load_outcome(base_path, outcome_file, outcome_col, id_col, outcome_type)
-    if y_series is None:
-        logger.error(f"Error: Failed to load outcome data for {ds_name}")
-        return None
-    
-    # Load all modalities
-    modalities = {}
-    for mod_name, mod_path in modality_paths.items():
-        df = load_modality(base_path, mod_path, mod_name)
-        if df is not None and not df.empty:
-            # Standardize sample IDs if needed (e.g., TCGA IDs)
-            if ds_conf.get("fix_tcga_ids", False):
-                # Get original column names
-                orig_cols = df.columns.tolist()
-                # Fix IDs
-                fixed_cols = fix_tcga_id_slicing(orig_cols)
-                # Create mapping from original to fixed
-                col_map = {orig: fixed for orig, fixed in zip(orig_cols, fixed_cols)}
-                # Rename columns
-                df = df.rename(columns=col_map)
+    for sample_id in sample_ids:
+        if not isinstance(sample_id, str):
+            continue
             
-            modalities[mod_name] = df
-        else:
-            logger.warning(f"Warning: Failed to load modality {mod_name} for {ds_name}")
+        # Replace common separators with target separator
+        normalized_id = sample_id
+        for sep in ['.', '_', ' ', '+']:
+            if sep != target_separator:
+                normalized_id = normalized_id.replace(sep, target_separator)
+        
+        # Only add to mapping if there was a change
+        if normalized_id != sample_id:
+            id_mapping[sample_id] = normalized_id
     
-    # Check if we have at least one modality
-    if not modalities:
-        logger.error(f"Error: No valid modalities found for {ds_name}")
-        return None
+    return id_mapping
+
+def enhanced_sample_recovery(modalities: Dict[str, pd.DataFrame], 
+                           y_series: pd.Series, 
+                           ds_name: str,
+                           current_common_ids: List[str]) -> Tuple[List[str], Dict[str, pd.DataFrame]]:
+    """
+    Enhanced sample recovery using aggressive ID matching strategies.
     
-    # For each modality, normalize column names to strings
-    for mod_name, df in modalities.items():
-        modalities[mod_name].columns = modalities[mod_name].columns.astype(str)
+    Parameters
+    ----------
+    modalities : Dict[str, pd.DataFrame]
+        Dictionary of modality DataFrames
+    y_series : pd.Series
+        Outcome data series
+    ds_name : str
+        Dataset name for logging
+    current_common_ids : List[str]
+        Currently identified common sample IDs
+        
+    Returns
+    -------
+    Tuple[List[str], Dict[str, pd.DataFrame]]
+        (enhanced_common_sample_ids, enhanced_filtered_modalities)
+    """
+    logger.info("=== ENHANCED SAMPLE RECOVERY ===")
     
-    # Ensure outcome index is string type
-    outcome_df.index = outcome_df.index.astype(str)
-    y_series.index = y_series.index.astype(str)
+    # Start with outcome samples not yet recovered
+    outcome_samples = set(y_series.index)
+    missing_samples = outcome_samples - set(current_common_ids)
+    logger.info(f"Attempting to recover {len(missing_samples)} missing samples")
     
-    # Find common sample IDs across all modalities and the outcome data
-    common_ids = set(outcome_df.index)
-    logger.info(f"Starting with {len(common_ids)} samples from outcome data")
+    if not missing_samples:
+        return current_common_ids, modalities
+    
+    # Enhanced ID standardization strategies
+    recovered_samples = set(current_common_ids)
+    enhanced_modalities = {}
     
     for mod_name, df in modalities.items():
         mod_samples = set(df.columns)
+        enhanced_df = df.copy()
+        
+        # Strategy 1: More aggressive separator normalization
+        id_mapping = {}
+        for missing_id in missing_samples:
+            # Try different separator combinations
+            for sep_combo in [('.', '-'), ('-', '.'), ('_', '-'), ('-', '_')]:
+                test_id = missing_id.replace(sep_combo[0], sep_combo[1])
+                if test_id in mod_samples:
+                    id_mapping[test_id] = missing_id
+                    logger.debug(f"Separator recovery: {test_id} -> {missing_id}")
+                    break
+        
+        # Strategy 2: Partial ID matching (first 12 characters for TCGA IDs)
+        for missing_id in missing_samples:
+            if missing_id in id_mapping.values():
+                continue  # Already mapped
+            missing_prefix = missing_id[:12]  # TCGA-XX-XXXX
+            for mod_id in mod_samples:
+                if mod_id in id_mapping:
+                    continue  # Already mapped
+                mod_prefix = mod_id[:12].replace('.', '-').replace('_', '-')
+                if missing_prefix == mod_prefix:
+                    id_mapping[mod_id] = missing_id
+                    logger.debug(f"Prefix recovery: {mod_id} -> {missing_id}")
+                    break
+        
+        # Strategy 3: Case-insensitive matching
+        if not id_mapping:
+            missing_lower = {mid.lower(): mid for mid in missing_samples}
+            for mod_id in mod_samples:
+                mod_lower = mod_id.lower().replace('.', '-').replace('_', '-')
+                if mod_lower in missing_lower:
+                    id_mapping[mod_id] = missing_lower[mod_lower]
+                    logger.debug(f"Case recovery: {mod_id} -> {missing_lower[mod_lower]}")
+        
+        # Apply ID mapping
+        if id_mapping:
+            enhanced_df = enhanced_df.rename(columns=id_mapping)
+            logger.info(f"Enhanced recovery for {mod_name}: +{len(id_mapping)} samples")
+        
+        enhanced_modalities[mod_name] = enhanced_df
+    
+    # Recalculate intersection with enhanced modalities
+    enhanced_common = set(y_series.index)
+    for mod_name, df in enhanced_modalities.items():
+        enhanced_common = enhanced_common.intersection(set(df.columns))
+    
+    # Filter modalities to enhanced common samples
+    final_enhanced_modalities = {}
+    for mod_name, df in enhanced_modalities.items():
+        available_samples = [col for col in enhanced_common if col in df.columns]
+        if available_samples:
+            final_enhanced_modalities[mod_name] = df[available_samples]
+    
+    enhanced_common_list = sorted(list(enhanced_common))
+    
+    logger.info(f"Enhanced recovery result: {len(current_common_ids)} -> {len(enhanced_common_list)} samples")
+    
+    return enhanced_common_list, final_enhanced_modalities
+
+def optimize_sample_intersection(modalities: Dict[str, pd.DataFrame], 
+                                y_series: pd.Series, 
+                                ds_name: str) -> Tuple[List[str], Dict[str, pd.DataFrame]]:
+    """
+    Optimize sample intersection with enhanced recovery strategies.
+    
+    Parameters
+    ----------
+    modalities : Dict[str, pd.DataFrame]
+        Dictionary of modality DataFrames
+    y_series : pd.Series
+        Outcome data series
+    ds_name : str
+        Dataset name for logging
+        
+    Returns
+    -------
+    Tuple[List[str], Dict[str, pd.DataFrame]]
+        (common_sample_ids, filtered_modalities)
+    """
+    logger.info("=== OPTIMIZED SAMPLE INTERSECTION ANALYSIS ===")
+    
+    # Start with outcome samples
+    common_ids = set(y_series.index)
+    original_outcome_samples = len(common_ids)
+    logger.info(f"Starting with {original_outcome_samples} samples from outcome data")
+    
+    # Track intersection statistics
+    intersection_stats = {
+        'outcome_samples': original_outcome_samples,
+        'modality_samples': {},
+        'intersection_steps': [],
+        'recovery_attempts': []
+    }
+    
+    # Analyze each modality intersection with recovery strategies
+    for mod_name, df in modalities.items():
+        mod_samples = set(df.columns)
+        intersection_stats['modality_samples'][mod_name] = len(mod_samples)
+        
+        logger.info(f"Processing {mod_name}: {len(mod_samples)} samples")
+        if len(df.columns) > 0:
+            logger.debug(f"First 5 {mod_name} samples: {list(df.columns)[:5]}")
+        
         common_before = len(common_ids)
-        common_ids = common_ids.intersection(mod_samples)
-        logger.info(f"After intersecting with {mod_name} ({len(mod_samples)} samples): {len(common_ids)} common samples")
+        common_ids_new = common_ids.intersection(mod_samples)
+        lost_samples = common_ids - common_ids_new
         
-        if common_before > 0 and len(common_ids) == 0:
-            # Print more details to diagnose the issue
-            logger.info(f"  Sample IDs in outcome data: {list(outcome_df.index)[:5]}")
-            logger.info(f"  Sample IDs in {mod_name}: {list(df.columns)[:5]}")
-    
-    # Check if we have enough common samples
-    if len(common_ids) < 10:
-        logger.warning(f"Warning: Only {len(common_ids)} common samples found for {ds_name}, may be insufficient")
-    
-    # Convert to sorted list
-    common_ids = sorted(list(common_ids))
-    
-    # Extract aligned outcome values
-    try:
-        y_aligned = y_series.loc[common_ids].values
+        intersection_stats['intersection_steps'].append({
+            'modality': mod_name,
+            'before': common_before,
+            'after': len(common_ids_new),
+            'lost': len(lost_samples)
+        })
         
-        # Print diagnostic information
-        logger.info(f"Successfully aligned {len(y_aligned)} samples for {ds_name}")
-        if len(y_aligned) > 0:
-            logger.info(f"First few outcomes: {y_aligned[:5]}")
+        logger.info(f"After intersecting with {mod_name}: {len(common_ids_new)} common samples (lost {len(lost_samples)})")
         
-        # Return the loaded dataset
-        return modalities, common_ids, y_aligned
-    except Exception as e:
-        logger.error(f"Error aligning outcome values: {str(e)}")
-        return None
+        # If we lost significant samples, try recovery strategies
+        if len(lost_samples) > 0 and len(lost_samples) / common_before > 0.1:  # Lost >10% of samples
+            logger.info(f"Attempting sample recovery for {mod_name} (lost {len(lost_samples)} samples)")
+            
+            # Strategy 1: Fuzzy matching
+            fuzzy_matches = find_fuzzy_id_matches(list(lost_samples), list(mod_samples), similarity_threshold=0.85)
+            if fuzzy_matches:
+                logger.info(f"Fuzzy matching found {len(fuzzy_matches)} recoverable samples")
+                # Update the modality DataFrame
+                reverse_mapping = {v: k for k, v in fuzzy_matches.items()}
+                df_renamed = df.rename(columns=reverse_mapping)
+                modalities[mod_name] = df_renamed
+                mod_samples = set(df_renamed.columns)
+                common_ids_new = common_ids.intersection(mod_samples)
+                intersection_stats['recovery_attempts'].append({
+                    'modality': mod_name,
+                    'method': 'fuzzy_matching',
+                    'recovered': len(fuzzy_matches)
+                })
+            
+            # Strategy 2: Pattern-based matching for remaining samples
+            remaining_lost = common_ids - common_ids_new
+            if remaining_lost:
+                pattern_matches = find_pattern_matches(list(remaining_lost), list(mod_samples))
+                if pattern_matches:
+                    logger.info(f"Pattern matching found {len(pattern_matches)} additional recoverable samples")
+                    reverse_mapping = {v: k for k, v in pattern_matches.items()}
+                    df_renamed = modalities[mod_name].rename(columns=reverse_mapping)
+                    modalities[mod_name] = df_renamed
+                    mod_samples = set(df_renamed.columns)
+                    common_ids_new = common_ids.intersection(mod_samples)
+                    intersection_stats['recovery_attempts'].append({
+                        'modality': mod_name,
+                        'method': 'pattern_matching',
+                        'recovered': len(pattern_matches)
+                    })
+        
+        common_ids = common_ids_new
+        
+        # Early termination if no samples left
+        if len(common_ids) == 0:
+            logger.error(f"No common samples remaining after {mod_name}")
+            break
+    
+    # Log recovery statistics
+    total_recovered = sum(attempt['recovered'] for attempt in intersection_stats['recovery_attempts'])
+    if total_recovered > 0:
+        logger.info(f"Sample recovery successful: {total_recovered} samples recovered across all modalities")
+    
+    # Final sample retention analysis
+    final_samples = len(common_ids)
+    retention_rate = (final_samples / original_outcome_samples) * 100 if original_outcome_samples > 0 else 0
+    
+    logger.info("=== FINAL INTERSECTION SUMMARY ===")
+    logger.info(f"Original outcome samples: {original_outcome_samples}")
+    logger.info(f"Final common samples: {final_samples}")
+    logger.info(f"Sample retention rate: {retention_rate:.1f}%")
+    
+    # Filter modalities to only include common samples
+    filtered_modalities = {}
+    for mod_name, df in modalities.items():
+        available_samples = [col for col in common_ids if col in df.columns]
+        if available_samples:
+            filtered_modalities[mod_name] = df[available_samples]
+            logger.info(f"Filtered {mod_name}: {df.shape[0]} features x {len(available_samples)} samples")
+        else:
+            logger.warning(f"No common samples found in {mod_name} - excluding from analysis")
+    
+    # Provide recommendations based on retention rate with dataset-specific handling
+    low_threshold = SAMPLE_RETENTION_CONFIG["low_retention_threshold"]
+    moderate_threshold = SAMPLE_RETENTION_CONFIG["moderate_retention_threshold"]
+    suppress_datasets = SAMPLE_RETENTION_CONFIG["suppress_warnings_for_datasets"]
+    
+    # Check if this dataset is expected to have low retention
+    is_expected_low_retention = any(dataset in ds_name.lower() for dataset in suppress_datasets)
+    
+    if retention_rate < low_threshold:
+        if is_expected_low_retention:
+            # Suppress warnings for known problematic datasets
+            logger.info(f"Sample retention: {retention_rate:.1f}% - {SAMPLE_RETENTION_CONFIG['expected_low_retention_message']}")
+            if SAMPLE_RETENTION_CONFIG["log_retention_details"]:
+                logger.debug("RETENTION DETAILS:")
+                logger.debug("1. ID format differences between clinical and expression data")
+                logger.debug("2. Malformed data files requiring repair")
+                logger.debug("3. Quality filtering and class optimization")
+        else:
+            # Show warnings for unexpected low retention
+            logger.warning("LOW SAMPLE RETENTION detected!")
+            logger.warning("RECOMMENDATIONS:")
+            logger.warning("1. Check for ID format mismatches between clinical and modality data")
+            logger.warning("2. Consider using more aggressive fuzzy matching")
+            logger.warning("3. Verify data file integrity")
+    elif retention_rate < moderate_threshold:
+        if is_expected_low_retention:
+            logger.info(f"Sample retention: {retention_rate:.1f}% - within expected range for this dataset type")
+        else:
+            logger.warning("MODERATE SAMPLE RETENTION detected!")
+            logger.info("MODERATE sample retention detected (this is normal for TCGA data)")
+            logger.info("EXPLANATION: Sample loss occurs due to:")
+            logger.info("1. ID format differences between clinical and expression data")
+            logger.info("2. Malformed data files requiring repair")
+            logger.info("3. Quality filtering and class optimization")
+            logger.info("The system has already applied advanced recovery strategies")
+    elif retention_rate >= 80:
+        logger.info("EXCELLENT sample retention achieved!")
+    
+    return sorted(list(common_ids)), filtered_modalities
+
+def optimize_class_distribution(y_series: pd.Series, 
+                               common_ids: List[str], 
+                               task_type: str = 'classification',
+                               min_class_size: int = 5) -> Tuple[pd.Series, List[str]]:
+    """
+    Optimize class distribution for better CV performance.
+    
+    Parameters
+    ----------
+    y_series : pd.Series
+        Outcome data series
+    common_ids : List[str]
+        List of common sample IDs
+    task_type : str
+        Type of task ('classification' or 'regression')
+    min_class_size : int
+        Minimum samples per class for classification
+        
+    Returns
+    -------
+    Tuple[pd.Series, List[str]]
+        (optimized_outcome_series, optimized_sample_ids)
+    """
+    if task_type != 'classification':
+        return y_series, common_ids
+    
+    # Filter to common samples
+    y_filtered = y_series.loc[common_ids]
+    class_counts = y_filtered.value_counts()
+    
+    logger.info(f"Original class distribution: {class_counts.to_dict()}")
+    
+    # Identify classes with insufficient samples
+    small_classes = class_counts[class_counts < min_class_size].index.tolist()
+    
+    if not small_classes:
+        logger.info("All classes have sufficient samples for CV")
+        return y_filtered, common_ids
+    
+    logger.info(f"Classes with <{min_class_size} samples: {small_classes}")
+    
+    # Strategy 1: Merge similar classes if possible
+    merged_classes = {}
+    for small_class in small_classes:
+        # For pathologic_T, merge similar stages
+        if isinstance(small_class, str) and 'T' in small_class:
+            # Extract base T stage (T1, T2, T3, T4)
+            base_stage = re.match(r'(T[0-4])', small_class)
+            if base_stage:
+                base = base_stage.group(1)
+                if base not in merged_classes:
+                    merged_classes[base] = []
+                merged_classes[base].append(small_class)
+    
+    # Apply merging
+    y_optimized = y_filtered.copy()
+    samples_to_keep = set(common_ids)
+    
+    for base_class, sub_classes in merged_classes.items():
+        if len(sub_classes) > 1:
+            # Merge sub-classes into base class
+            for sub_class in sub_classes:
+                y_optimized = y_optimized.replace(sub_class, base_class)
+            logger.info(f"Merged {sub_classes} -> {base_class}")
+    
+    # Strategy 2: Remove classes that are still too small after merging
+    updated_counts = y_optimized.value_counts()
+    still_small = updated_counts[updated_counts < min_class_size].index.tolist()
+    
+    if still_small:
+        logger.info(f"Removing classes with <{min_class_size} samples: {still_small}")
+        samples_to_remove = y_optimized[y_optimized.isin(still_small)].index
+        samples_to_keep = samples_to_keep - set(samples_to_remove)
+        y_optimized = y_optimized.drop(samples_to_remove)
+    
+    final_counts = y_optimized.value_counts()
+    logger.info(f"Optimized class distribution: {final_counts.to_dict()}")
+    logger.info(f"Samples retained: {len(y_optimized)}/{len(y_filtered)} ({len(y_optimized)/len(y_filtered)*100:.1f}%)")
+    
+    return y_optimized, sorted(list(samples_to_keep))
+
+def load_dataset(ds_name: str, modalities: List[str], outcome_col: str, 
+                 task_type: str = 'classification', 
+                 parallel: bool = True, 
+                 use_cache: bool = True) -> Tuple[Dict[str, pd.DataFrame], pd.Series, List[str]]:
+    """
+    Load dataset with comprehensive optimizations for all cancer types.
+    Enhanced with parallel processing and caching for maximum performance.
+    
+    Parameters
+    ----------
+    ds_name : str
+        Dataset name (e.g., 'colon', 'breast', 'kidney', etc.)
+    modalities : List[str]
+        List of modality names to load
+    outcome_col : str
+        Name of the outcome column
+    task_type : str
+        Type of task ('classification' or 'regression')
+    parallel : bool
+        Whether to use parallel processing for loading modalities
+    use_cache : bool
+        Whether to use caching for faster repeated loads
+        
+    Returns
+    -------
+    Tuple[Dict[str, pd.DataFrame], pd.Series, List[str]]
+        (modality_data, outcome_series, common_sample_ids)
+    """
+    logger.info(f"=== LOADING DATASET: {ds_name.upper()} ===")
+    logger.info(f"Modalities: {modalities}")
+    logger.info(f"Outcome column: {outcome_col}")
+    logger.info(f"Task type: {task_type}")
+    
+    # Load clinical data first
+    clinical_path = Path(f"data/clinical/{ds_name}.csv")
+    if not clinical_path.exists():
+        raise FileNotFoundError(f"Clinical data not found: {clinical_path}")
+    
+    logger.info(f"Loading clinical data from: {clinical_path}")
+    
+    # Try different parsing strategies for complex clinical files
+    clinical_df = None
+    parsing_strategies = [
+        # Strategy 1: Standard parsing with error handling
+        {'sep': '\t', 'index_col': 0, 'low_memory': False, 'on_bad_lines': 'skip'},
+        # Strategy 2: Comma-separated with error handling
+        {'sep': ',', 'index_col': 0, 'low_memory': False, 'on_bad_lines': 'skip'},
+        # Strategy 3: Tab-separated with quoting and error handling
+        {'sep': '\t', 'index_col': 0, 'low_memory': False, 'quoting': 1, 'on_bad_lines': 'skip'},
+        # Strategy 4: Auto-detect separator with error handling
+        {'sep': None, 'engine': 'python', 'index_col': 0, 'low_memory': False, 'on_bad_lines': 'skip'},
+        # Strategy 5: Tab-separated without index column initially
+        {'sep': '\t', 'low_memory': False, 'on_bad_lines': 'skip'},
+        # Strategy 6: Force tab separation with minimal validation
+        {'sep': '\t', 'low_memory': False, 'on_bad_lines': 'warn', 'error_bad_lines': False},
+    ]
+    
+    for i, strategy in enumerate(parsing_strategies):
+        try:
+            logger.debug(f"Trying parsing strategy {i+1}...")
+            clinical_df = pd.read_csv(clinical_path, **strategy)
+            
+            # If no index_col was set, use first column as index
+            if 'index_col' not in strategy:
+                clinical_df = clinical_df.set_index(clinical_df.columns[0])
+            
+            # Validate that we have reasonable data
+            if clinical_df.shape[0] > 0 and clinical_df.shape[1] > 0:
+                logger.info(f"Successfully parsed clinical data with strategy {i+1}")
+                logger.info(f"Clinical data shape: {clinical_df.shape}")
+                break
+            else:
+                logger.debug(f"Strategy {i+1} produced empty data, trying next strategy")
+                clinical_df = None
+                continue
+            
+        except Exception as e:
+            logger.debug(f"Strategy {i+1} failed: {str(e)}")
+            continue
+    
+    # Final fallback for severely malformed files
+    if clinical_df is None:
+        logger.warning("All standard parsing strategies failed, attempting manual repair...")
+        try:
+            # Try to manually fix the file by reading as text and reconstructing
+            with open(clinical_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            if len(lines) < 2:
+                raise ValueError(f"Clinical file has insufficient data: {clinical_path}")
+            
+            # Get header line and try to parse it
+            header_line = lines[0].strip()
+            # Split by tab first, then by other separators if needed
+            if '\t' in header_line:
+                headers = header_line.split('\t')
+            elif ',' in header_line:
+                headers = header_line.split(',')
+            else:
+                headers = header_line.split()
+            
+            logger.info(f"Detected {len(headers)} columns in clinical data header")
+            
+            # Try to parse data lines with flexible approach
+            data_rows = []
+            for line_num, line in enumerate(lines[1:], 2):
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Try different separators
+                for sep in ['\t', ',', ' ']:
+                    parts = line.split(sep)
+                    if len(parts) >= len(headers) * 0.5:  # At least 50% of expected columns
+                        # Pad or truncate to match header length
+                        if len(parts) < len(headers):
+                            parts.extend([''] * (len(headers) - len(parts)))
+                        elif len(parts) > len(headers):
+                            parts = parts[:len(headers)]
+                        data_rows.append(parts)
+                        break
+                else:
+                    # If no separator works well, skip this line
+                    logger.debug(f"Skipping malformed line {line_num}")
+                    continue
+            
+            if data_rows:
+                # Create DataFrame from parsed data
+                clinical_df = pd.DataFrame(data_rows, columns=headers)
+                # Set first column as index if it looks like sample IDs
+                if headers[0].lower() in ['sampleid', 'sample_id', 'id', 'patient_id']:
+                    clinical_df = clinical_df.set_index(headers[0])
+                
+                logger.info(f"Manual repair successful: {clinical_df.shape}")
+            else:
+                raise ValueError("No valid data rows found after manual repair")
+                
+        except Exception as e:
+            logger.error(f"Manual repair also failed: {str(e)}")
+            raise ValueError(f"Failed to parse clinical data file: {clinical_path}")
+    
+    if clinical_df is None or clinical_df.empty:
+        raise ValueError(f"Failed to parse clinical data file: {clinical_path}")
+    
+    logger.info(f"Clinical data columns: {list(clinical_df.columns)[:10]}...")  # Show first 10
+    
+    # Extract outcome data
+    if outcome_col not in clinical_df.columns:
+        available_cols = list(clinical_df.columns)
+        logger.error(f"Outcome column '{outcome_col}' not found in clinical data")
+        logger.error(f"Available columns: {available_cols[:10]}...")  # Show first 10
+        raise KeyError(f"Outcome column '{outcome_col}' not found")
+    
+    y_series = clinical_df[outcome_col].copy()
+    logger.info(f"Outcome data shape: {y_series.shape}")
+    logger.info(f"Outcome value counts: {y_series.value_counts().to_dict()}")
+    
+    # Remove samples with missing outcomes
+    valid_outcome_mask = y_series.notna()
+    y_series = y_series[valid_outcome_mask]
+    clinical_samples = set(y_series.index)
+    logger.info(f"Samples with valid outcomes: {len(clinical_samples)}")
+    
+    # Load modality data with enhanced error handling and optional parallel processing
+    modality_data = {}
+    intersection_stats = {
+        'initial_clinical_samples': len(clinical_samples),
+        'modality_samples': {},
+        'lost_samples': {},
+        'recovery_attempts': {}
+    }
+    
+    def load_single_modality(mod_name: str) -> Tuple[str, Optional[pd.DataFrame]]:
+        """Helper function for parallel modality loading."""
+        try:
+            logger.info(f"Loading {mod_name} modality...")
+            base_path = Path("data")
+            modality_path = f"{ds_name}/{mod_name}.csv"
+            mod_df = load_modality(base_path, modality_path, mod_name, use_cache=use_cache)
+            
+            if mod_df is None or mod_df.empty:
+                logger.warning(f"Failed to load {mod_name} modality")
+                return mod_name, None
+                
+            logger.info(f"{mod_name} modality loaded successfully: {mod_df.shape}")
+            return mod_name, mod_df
+            
+        except Exception as e:
+            logger.error(f"Error loading {mod_name} modality: {str(e)}")
+            return mod_name, None
+    
+    # Load modalities either in parallel or sequentially
+    if parallel and len(modalities) > 1:
+        logger.info(f"Loading {len(modalities)} modalities in parallel...")
+        with ThreadPoolExecutor(max_workers=min(len(modalities), 4)) as executor:
+            # Submit all modality loading tasks
+            future_to_modality = {
+                executor.submit(load_single_modality, mod_name): mod_name 
+                for mod_name in modalities
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_modality):
+                mod_name, mod_df = future.result()
+                if mod_df is not None:
+                    modality_data[mod_name] = mod_df
+                    mod_samples = set(mod_df.columns)
+                    intersection_stats['modality_samples'][mod_name] = len(mod_samples)
+                    logger.info(f"[OK] {mod_name}: {mod_df.shape[0]} features x {len(mod_samples)} samples")
+    else:
+        # Sequential loading for single modality or when parallel is disabled
+        for mod_name in modalities:
+            logger.info(f"\\n--- Loading {mod_name} modality ---")
+            mod_name_result, mod_df = load_single_modality(mod_name)
+            if mod_df is not None:
+                modality_data[mod_name] = mod_df
+                mod_samples = set(mod_df.columns)
+                intersection_stats['modality_samples'][mod_name] = len(mod_samples)
+    
+    if not modality_data:
+        raise ValueError("No modalities were successfully loaded")
+    
+    # Optimize sample intersection with enhanced recovery
+    common_ids, filtered_modalities = optimize_sample_intersection(
+        modality_data, y_series, ds_name
+    )
+    
+    # Final validation and statistics
+    logger.info(f"\\n=== FINAL DATASET STATISTICS ===")
+    logger.info(f"Common samples found: {len(common_ids)}")
+    logger.info(f"Modalities loaded: {list(filtered_modalities.keys())}")
+    
+    # Calculate retention rate
+    initial_samples = intersection_stats['initial_clinical_samples']
+    retention_rate = (len(common_ids) / initial_samples) * 100 if initial_samples > 0 else 0
+    logger.info(f"Sample retention rate: {retention_rate:.1f}%")
+    
+    # Optimize class distribution for better CV performance
+    logger.info(f"\\n=== CLASS DISTRIBUTION OPTIMIZATION ===")
+    y_optimized, optimized_ids = optimize_class_distribution(
+        y_series, common_ids, task_type, min_class_size=5
+    )
+    
+    # Update modalities to match optimized sample set
+    if len(optimized_ids) != len(common_ids):
+        logger.info(f"Updating modalities to match optimized sample set: {len(optimized_ids)} samples")
+        for mod_name in filtered_modalities:
+            available_samples = [col for col in optimized_ids if col in filtered_modalities[mod_name].columns]
+            filtered_modalities[mod_name] = filtered_modalities[mod_name][available_samples]
+        common_ids = optimized_ids
+    
+    # CRITICAL FIX: Filter outcome data to match common_ids exactly
+    y_filtered = y_optimized.loc[common_ids]
+    logger.info(f"Final outcome data filtered to {len(y_filtered)} samples matching common_ids")
+    logger.info(f"Final outcome distribution: {y_filtered.value_counts().to_dict()}")
+    
+    # CRITICAL FIX: Convert string labels to numeric for classification
+    if task_type == 'classification' and y_filtered.dtype == 'object':
+        logger.info("Converting string class labels to numeric labels for classification")
+        unique_classes = sorted(y_filtered.unique())
+        label_mapping = {class_label: idx for idx, class_label in enumerate(unique_classes)}
+        y_filtered = y_filtered.map(label_mapping)
+        logger.info(f"Label mapping: {label_mapping}")
+        logger.info(f"Converted to numeric labels: {y_filtered.value_counts().to_dict()}")
+    
+    # Validate data consistency
+    if len(y_filtered) != len(common_ids):
+        logger.error(f"CRITICAL ERROR: Outcome data length ({len(y_filtered)}) != common_ids length ({len(common_ids)})")
+        raise ValueError(f"Data consistency error: outcome and sample ID lengths don't match")
+    
+    # Validate for task type
+    if task_type == 'classification':
+        unique_classes = y_filtered.nunique()
+        min_class_size = y_filtered.value_counts().min()
+        logger.info(f"Classification validation: {unique_classes} classes, min class size: {min_class_size}")
+        
+        if unique_classes < 2:
+            logger.warning(f"Only {unique_classes} unique class(es) found - may cause issues")
+        elif min_class_size >= 5:
+            logger.info(f"All classes have >=5 samples - excellent for CV!")
+        elif min_class_size >= 2:
+            logger.info(f"All classes have >=2 samples - good for CV")
+        else:
+            logger.warning(f"Minimum class size is {min_class_size} - may cause CV issues")
+    
+    elif task_type == 'regression':
+        y_stats = y_filtered.describe()
+        logger.info(f"Regression validation - Target stats: mean={y_stats['mean']:.3f}, std={y_stats['std']:.3f}")
+    
+    logger.info(f"=== DATASET {ds_name.upper()} LOADED SUCCESSFULLY ===")
+    
+    return filtered_modalities, y_filtered, common_ids
 
 def save_results(results_df: pd.DataFrame, output_dir: Union[str, Path], filename: str) -> None:
     """

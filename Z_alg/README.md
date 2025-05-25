@@ -1,6 +1,86 @@
-# Multi-modal Machine Learning Pipeline
+# Z_alg: Multi-Modal Analysis Pipeline
 
-This package contains a modular machine learning pipeline for processing multi-modal omics data. It includes components for data loading, preprocessing, feature extraction, feature selection, model training, and evaluation.
+This repository contains a pipeline for multi-modal data analysis, particularly focused on integrating multiple omics data types for predictive modeling tasks.
+
+## Recent Improvements
+
+### Enhanced Data Loading Capabilities
+
+The data loading pipeline has been significantly improved to handle various file formats and inconsistencies in sample identifiers:
+
+1. **Robust file loading**: 
+   - Multiple delimiters (`,`, `\t`, ` `, `;`) are automatically detected
+   - Multiple encodings are tried automatically (utf-8, latin1, iso-8859-1, cp1252)
+   - Improved error handling and detailed logging
+
+2. **Sample ID Standardization**:
+   - Automatic detection of sample ID format differences between modalities
+   - Standardization of IDs using consistent separators (converting between hyphens, dots, underscores)
+   - Fallback mechanisms for more complex ID matching when simple replacement fails
+   - Added `normalize_sample_ids` utility function for consistent ID handling
+
+3. **Improved Error Handling**:
+   - More robust handling of edge cases like numpy arrays without isna() method
+   - Better error reporting and diagnostic logging
+   - Graceful failure with informative error messages
+
+### Usage
+
+To run the pipeline with default settings:
+
+```bash
+python -m Z_alg.main
+```
+
+To specify a specific dataset:
+
+```bash
+python -m Z_alg.cli --dataset AML
+```
+
+### Available Datasets
+
+- AML: Acute Myeloid Leukemia dataset with gene expression, miRNA, and methylation data
+- Colon: Colon cancer dataset with gene expression, miRNA, and methylation data
+- (Additional datasets are available but commented out in the config file)
+
+## Configuration
+
+Dataset configurations are defined in `config.py`. Each dataset requires:
+
+- Base path
+- Modality paths (paths to each omics data file)
+- Outcome file path
+- Outcome column name
+- ID column name
+- Outcome type (continuous/class)
+
+Example configuration:
+
+```python
+DatasetConfig(
+    name="AML",
+    base_path="data/aml",
+    modalities={
+        "Gene Expression": "exp.csv",
+        "miRNA": "mirna.csv",
+        "Methylation": "methy.csv"
+    },
+    outcome_file="data/clinical/aml.csv",
+    outcome_col="lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
+    id_col="sampleID",
+    outcome_type="continuous",
+    fix_tcga_ids=True
+)
+```
+
+## Dependencies
+
+- Python 3.6+
+- pandas
+- numpy
+- scikit-learn
+- joblib (for parallelization)
 
 ## Structure
 
@@ -77,18 +157,6 @@ The package includes automated tests in the `tests/` directory. Run the tests wi
 cd Z_alg
 pytest
 ```
-
-## Dependencies
-
-- Python 3.6+
-- NumPy
-- Pandas
-- Scikit-learn
-- Matplotlib
-- Seaborn
-- Joblib
-- Threadpoolctl
-- BorutaPy
 
 ## License
 
