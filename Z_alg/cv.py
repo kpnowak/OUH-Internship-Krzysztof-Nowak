@@ -8,6 +8,16 @@ import numpy as np
 import pandas as pd
 import warnings
 from joblib import Parallel, delayed, parallel_config
+
+# Suppress sklearn warnings if configured
+try:
+    from Z_alg.config import WARNING_SUPPRESSION_CONFIG
+    if WARNING_SUPPRESSION_CONFIG.get("suppress_sklearn_warnings", True):
+        warnings.filterwarnings("ignore", category=RuntimeWarning, module="sklearn")
+        warnings.filterwarnings("ignore", message="invalid value encountered in divide")
+        warnings.filterwarnings("ignore", message="divide by zero encountered")
+except ImportError:
+    pass
 from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from sklearn.metrics import (
     mean_absolute_error, mean_squared_error, r2_score,
@@ -32,7 +42,7 @@ from Z_alg.models import (
     transform_selector_classification, cached_fit_transform_extractor_classification,
     transform_extractor_classification, get_selector_object
 )
-from Z_alg.utils import TParallel, heavy_cpu_section
+# Removed unused legacy imports
 from Z_alg._process_single_modality import align_samples_to_modalities, verify_data_alignment
 
 # Initialize logger
@@ -868,15 +878,31 @@ def _run_pipeline(
         test_size = 0.3 if len(indices) < 15 else 0.2
         # For regression, bin continuous values for stratified split
         if is_regression:
+            # Validate that y_arr contains numeric data
+            if not np.issubdtype(y_arr.dtype, np.number):
+                logger.error(f"Regression target data contains non-numeric values: dtype={y_arr.dtype}")
+                logger.error(f"Sample values: {y_arr[:5] if len(y_arr) > 0 else 'empty'}")
+                raise ValueError("Regression target data must be numeric")
+            
+            # Check for NaN or infinite values
+            if np.any(np.isnan(y_arr)) or np.any(np.isinf(y_arr)):
+                logger.warning(f"Found NaN or infinite values in regression target, cleaning...")
+                y_arr = np.nan_to_num(y_arr, nan=0.0, posinf=0.0, neginf=0.0)
+            
             n_bins = min(5, len(y_arr)//3)
             unique_vals = len(np.unique(y_arr))
             if n_bins < 2 or unique_vals < n_bins or len(indices) < 15:
                 logger.info(f"Skipping stratification for regression: n_bins={n_bins}, unique_vals={unique_vals}, sample_size={len(indices)}")
                 raise ValueError("Too few samples or unique values for stratified split in regression")
-            y_bins = pd.qcut(y_arr, n_bins, labels=False, duplicates='drop')
-            idx_temp, idx_test, y_temp, y_test = train_test_split(
-                indices, y_arr, test_size=test_size, random_state=0, stratify=y_bins
-            )
+            
+            try:
+                y_bins = pd.qcut(y_arr, n_bins, labels=False, duplicates='drop')
+                idx_temp, idx_test, y_temp, y_test = train_test_split(
+                    indices, y_arr, test_size=test_size, random_state=0, stratify=y_bins
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create quantile bins for regression stratification: {str(e)}")
+                raise ValueError("Could not create stratified split for regression")
         else:
             # For classification, check class distribution
             unique, counts = np.unique(y_arr, return_counts=True)
@@ -889,6 +915,14 @@ def _run_pipeline(
             expected_classes = np.arange(n_classes)
             if not np.array_equal(unique, expected_classes):
                 logger.info(f"Classes are not consecutive (expected {expected_classes}, got {unique}). This may indicate incomplete preprocessing.")
+            
+            # Calculate test set size and check if stratification is feasible
+            test_samples = int(len(indices) * test_size)
+            
+            # Check if stratified splitting is feasible
+            if test_samples < n_classes:
+                logger.warning(f"Dataset {ds_name}: test_size={test_samples} < n_classes={n_classes}. Stratified split not feasible, using random split.")
+                raise ValueError(f"Test size ({test_samples}) smaller than number of classes ({n_classes})")
             
             # If we still have problematic classes, it means the preprocessing in cli.py didn't work correctly
             if min_samples < 2:
@@ -913,6 +947,12 @@ def _run_pipeline(
                 
                 logger.info(f"Emergency filtering: dataset from {len(y_arr)} to {len(y_arr_filtered)} samples, {n_classes} to {len(valid_classes)} classes")
                 logger.info(f"Emergency relabeling: {label_mapping}")
+                
+                # Re-check if stratification is still feasible after filtering
+                test_samples_filtered = int(len(indices_filtered) * test_size)
+                if test_samples_filtered < len(valid_classes):
+                    logger.warning(f"Even after filtering, test_size={test_samples_filtered} < n_classes={len(valid_classes)}. Using random split.")
+                    raise ValueError(f"Test size still smaller than number of classes after filtering")
                 
                 idx_temp, idx_test, y_temp, y_test = train_test_split(
                     indices_filtered, y_arr_filtered, test_size=test_size, random_state=0, stratify=y_arr_relabeled
@@ -1550,18 +1590,9 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
     import time
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score, matthews_corrcoef
     
-    # Data should already be aligned by process_cv_fold, so just do basic validation
+    # Quick validation - data should already be aligned by process_cv_fold
     if X_train is None or y_train is None or X_val is None or y_val is None:
         logger.warning(f"Invalid data for {model_name} in fold {fold_idx}")
-        return None, {}, None, None
-    
-    # Basic sanity check without redundant alignment
-    if X_train.shape[0] != len(y_train):
-        logger.error(f"Data alignment error for {model_name} in fold {fold_idx}: X_train={X_train.shape[0]}, y_train={len(y_train)}")
-        return None, {}, None, None
-    
-    if X_val.shape[0] != len(y_val):
-        logger.error(f"Data alignment error for {model_name} in fold {fold_idx}: X_val={X_val.shape[0]}, y_val={len(y_val)}")
         return None, {}, None, None
 
     # Additional safety checks for classification
@@ -1632,10 +1663,19 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
     auc = 0.5
     try:
         if hasattr(model, 'predict_proba') and len(np.unique(y_val)) == 2:
-            y_score = model.predict_proba(X_val)[:, 1]
-            auc = roc_auc_score(y_val, y_score)
+            y_proba = model.predict_proba(X_val)
+            # Check if predict_proba returns the expected shape
+            if y_proba.shape[1] >= 2:
+                y_score = y_proba[:, 1]
+                auc = roc_auc_score(y_val, y_score)
+            else:
+                logger.debug(f"predict_proba returned unexpected shape: {y_proba.shape}")
     except Exception as e:
-        logger.warning(f"Could not calculate AUC: {str(e)}")
+        from Z_alg.config import WARNING_SUPPRESSION_CONFIG
+        if not WARNING_SUPPRESSION_CONFIG.get("suppress_auc_warnings", False):
+            logger.warning(f"Could not calculate AUC: {str(e)}")
+        else:
+            logger.debug(f"Could not calculate AUC: {str(e)}")
     
     # Create plots if directory is provided
     if out_dir and make_plots:

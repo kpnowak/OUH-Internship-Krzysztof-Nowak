@@ -487,58 +487,11 @@ def force_garbage_collection():
             f"[GC] Collected {collected} objects, freed {memory_freed:.1f} MB"
         )
 
-# Legacy compatibility functions
-def monitor_memory_usage_legacy(interval_seconds: int = 60, log_threshold_percent: float = 5):
-    """
-    Legacy memory monitoring function for backward compatibility.
-    
-    Parameters
-    ----------
-    interval_seconds : int
-        Monitoring interval in seconds
-    log_threshold_percent : float
-        Threshold for logging memory changes
-    """
-    logger.warning("monitor_memory_usage_legacy is deprecated. Use monitor_memory_usage instead.")
-    return monitor_memory_usage(interval_seconds, log_threshold_percent)
 
-# Legacy compatibility functions for backward compatibility
-class TParallel:
-    """
-    Legacy TParallel class for backward compatibility.
-    This class is no longer used but kept to prevent import errors.
-    """
-    
-    def __init__(self, *args, **kwargs):
-        # Legacy compatibility - silently ignore
-        pass
-    
-    def __call__(self, *args, **kwargs):
-        # Legacy compatibility - silently ignore
-        return None
-
-
-def heavy_cpu_section(*args, **kwargs):
-    """
-    Legacy heavy_cpu_section function for backward compatibility.
-    This function is no longer used but kept to prevent import errors.
-    """
-    # Legacy compatibility - silently ignore
-    return None
-
-def log_resource_usage(*args, **kwargs):
-    """
-    Legacy log_resource_usage function for backward compatibility.
-    This function is no longer used but kept to prevent import errors.
-    Use comprehensive_logger.log_memory_usage() instead.
-    """
-    # Legacy compatibility - silently ignore
-    return None
 
 # Export the comprehensive logger for use in other modules
 __all__ = [
     'comprehensive_logger', 'performance_monitor', 'memory_monitor',
     'monitor_memory_usage', 'log_dataset_info', 'log_cv_fold_info',
-    'force_garbage_collection', 'TParallel', 'heavy_cpu_section', 
-    'log_resource_usage'
+    'force_garbage_collection'
 ] 

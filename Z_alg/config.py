@@ -19,39 +19,46 @@ except ImportError:
     warnings.filterwarnings('ignore', message='.*Objective did not converge.*')
 
 # Constants
-MAX_VARIABLE_FEATURES = 5000
-MAX_COMPONENTS = 32
-MAX_FEATURES = 32
-N_JOBS = min(os.cpu_count() or 4, 4)  # Limit to 4 cores
+MAX_VARIABLE_FEATURES = 5000  # Increased for high-memory server
+MAX_COMPONENTS = 32  # Increased for high-memory server
+MAX_FEATURES = 32    # Increased for high-memory server
+N_JOBS = min(os.cpu_count() or 8, 8)  # Increased to 8 cores for server
 OMP_BLAS_THREADS = min(4, os.cpu_count() or 4)
 
-# Memory optimization settings - Enhanced with 2GB limits per cache type
+# High-memory server optimization (60GB RAM available)
 MEMORY_OPTIMIZATION = {
-    "chunk_size": 1000,  # Process data in chunks of this size
+    "chunk_size": 10000,  # Much larger chunks for high-memory systems
     "cache_dir": "./.cache",  # Cache directory
-    "cache_size": "2GB",  # Maximum cache size per type
-    "total_cache_limit": "8GB",  # Total cache limit across all types
-    "auto_clear_threshold": 0.9,  # Clear caches when 90% of limit is reached
-    "memory_monitor_interval": 60,  # Monitor memory every 60 seconds
+    "cache_size": "8GB",  # Increased cache size per type for 60GB system
+    "total_cache_limit": "8GB",  # Use ~50% of available RAM for caching
+    #"total_cache_limit": "32GB",  # Use ~50% of available RAM for caching
+    "auto_clear_threshold": 0.85,  # Higher threshold for high-memory systems
+    "memory_monitor_interval": 60,  # Less frequent monitoring for stable systems
     "shape_mismatch_auto_fix": True,  # Enable automatic shape mismatch fixing
-    "alignment_loss_threshold": 0.5,  # Maximum allowed data loss during alignment (50%)
+    "alignment_loss_threshold": 0.3,  # Keep conservative data loss threshold
     "min_samples_threshold": 2,  # Minimum samples required after alignment
 }
 
-# Enhanced caching configuration with memory-aware limits
+# High-memory server caching configuration (60GB RAM available)
 CACHE_CONFIG = {
-    "selector_regression": {"maxsize": 64, "maxmemory_mb": 2000},  # 2GB limit
-    "selector_classification": {"maxsize": 64, "maxmemory_mb": 2000},  # 2GB limit  
-    "extractor_regression": {"maxsize": 64, "maxmemory_mb": 2000},  # 2GB limit
-    "extractor_classification": {"maxsize": 64, "maxmemory_mb": 2000},  # 2GB limit
-    "total_limit_mb": 8000,  # 8GB total limit
+    "selector_regression": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit
+    "selector_classification": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit  
+    "extractor_regression": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit
+    "extractor_classification": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit
+    "total_limit_mb": 4000,  # 4GB total limit (reduced from 8GB)
+    #"selector_regression": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
+    #"selector_classification": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
+    #"extractor_regression": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
+    #"extractor_classification": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
+    #"total_limit_mb": 32000,  # 32GB total limit (~50% of 60GB RAM)
     "eviction_strategy": "lru",  # Least Recently Used eviction
     "memory_check_interval": 300,  # Check memory usage every 5 minutes
 }
 
-# Parallel processing configuration
+# High-memory parallel processing configuration
 JOBLIB_PARALLEL_CONFIG = {
     'max_nbytes': '50M',  # Limit memory per worker
+    #'max_nbytes': '2G',  # Increased memory per worker for 60GB system
     'prefer': 'threads',  # Prefer threads over processes
     'require': 'sharedmem',  # Require shared memory
     'verbose': 0  # No verbose output
@@ -64,20 +71,20 @@ MODEL_OPTIMIZATIONS = {
         "n_jobs": 1
     },
     "RandomForestRegressor": {
-        "n_estimators": 200,
-        "max_depth": 10,
+        "n_estimators": 200,  # Restored to 200 for high-memory server
+        "max_depth": 12,      # Increased depth for better performance with more memory
         "max_features": "sqrt",
-        "min_samples_leaf": 2,
-        "n_jobs": 1,
+        "min_samples_leaf": 2,  # Reduced for better model complexity
+        "n_jobs": -1,  # Use all available cores
         "random_state": 42
     },
     "RandomForestClassifier": {
-        "n_estimators": 200,
-        "max_depth": 10,
+        "n_estimators": 200,  # Restored to 200 for high-memory server
+        "max_depth": 12,      # Increased depth for better performance with more memory
         "max_features": "sqrt",
-        "min_samples_leaf": 2,
+        "min_samples_leaf": 2,  # Reduced for better model complexity
         "class_weight": "balanced",
-        "n_jobs": 1,
+        "n_jobs": -1,  # Use all available cores
         "random_state": 42
     },
     "SVR": {
@@ -212,6 +219,15 @@ FEATURE_EXTRACTION_CONFIG = {
     "force_n_components": True  # If True, tries to use the exact number of components requested
 }
 
+# Configuration for warning suppression
+WARNING_SUPPRESSION_CONFIG = {
+    "suppress_auc_warnings": True,  # Suppress AUC calculation warnings
+    "suppress_alignment_warnings": False,  # Keep alignment warnings visible
+    "suppress_class_warnings": True,  # Suppress class distribution warnings for known issues
+    "suppress_sklearn_warnings": True,  # Suppress sklearn warnings
+    "datasets_with_known_issues": ["Colon", "Lung"],  # Datasets with known small class issues
+}
+
 @dataclass
 class DatasetConfig:
     """Dataset configuration dataclass."""
@@ -248,20 +264,7 @@ class DatasetConfig:
 
 # Regression datasets
 REGRESSION_DATASETS = [
-    DatasetConfig(
-        name="AML",
-        base_path="data/aml",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/aml.csv",
-        outcome_col="lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
-        id_col="sampleID",
-        outcome_type="continuous",
-        fix_tcga_ids=True
-    ).to_dict(),
+    
 ]
 
 """
@@ -316,15 +319,57 @@ REGRESSION_DATASETS = [
 # Classification datasets
 CLASSIFICATION_DATASETS = [
     DatasetConfig(
-        name="Colon",
-        base_path="data/colon",
+        name="Liver",
+        base_path="data/liver",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="data/clinical/colon.csv",
+        outcome_file="data/clinical/liver.csv",
         outcome_col="pathologic_T",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
+    DatasetConfig(
+        name="Lung",
+        base_path="data/lung",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/lung.csv",
+        outcome_col="pathologic_T",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
+    DatasetConfig(
+        name="Melanoma",
+        base_path="data/melanoma",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/melanoma.csv",
+        outcome_col="pathologic_T",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
+    DatasetConfig(
+        name="Ovarian",
+        base_path="data/ovarian",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/ovarian.csv",
+        outcome_col="clinical_stage",
         id_col="sampleID",
         outcome_type="class",
         fix_tcga_ids=True

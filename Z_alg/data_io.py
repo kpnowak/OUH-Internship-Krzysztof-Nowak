@@ -795,13 +795,13 @@ def load_modality(base_path: Union[str, Path],
     # Apply genomic data preprocessing
     df = preprocess_genomic_data(df, modality_name)
     
-    # Optimize data types for memory efficiency
-    df = optimize_data_types(df, modality_name)
-    
-    # Variance filtering if needed
+    # Apply variance filtering BEFORE data type optimization for better memory efficiency
     if df.shape[0] > k_features:
         logger.info(f"Applying variance filtering to {modality_name}, keeping top {k_features} features")
         df = _keep_top_variable_rows(df, k=k_features)
+    
+    # Optimize data types for memory efficiency AFTER filtering
+    df = optimize_data_types(df, modality_name)
     
     # Final validation and logging
     logger.info(f"Final {modality_name} data: {df.shape[0]} features x {df.shape[1]} samples")
@@ -1576,23 +1576,59 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
     retention_rate = (len(common_ids) / initial_samples) * 100 if initial_samples > 0 else 0
     logger.info(f"Sample retention rate: {retention_rate:.1f}%")
     
-    # Optimize class distribution for better CV performance
-    logger.info(f"\\n=== CLASS DISTRIBUTION OPTIMIZATION ===")
-    y_optimized, optimized_ids = optimize_class_distribution(
-        y_series, common_ids, task_type, min_class_size=5
-    )
+    # Optimize class distribution for better CV performance (classification only)
+    if task_type == 'classification':
+        logger.info(f"\\n=== CLASS DISTRIBUTION OPTIMIZATION ===")
+        y_optimized, optimized_ids = optimize_class_distribution(
+            y_series, common_ids, task_type, min_class_size=5
+        )
+    else:
+        # For regression, just filter to common_ids
+        logger.info(f"\\n=== REGRESSION DATA FILTERING ===")
+        logger.info(f"y_series type before filtering: {type(y_series)}")
+        logger.info(f"y_series dtype before filtering: {y_series.dtype}")
+        
+        # CRITICAL DEBUG: Check if y_series is already corrupted
+        if isinstance(y_series, str):
+            logger.error(f"CRITICAL ERROR: y_series is already a string before filtering!")
+            logger.error(f"String length: {len(y_series)}")
+            logger.error(f"First 100 chars: {y_series[:100]}")
+            raise ValueError("Outcome data was corrupted before filtering - already a string")
+        
+        y_optimized = y_series.loc[common_ids]
+        optimized_ids = common_ids
+        
+        logger.info(f"y_optimized type after filtering: {type(y_optimized)}")
+        logger.info(f"y_optimized dtype after filtering: {y_optimized.dtype}")
     
-    # Update modalities to match optimized sample set
+        # Update modalities to match optimized sample set
     if len(optimized_ids) != len(common_ids):
         logger.info(f"Updating modalities to match optimized sample set: {len(optimized_ids)} samples")
         for mod_name in filtered_modalities:
             available_samples = [col for col in optimized_ids if col in filtered_modalities[mod_name].columns]
             filtered_modalities[mod_name] = filtered_modalities[mod_name][available_samples]
         common_ids = optimized_ids
-    
+
     # CRITICAL FIX: Filter outcome data to match common_ids exactly
     y_filtered = y_optimized.loc[common_ids]
     logger.info(f"Final outcome data filtered to {len(y_filtered)} samples matching common_ids")
+    
+    # CRITICAL DEBUG: Check if y_filtered is being corrupted
+    if isinstance(y_filtered, str):
+        logger.error(f"CRITICAL ERROR: y_filtered was converted to string during processing!")
+        logger.error(f"String length: {len(y_filtered)}")
+        logger.error(f"First 100 chars: {y_filtered[:100]}")
+        raise ValueError("Outcome data was corrupted - converted to string instead of Series")
+    
+    if not isinstance(y_filtered, pd.Series):
+        logger.warning(f"y_filtered is not a pandas Series, it's: {type(y_filtered)}")
+        try:
+            y_filtered = pd.Series(y_filtered, index=common_ids)
+            logger.info(f"Successfully converted to pandas Series")
+        except Exception as e:
+            logger.error(f"Failed to convert to pandas Series: {str(e)}")
+            raise ValueError("Could not convert outcome data to proper Series format")
+    
     logger.info(f"Final outcome distribution: {y_filtered.value_counts().to_dict()}")
     
     # CRITICAL FIX: Convert string labels to numeric for classification
@@ -1625,8 +1661,128 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
             logger.warning(f"Minimum class size is {min_class_size} - may cause CV issues")
     
     elif task_type == 'regression':
-        y_stats = y_filtered.describe()
-        logger.info(f"Regression validation - Target stats: mean={y_stats['mean']:.3f}, std={y_stats['std']:.3f}")
+        # CRITICAL FIX: Ensure y_filtered is a proper pandas Series, not concatenated string
+        if isinstance(y_filtered, str):
+            logger.error(f"Outcome data was incorrectly concatenated into a string. This indicates a data processing error.")
+            raise ValueError("Outcome data was corrupted during processing - received concatenated string instead of Series")
+        
+        # Ensure we have a proper pandas Series
+        if not isinstance(y_filtered, pd.Series):
+            try:
+                y_filtered = pd.Series(y_filtered, index=common_ids)
+            except Exception as e:
+                logger.error(f"Could not convert outcome data to pandas Series: {str(e)}")
+                raise ValueError("Invalid outcome data format for regression")
+        
+        # Convert outcome data to numeric, handling non-numeric values
+        y_numeric = pd.to_numeric(y_filtered, errors='coerce')
+        
+        # Check for non-numeric values that were converted to NaN
+        non_numeric_count = y_numeric.isna().sum() - y_filtered.isna().sum()
+        if non_numeric_count > 0:
+            logger.info(f"Found {non_numeric_count} pipe-separated values in regression outcome column '{outcome_col}'")
+            
+            # Get sample of non-numeric values for logging (safely)
+            non_numeric_mask = y_numeric.isna() & y_filtered.notna()
+            if non_numeric_mask.any():
+                sample_non_numeric = y_filtered[non_numeric_mask].head().tolist()
+                # Truncate very long strings for logging
+                sample_non_numeric = [str(val)[:50] + "..." if len(str(val)) > 50 else str(val) for val in sample_non_numeric]
+                logger.info(f"Sample pipe-separated values: {sample_non_numeric}")
+            
+            # Try to extract maximum numeric value from pipe-separated strings
+            def extract_max_numeric(value):
+                if pd.isna(value):
+                    return value
+                if isinstance(value, (int, float)):
+                    return value
+                if isinstance(value, str):
+                    # Handle very long concatenated strings by taking only first part
+                    if len(value) > 100:
+                        logger.warning(f"Detected very long string value (length: {len(value)}), taking first 100 characters")
+                        value = value[:100]
+                    
+                    # Split by common separators and collect all numeric values
+                    numeric_values = []
+                    for sep in ['|', ',', ';', ' ']:
+                        if sep in value:
+                            parts = value.split(sep)
+                            for part in parts:
+                                try:
+                                    numeric_val = float(part.strip())
+                                    numeric_values.append(numeric_val)
+                                except ValueError:
+                                    continue
+                            break  # Use the first separator that works
+                    
+                    # If we found numeric values, return the maximum
+                    if numeric_values:
+                        return max(numeric_values)
+                    
+                    # Try to convert the whole string as fallback
+                    try:
+                        return float(value.strip())
+                    except ValueError:
+                        return np.nan
+                return np.nan
+            
+            logger.info("Attempting to extract maximum numeric values from pipe-separated entries...")
+            y_extracted = y_filtered.apply(extract_max_numeric)
+            extracted_count = (~y_extracted.isna()).sum() - (~y_numeric.isna()).sum()
+            
+            if extracted_count > 0:
+                logger.info(f"Successfully extracted {extracted_count} additional numeric values")
+                y_numeric = y_extracted
+            
+            # Remove samples with non-numeric outcomes
+            valid_numeric_mask = y_numeric.notna()
+            if not valid_numeric_mask.all():
+                removed_count = (~valid_numeric_mask).sum()
+                logger.warning(f"Removing {removed_count} samples with non-numeric outcomes")
+                
+                # Update all data structures to match valid numeric samples
+                valid_ids = y_numeric[valid_numeric_mask].index.tolist()
+                y_filtered = y_numeric[valid_numeric_mask]
+                
+                # Update modalities to match valid samples
+                for mod_name in filtered_modalities:
+                    available_samples = [col for col in valid_ids if col in filtered_modalities[mod_name].columns]
+                    filtered_modalities[mod_name] = filtered_modalities[mod_name][available_samples]
+                
+                # Update common_ids
+                common_ids = valid_ids
+                logger.info(f"Updated dataset to {len(common_ids)} samples with valid numeric outcomes")
+            else:
+                # Even if no samples were removed, we still need to update y_filtered with the numeric version
+                y_filtered = y_numeric
+                logger.info(f"Updated y_filtered to numeric version (no samples removed)")
+        else:
+            # No non-numeric values found, but still ensure y_filtered is numeric
+            y_filtered = y_numeric
+            logger.info(f"All values were already numeric, updated y_filtered to ensure proper dtype")
+        
+        # Now calculate statistics on numeric data
+        if len(y_filtered) > 0:
+            try:
+                y_stats = y_filtered.describe()
+                # Check if we have valid statistics
+                if 'mean' in y_stats and 'std' in y_stats and not pd.isna(y_stats['mean']):
+                    logger.info(f"Regression validation - Target stats: mean={y_stats['mean']:.3f}, std={y_stats['std']:.3f}")
+                    logger.info(f"Target range: [{y_stats['min']:.3f}, {y_stats['max']:.3f}]")
+                else:
+                    # Fallback to basic statistics
+                    mean_val = y_filtered.mean() if not y_filtered.empty else 0
+                    std_val = y_filtered.std() if not y_filtered.empty else 0
+                    min_val = y_filtered.min() if not y_filtered.empty else 0
+                    max_val = y_filtered.max() if not y_filtered.empty else 0
+                    logger.info(f"Regression validation - Target stats: mean={mean_val:.3f}, std={std_val:.3f}")
+                    logger.info(f"Target range: [{min_val:.3f}, {max_val:.3f}]")
+            except Exception as e:
+                logger.warning(f"Could not calculate regression statistics: {str(e)}")
+                logger.info(f"Regression validation - {len(y_filtered)} samples loaded")
+        else:
+            logger.error("No valid numeric samples remaining for regression task")
+            raise ValueError("No valid numeric samples found for regression outcome")
     
     logger.info(f"=== DATASET {ds_name.upper()} LOADED SUCCESSFULLY ===")
     

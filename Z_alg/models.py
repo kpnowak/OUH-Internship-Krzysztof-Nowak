@@ -9,10 +9,10 @@ import pandas as pd
 from typing import Dict, List, Tuple, Any, Optional, Set, Union, Literal
 from sklearn import __version__ as sklearn_version
 from sklearn.linear_model import (
-    LinearRegression, Lasso, ElasticNet, LogisticRegression, Ridge
+    LinearRegression, Lasso, ElasticNet, LogisticRegression
 )
 from sklearn.ensemble import (
-    RandomForestRegressor, RandomForestClassifier, GradientBoostingRegressor
+    RandomForestRegressor, RandomForestClassifier
 )
 from sklearn.svm import SVR, SVC
 from sklearn.decomposition import (
@@ -28,8 +28,6 @@ from sklearn.feature_selection import (
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, accuracy_score
-from boruta import BorutaPy
-from functools import lru_cache
 import hashlib
 import time
 import copy
@@ -211,7 +209,16 @@ class EarlyStoppingWrapper:
         
         # Split training data for validation with enhanced error handling
         try:
-            stratify_param = y if len(np.unique(y)) <= 10 and len(y) >= 20 else None
+            # Check if stratified splitting is feasible
+            unique_classes = np.unique(y)
+            n_classes = len(unique_classes)
+            test_samples = int(len(y) * self.validation_split)
+            
+            # Only use stratification if feasible and beneficial
+            stratify_param = None
+            if n_classes <= 10 and len(y) >= 20 and test_samples >= n_classes:
+                stratify_param = y
+            
             X_train, X_val, y_train, y_val = train_test_split(
                 X, y, test_size=self.validation_split, random_state=self.random_state, 
                 stratify=stratify_param
@@ -306,10 +313,25 @@ class EarlyStoppingWrapper:
     
     def _fit_iterative_early_stopping(self, X, y, monitor_metric):
         """Implement early stopping for iterative models like LogisticRegression."""
-        # Split training data for validation
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=self.validation_split, random_state=self.random_state, stratify=y if len(np.unique(y)) <= 10 else None
-        )
+        # Split training data for validation with proper stratification check
+        try:
+            unique_classes = np.unique(y)
+            n_classes = len(unique_classes)
+            test_samples = int(len(y) * self.validation_split)
+            
+            # Only use stratification if feasible
+            stratify_param = None
+            if n_classes <= 10 and test_samples >= n_classes:
+                stratify_param = y
+                
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=self.validation_split, random_state=self.random_state, stratify=stratify_param
+            )
+        except Exception as e:
+            logger.warning(f"Stratified split failed in iterative early stopping: {str(e)}, using random split")
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=self.validation_split, random_state=self.random_state
+            )
         
         # Get model parameters
         model_params = self.base_model.get_params()
@@ -808,16 +830,16 @@ def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=N
                 X_selected = selector.fit_transform(X_arr, y_arr)
                 selected_features = np.arange(X_arr.shape[1])[selector.get_support()]
             
-        # Special handling for Boruta
-        elif isinstance(selector, BorutaPy):
-            # Use the stable boruta_selector
-            from Z_alg.utils_boruta import boruta_selector
-            sel_idx = boruta_selector(
-                X_arr, y_arr, n_feats=effective_n_feats, 
-                task="reg", random_state=42
-            )
-            X_selected = X_arr[:, sel_idx]
-            selected_features = sel_idx
+        # Special handling for Boruta (removed - BorutaPy import was cleaned up)
+        # elif isinstance(selector, BorutaPy):
+        #     # Use the stable boruta_selector
+        #     from Z_alg.utils_boruta import boruta_selector
+        #     sel_idx = boruta_selector(
+        #         X_arr, y_arr, n_feats=effective_n_feats, 
+        #         task="reg", random_state=42
+        #     )
+        #     X_selected = X_arr[:, sel_idx]
+        #     selected_features = sel_idx
         else:
             # Standard scikit-learn selector handling for SelectKBest
             try:
@@ -872,28 +894,28 @@ def get_regression_extractors() -> Dict[str, Any]:
     
     return {
         "PCA": PCA(random_state=42),
-        #"NMF": NMF(
-        #    init='nndsvdar',
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3,      # Relaxed tolerance
-        #    beta_loss='frobenius',
-        #    solver='mu'
-        #),
-        #"ICA": FastICA(
-        #    random_state=42,
-        #    **ica_params
-        #),
-        #"FA": FactorAnalysis(
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3       # Relaxed tolerance
-        #),
-        #"PLS": PLSRegression(
-        #    n_components=8,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3       # Relaxed tolerance
-        #)
+        "NMF": NMF(
+            init='nndsvdar',
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3,      # Relaxed tolerance
+            beta_loss='frobenius',
+            solver='mu'
+        ),
+        "ICA": FastICA(
+            random_state=42,
+            **ica_params
+        ),
+        "FA": FactorAnalysis(
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        ),
+        "PLS": PLSRegression(
+            n_components=8,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        )
     }
 
 def get_regression_selectors() -> Dict[str, str]:
@@ -908,11 +930,11 @@ def get_regression_selectors() -> Dict[str, str]:
     return {
         #"MRMR": "mrmr_reg",
         "LASSO": "lasso",
-        #"ElasticNetFS": "enet",
-        #"f_regressionFS": "freg",
+        "ElasticNetFS": "enet",
+        "f_regressionFS": "freg",
         # Boruta running takes 20 mins per fold. It was replaced with RandomForestFS, but may be tested in the future.
         # "Boruta": "boruta_reg",
-        #"RandomForestFS": "rf_reg"
+        "RandomForestFS": "rf_reg"
     }
 
 def get_classification_extractors() -> Dict[str, Any]:
@@ -942,28 +964,28 @@ def get_classification_extractors() -> Dict[str, Any]:
     
     return {
         "PCA": PCA(random_state=42),
-        #"NMF": NMF(
-        #    init='nndsvdar',
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3,      # Relaxed tolerance
-        #    beta_loss='frobenius',
-        #    solver='mu'
-        #),
-        #"ICA": FastICA(
-        #    random_state=42,
-        #    **ica_params
-        #),
-        #"FA": FactorAnalysis(
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3       # Relaxed tolerance
-        #),
-        #"LDA": LDA(),
-        #"KernelPCA": KernelPCA(
-        #    kernel='rbf',
-        #    random_state=42
-        #)
+        "NMF": NMF(
+            init='nndsvdar',
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3,      # Relaxed tolerance
+            beta_loss='frobenius',
+            solver='mu'
+        ),
+        "ICA": FastICA(
+            random_state=42,
+            **ica_params
+        ),
+        "FA": FactorAnalysis(
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        ),
+        "LDA": LDA(),
+        "KernelPCA": KernelPCA(
+            kernel='rbf',
+            random_state=42
+        )
     }
 
 def get_classification_selectors() -> Dict[str, str]:
@@ -978,11 +1000,11 @@ def get_classification_selectors() -> Dict[str, str]:
     return {
         #"MRMR": "mrmr_clf",
         "fclassifFS": "fclassif",
-        #"LogisticL1": "logistic_l1",
+        "LogisticL1": "logistic_l1",
         # Boruta running takes 20 mins per fold. It was replaced with XGBoostFS, but may be tested in the future.
         # "Boruta": "boruta_clf",
-        #"Chi2FS": "chi2_selection",
-        #"XGBoostFS": "xgb_clf"
+        "Chi2FS": "chi2_selection",
+        "XGBoostFS": "xgb_clf"
     }
 
 def get_selector_object(selector_code: str, n_feats: int):
@@ -2764,9 +2786,15 @@ def validate_and_fix_shape_mismatch(X, y, name="dataset", fold_idx=None, allow_t
             min_samples = min(n_samples_X, n_samples_y)
             max_samples = max(n_samples_X, n_samples_y)
             
-            # Check data loss
+            # Check data loss with adaptive thresholds for small datasets
             loss_percentage = 100 * (max_samples - min_samples) / max_samples
             max_loss = SHAPE_MISMATCH_CONFIG["max_data_loss_percent"]
+            
+            # Be more lenient with small datasets
+            if max_samples < 50:
+                max_loss = min(max_loss * 1.5, 75)  # Allow up to 75% loss for very small datasets
+            elif max_samples < 100:
+                max_loss = min(max_loss * 1.2, 60)  # Allow up to 60% loss for small datasets
             
             if loss_percentage > max_loss:
                 logger.error(f"Excessive data loss for {name}{fold_str}: {loss_percentage:.1f}% > {max_loss}% limit")

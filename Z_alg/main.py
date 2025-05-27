@@ -13,7 +13,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def enhanced_cache_monitor(interval_seconds=300):
+def enhanced_cache_monitor(interval_seconds=600):  # Less frequent monitoring for high-memory server
     """
     Enhanced cache monitoring with automatic cleanup and comprehensive logging.
     
@@ -48,6 +48,9 @@ def enhanced_cache_monitor(interval_seconds=300):
             # Check against configured limits
             total_limit_mb = CACHE_CONFIG.get("total_limit_mb", 8000)
             auto_clear_threshold = MEMORY_OPTIMIZATION.get("auto_clear_threshold", 0.9)
+            ## Check against configured limits for high-memory server
+            #total_limit_mb = CACHE_CONFIG.get("total_limit_mb", 32000)
+            #auto_clear_threshold = MEMORY_OPTIMIZATION.get("auto_clear_threshold", 0.85)
             
             if total_mb > (total_limit_mb * auto_clear_threshold):
                 comprehensive_logger.logger.warning(

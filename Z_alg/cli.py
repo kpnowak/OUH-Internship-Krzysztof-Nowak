@@ -26,6 +26,7 @@ from Z_alg.cv import (
     run_extraction_pipeline, run_selection_pipeline
 )
 from Z_alg.utils import comprehensive_logger
+from Z_alg.mad_analysis import run_mad_analysis
 
 # Remove any existing handlers
 for handler in logging.root.handlers[:]:
@@ -34,7 +35,7 @@ for handler in logging.root.handlers[:]:
 # Set up logging to file and console
 log_file = "debug.log"
 file_handler = logging.FileHandler(log_file, mode='w')
-file_handler.setLevel(logging.DEBUG)
+file_handler.setLevel(logging.INFO)  # Changed from DEBUG to INFO to reduce noise
 file_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 file_handler.setFormatter(file_formatter)
 
@@ -43,7 +44,15 @@ console_handler.setLevel(logging.WARNING)
 console_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 console_handler.setFormatter(console_formatter)
 
-logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, console_handler])
+# Set basic config to INFO level instead of DEBUG to reduce noise
+logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
+
+# Specifically suppress matplotlib debug messages
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('matplotlib.ticker').setLevel(logging.WARNING)
+logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+logging.getLogger('PIL').setLevel(logging.WARNING)  # Also suppress PIL debug messages
+
 logger = logging.getLogger(__name__)
 
 def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Optional[Dict[str, Any]]:
@@ -109,6 +118,19 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         # Convert pandas Series to numpy array for compatibility with existing code
         if hasattr(y_aligned, 'values'):
             y_aligned = y_aligned.values
+        
+        # For regression, ensure y_aligned is numeric
+        if is_regression:
+            if not np.issubdtype(y_aligned.dtype, np.number):
+                logger.error(f"Regression target data is not numeric: dtype={y_aligned.dtype}")
+                logger.error(f"Sample values: {y_aligned[:5] if len(y_aligned) > 0 else 'empty'}")
+                logger.error(f"This indicates a data loading error - regression targets must be numeric")
+                return None
+            
+            # Ensure no NaN or infinite values
+            if np.any(np.isnan(y_aligned)) or np.any(np.isinf(y_aligned)):
+                logger.warning(f"Found NaN or infinite values in regression target, cleaning...")
+                y_aligned = np.nan_to_num(y_aligned, nan=0.0, posinf=0.0, neginf=0.0)
         
         # Verify data integrity
         if len(common_ids) < 10:
@@ -395,6 +417,12 @@ def main():
     parser.add_argument(
         "--n-val", type=int, help="Run only a specific n_val (8, 16, or 32)"
     )
+    parser.add_argument(
+        "--mad-only", action="store_true", help="Run only MAD analysis without model training"
+    )
+    parser.add_argument(
+        "--skip-mad", action="store_true", help="Skip MAD analysis and run only model training"
+    )
     
     # Parse arguments
     args = parser.parse_args()
@@ -424,6 +452,23 @@ def main():
     logger.info("=" * 70)
     
     start_time = time.time()
+    
+    # Run MAD analysis first (unless skipped)
+    if not args.skip_mad:
+        logger.info("=" * 70)
+        logger.info("RUNNING MAD ANALYSIS")
+        logger.info("=" * 70)
+        try:
+            run_mad_analysis(output_dir="output")
+            logger.info("MAD analysis completed successfully!")
+        except Exception as e:
+            logger.error(f"Error in MAD analysis: {str(e)}")
+            logger.error("Continuing with model training...")
+    
+    # If only MAD analysis was requested, exit here
+    if args.mad_only:
+        logger.info("MAD-only analysis completed. Exiting.")
+        return
     
     # Process datasets based on arguments
     if args.dataset:
