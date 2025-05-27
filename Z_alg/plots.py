@@ -244,39 +244,144 @@ def plot_roc_curve_binary(model: Any, X_test: np.ndarray, y_test: np.ndarray, cl
         plt.close('all')  # Ensure all figures are closed on error
         return False
 
+def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray, class_labels: List, title: str, out_path: str) -> bool:
+    """
+    Plot ROC curve for multi-class classification and return success status.
+    
+    Parameters
+    ----------
+    model : Any
+        Trained model
+    X_test : np.ndarray
+        Test feature matrix
+    y_test : np.ndarray
+        Test target values
+    class_labels : List
+        Class labels
+    title : str
+        Plot title
+    out_path : str
+        Output path for the plot
+        
+    Returns
+    -------
+    bool
+        True if plot was successfully created, False otherwise
+    """
+    try:
+        from sklearn.metrics import roc_curve, auc
+        from sklearn.preprocessing import label_binarize
+        
+        # Convert y_test to numeric if it's string
+        if isinstance(y_test[0], str):
+            y_test = np.array([int(x) for x in y_test])
+            
+        # Get probability predictions for all classes
+        y_proba = model.predict_proba(X_test)
+        n_classes = len(class_labels)
+        
+        # Create a new figure for each plot
+        fig = plt.figure(figsize=(8, 6))
+        ax = fig.add_subplot(111)
+        
+        if n_classes == 2:
+            # For binary classification, use the standard binary ROC
+            fpr, tpr, _ = roc_curve(y_test, y_proba[:, 1])
+            roc_auc = auc(fpr, tpr)
+            ax.plot(fpr, tpr, color='darkorange', lw=2, 
+                   label=f'ROC curve (AUC = {roc_auc:.2f})')
+        else:
+            # For multi-class, binarize the output and compute ROC for each class
+            y_test_bin = label_binarize(y_test, classes=range(n_classes))
+            
+            # Compute ROC curve and ROC area for each class
+            fpr = dict()
+            tpr = dict()
+            roc_auc = dict()
+            
+            for i in range(n_classes):
+                fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_proba[:, i])
+                roc_auc[i] = auc(fpr[i], tpr[i])
+                
+                # Plot ROC curve for each class
+                ax.plot(fpr[i], tpr[i], lw=2, 
+                       label=f'Class {class_labels[i]} (AUC = {roc_auc[i]:.2f})')
+            
+            # Compute micro-average ROC curve and ROC area
+            fpr["micro"], tpr["micro"], _ = roc_curve(y_test_bin.ravel(), y_proba.ravel())
+            roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+            
+            # Plot micro-average ROC curve
+            ax.plot(fpr["micro"], tpr["micro"], 
+                   color='deeppink', linestyle=':', linewidth=4,
+                   label=f'Micro-avg (AUC = {roc_auc["micro"]:.2f})')
+        
+        # Plot diagonal line
+        ax.plot([0, 1], [0, 1], 'k--', lw=2, alpha=0.8)
+        
+        # Set labels and title
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title(title)
+        ax.legend(loc="lower right")
+        
+        # Save and close
+        plt.tight_layout()
+        plt.savefig(out_path)
+        plt.close(fig)  # Explicitly close the figure
+        
+        return verify_plot_exists(out_path)
+    except Exception as e:
+        print(f"Error creating multi-class ROC curve for {title}: {str(e)}")
+        plt.close('all')  # Ensure all figures are closed on error
+        return False
+
 def plot_feature_importance(model, feature_names, title, out_path, top_n=20):
     """
     Plot feature importances for a trained model.
     Supports tree-based models (feature_importances_) and linear models (coef_).
     """
-    # Try to get feature importances
-    if hasattr(model, 'feature_importances_'):
-        importances = model.feature_importances_
-    elif hasattr(model, 'coef_'):
-        importances = np.abs(model.coef_)
-        if importances.ndim > 1:
-            importances = np.sum(importances, axis=0)
-    else:
-        print(f"Model does not have feature importances or coefficients: {type(model)}")
-        return False
-    
-    # If feature_names is None or too short, use generic names
-    if feature_names is None or len(feature_names) != len(importances):
-        feature_names = [f"Feature {i}" for i in range(len(importances))]
-    
-    # Get top N features
-    top_n = min(top_n, len(importances))
-    indices = np.argsort(importances)[-top_n:][::-1]
-    top_features = [feature_names[i] for i in indices]
-    top_importances = importances[indices]
-    
-    # Plot
-    fig, ax = plt.subplots(figsize=(7, max(4, int(top_n/2))))
-    sns.barplot(x=top_importances, y=top_features, ax=ax, orient='h')
-    ax.set_title(title)
-    ax.set_xlabel('Importance')
-    ax.set_ylabel('Feature')
-    plt.tight_layout()
-    plt.savefig(out_path)
-    plt.close(fig)
-    return os.path.exists(out_path) and os.path.getsize(out_path) > 0 
+    try:
+        # Try to get feature importances
+        if hasattr(model, 'feature_importances_'):
+            importances = model.feature_importances_
+        elif hasattr(model, 'coef_'):
+            importances = np.abs(model.coef_)
+            if importances.ndim > 1:
+                importances = np.sum(importances, axis=0)
+        else:
+            print(f"Model does not have feature importances or coefficients: {type(model)}")
+            return False
+        
+        # If feature_names is None or too short, use generic names
+        if feature_names is None or len(feature_names) != len(importances):
+            feature_names = [f"Feature {i}" for i in range(len(importances))]
+        
+        # Get top N features
+        top_n = min(top_n, len(importances))
+        indices = np.argsort(importances)[-top_n:][::-1]
+        top_features = [feature_names[i] for i in indices]
+        top_importances = importances[indices]
+        
+        # Create a new figure for each plot
+        fig = plt.figure(figsize=(7, max(4, int(top_n/2))))
+        ax = fig.add_subplot(111)
+        
+        # Plot
+        sns.barplot(x=top_importances, y=top_features, ax=ax, orient='h')
+        ax.set_title(title)
+        ax.set_xlabel('Importance')
+        ax.set_ylabel('Feature')
+        
+        # Save and close
+        plt.tight_layout()
+        plt.savefig(out_path)
+        plt.close(fig)  # Explicitly close the figure
+        
+        return verify_plot_exists(out_path)
+    except Exception as e:
+        print(f"Error creating feature importance plot for {title}: {str(e)}")
+        plt.close('all')  # Ensure all figures are closed on error
+        return False 

@@ -1686,11 +1686,21 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         plot_confusion_matrix(cm, class_labels, f"{model_name} Confusion Matrix", 
                              os.path.join(out_dir, f"{plot_prefix}_confusion.png"))
         
-        # ROC curve for binary classification
-        if hasattr(model, 'predict_proba') and len(np.unique(y_val)) == 2:
-            plot_roc_curve_binary(model, X_val, y_val, class_labels, 
-                                 f"{model_name} ROC Curve", 
-                                 os.path.join(out_dir, f"{plot_prefix}_roc.png"))
+        # ROC curve - now supports both binary and multi-class
+        if hasattr(model, 'predict_proba'):
+            n_classes = len(np.unique(y_val))
+            if n_classes == 2:
+                # Binary classification ROC
+                plot_roc_curve_binary(model, X_val, y_val, class_labels, 
+                                     f"{model_name} ROC Curve", 
+                                     os.path.join(out_dir, f"{plot_prefix}_roc.png"))
+            else:
+                # Multi-class ROC (create a multi-class ROC plot)
+                from Z_alg.plots import plot_roc_curve_multiclass
+                plot_roc_curve_multiclass(model, X_val, y_val, class_labels, 
+                                         f"{model_name} ROC Curve", 
+                                         os.path.join(out_dir, f"{plot_prefix}_roc.png"))
+        
         # Feature importance plot
         if hasattr(model, 'feature_importances_') or hasattr(model, 'coef_'):
             if hasattr(X_train, 'columns'):
