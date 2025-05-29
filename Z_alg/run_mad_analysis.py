@@ -5,7 +5,7 @@ Simple script to run MAD analysis only.
 
 import logging
 import time
-from Z_alg.mad_analysis import run_mad_analysis
+from mad_analysis import run_mad_analysis
 
 # Set up logging to file and console
 log_file = "debug.log"

@@ -23,9 +23,9 @@ import traceback
 from scipy import stats
 
 # Local imports
-from Z_alg.config import REGRESSION_DATASETS, CLASSIFICATION_DATASETS
-from Z_alg.data_io import load_dataset
-from Z_alg.logging_utils import log_mad_analysis_info, log_data_save_info, log_plot_save_info
+from config import REGRESSION_DATASETS, CLASSIFICATION_DATASETS
+from data_io import load_dataset
+from logging_utils import log_mad_analysis_info, log_data_save_info, log_plot_save_info
 
 logger = logging.getLogger(__name__)
 

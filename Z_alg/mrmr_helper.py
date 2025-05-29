@@ -134,7 +134,7 @@ def simple_mrmr(X, y, n_selected_features=10, is_regression=False, fast_mode=Non
     """
     # Import config here to avoid circular imports
     try:
-        from Z_alg.config import MRMR_CONFIG
+        from config import MRMR_CONFIG
         # Use config defaults if parameters not specified
         if fast_mode is None:
             fast_mode = MRMR_CONFIG.get("fast_mode", True)

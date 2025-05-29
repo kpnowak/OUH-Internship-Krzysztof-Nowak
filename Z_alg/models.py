@@ -33,9 +33,9 @@ import time
 import copy
 
 # Local imports
-from Z_alg.config import MODEL_OPTIMIZATIONS
-from Z_alg.preprocessing import safe_convert_to_numeric
-from Z_alg.utils_boruta import boruta_selector
+from config import MODEL_OPTIMIZATIONS
+from preprocessing import safe_convert_to_numeric
+from utils_boruta import boruta_selector
 
 # Try to import XGBoost, fall back gracefully if not available
 try:
@@ -205,7 +205,7 @@ class EarlyStoppingWrapper:
     
     def _fit_ensemble_early_stopping(self, X, y, monitor_metric):
         """Enhanced early stopping for ensemble models with adaptive patience and robust error handling."""
-        from Z_alg.config import EARLY_STOPPING_CONFIG
+        from config import EARLY_STOPPING_CONFIG
         
         # Split training data for validation with enhanced error handling
         try:
@@ -608,7 +608,7 @@ class SizedLRUCache:
         }
 
 # Initialize caches with enhanced configuration from config
-from Z_alg.config import CACHE_CONFIG
+from config import CACHE_CONFIG
 
 _selector_cache = {
     'sel_reg': SizedLRUCache(
@@ -743,7 +743,7 @@ def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=N
             (original_selector_code == "mrmr_reg")):
             try:
                 # Try to import our custom MRMR implementation
-                from Z_alg.mrmr_helper import simple_mrmr
+                from mrmr_helper import simple_mrmr
                 logger.info(f"Using custom MRMR implementation for regression")
                 
                 # Get selected feature indices
@@ -799,7 +799,7 @@ def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=N
                 
             elif selector_type == "boruta_reg":
                 # Use the stable boruta_selector
-                from Z_alg.utils_boruta import boruta_selector
+                from utils_boruta import boruta_selector
                 selected_features = boruta_selector(
                     X_arr, y_arr, n_feats=effective_n_feats, 
                     task="reg", random_state=42
@@ -833,7 +833,7 @@ def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=N
         # Special handling for Boruta (removed - BorutaPy import was cleaned up)
         # elif isinstance(selector, BorutaPy):
         #     # Use the stable boruta_selector
-        #     from Z_alg.utils_boruta import boruta_selector
+        #     from utils_boruta import boruta_selector
         #     sel_idx = boruta_selector(
         #         X_arr, y_arr, n_feats=effective_n_feats, 
         #         task="reg", random_state=42
@@ -1399,7 +1399,7 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
         # Enhanced feature selection with robust fallbacks
         if selector_type == 'mrmr_clf' or selector_type == 'MRMR':
             # Handle MRMR using our own implementation with enhanced error handling
-            from Z_alg.config import FEATURE_SELECTION_CONFIG
+            from config import FEATURE_SELECTION_CONFIG
             
             fallback_methods = FEATURE_SELECTION_CONFIG.get("fallback_methods", ["mutual_info", "f_test", "variance"])
             error_tolerance = FEATURE_SELECTION_CONFIG.get("error_tolerance", 3)
@@ -1408,7 +1408,7 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
                 try:
                     # Try to import our custom MRMR implementation
                     try:
-                        from Z_alg.mrmr_helper import simple_mrmr
+                        from mrmr_helper import simple_mrmr
                         logger.info(f"Using custom MRMR implementation for {modality_name} (attempt {attempt + 1})")
                         n_features = min(effective_n_feats, X_safe.shape[1])
                         
@@ -1497,7 +1497,7 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
             try:
                 # Try to import our custom MRMR implementation
                 try:
-                    from Z_alg.mrmr_helper import simple_mrmr
+                    from mrmr_helper import simple_mrmr
                     logger.info(f"Using custom MRMR regression implementation for {modality_name}")
                     n_features = min(n_feats, X_safe.shape[1])
                     
@@ -1626,7 +1626,7 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
         
         elif selector_type == 'boruta_clf' or selector_type == 'Boruta':
             # Use the improved boruta implementation
-            from Z_alg.utils_boruta import boruta_selector
+            from utils_boruta import boruta_selector
             selected_features = boruta_selector(
                 X_safe, y_safe, n_feats=min(n_feats, X_safe.shape[1]), 
                 task="clf", random_state=42
@@ -1936,7 +1936,7 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, for
             return None, None
         
         # Enhanced adaptive component selection with stability checks
-        from Z_alg.config import EXTRACTOR_CONFIG
+        from config import EXTRACTOR_CONFIG
         
         # Calculate absolute maximum possible components (minimum dimension of data)
         absolute_max = min(X_safe.shape[0], X_safe.shape[1])
@@ -2717,7 +2717,7 @@ def validate_and_fix_shape_mismatch(X, y, name="dataset", fold_idx=None, allow_t
     Tuple[np.ndarray, np.ndarray] or Tuple[None, None]
         Validated and aligned X, y arrays or None, None if validation fails
     """
-    from Z_alg.config import SHAPE_MISMATCH_CONFIG, MEMORY_OPTIMIZATION
+    from config import SHAPE_MISMATCH_CONFIG, MEMORY_OPTIMIZATION
     
     fold_str = f" in fold {fold_idx}" if fold_idx is not None else ""
     

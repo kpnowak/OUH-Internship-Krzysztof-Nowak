@@ -19,8 +19,8 @@ import threading
 from functools import lru_cache
 
 # Local imports
-from Z_alg.config import DatasetConfig, MAX_VARIABLE_FEATURES, SAMPLE_RETENTION_CONFIG
-from Z_alg.preprocessing import _keep_top_variable_rows, fix_tcga_id_slicing, custom_parse_outcome, normalize_sample_ids
+from config import DatasetConfig, MAX_VARIABLE_FEATURES, SAMPLE_RETENTION_CONFIG
+from preprocessing import _keep_top_variable_rows, fix_tcga_id_slicing, custom_parse_outcome, normalize_sample_ids
 
 logger = logging.getLogger(__name__)
 

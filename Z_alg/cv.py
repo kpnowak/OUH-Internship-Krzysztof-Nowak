@@ -11,7 +11,7 @@ from joblib import Parallel, delayed, parallel_config
 
 # Suppress sklearn warnings if configured
 try:
-    from Z_alg.config import WARNING_SUPPRESSION_CONFIG
+    from config import WARNING_SUPPRESSION_CONFIG
     if WARNING_SUPPRESSION_CONFIG.get("suppress_sklearn_warnings", True):
         warnings.filterwarnings("ignore", category=RuntimeWarning, module="sklearn")
         warnings.filterwarnings("ignore", message="invalid value encountered in divide")
@@ -33,18 +33,18 @@ import glob
 from sklearn.base import clone
 
 # Local imports
-from Z_alg.config import N_JOBS, DatasetConfig, FEATURE_EXTRACTION_CONFIG
-from Z_alg.preprocessing import process_with_missing_modalities
-from Z_alg.fusion import merge_modalities, ModalityImputer
-from Z_alg.models import (
+from config import N_JOBS, DatasetConfig, FEATURE_EXTRACTION_CONFIG
+from preprocessing import process_with_missing_modalities
+from fusion import merge_modalities, ModalityImputer
+from models import (
     get_model_object, cached_fit_transform_selector_regression,
     transform_selector_regression, cached_fit_transform_selector_classification,
     transform_selector_classification, cached_fit_transform_extractor_classification,
     transform_extractor_classification, get_selector_object
 )
 # Removed unused legacy imports
-from Z_alg._process_single_modality import align_samples_to_modalities, verify_data_alignment
-from Z_alg.logging_utils import log_pipeline_stage, log_data_save_info, log_model_training_info, log_plot_save_info
+from _process_single_modality import align_samples_to_modalities, verify_data_alignment
+from logging_utils import log_pipeline_stage, log_data_save_info, log_model_training_info, log_plot_save_info
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ def _process_single_modality(
         from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
         from sklearn.feature_selection import SelectorMixin
         from boruta import BorutaPy
-        from Z_alg.models import (
+        from models import (
             cached_fit_transform_selector_regression, transform_selector_regression,
             cached_fit_transform_selector_classification, transform_selector_classification,
             cached_fit_transform_extractor_classification, transform_extractor_classification
@@ -226,7 +226,7 @@ def _process_single_modality(
         # Extract features - use the passed is_regression parameter instead of inferring from data type
         if is_regression:
             try:
-                from Z_alg.models import cached_fit_transform_extractor_regression, transform_extractor_regression
+                from models import cached_fit_transform_extractor_regression, transform_extractor_regression
                 extractor, X_tr = cached_fit_transform_extractor_regression(
                     df_train.values, y_train, extr_obj, req, 
                     ds_name=modality_name, fold_idx=fold_idx
@@ -515,7 +515,7 @@ def process_cv_fold(
         
         # Process modalities in parallel, using the EXACT common sample sets
         from joblib import Parallel, delayed
-        from Z_alg.config import JOBLIB_PARALLEL_CONFIG
+        from config import JOBLIB_PARALLEL_CONFIG
         
         # Limit number of jobs to avoid excessive resource usage
         n_jobs = min(3, os.cpu_count() or 1)
@@ -569,7 +569,7 @@ def process_cv_fold(
             return {}, {}
         
         # Create a new imputer instance for this fold
-        from Z_alg.fusion import ModalityImputer
+        from fusion import ModalityImputer
         fold_imputer = ModalityImputer()
 
         # Merge modalities - all should have identical dimensions now
@@ -617,7 +617,7 @@ def process_cv_fold(
         if is_regression:
             # Extraction pipeline
             if pipeline_type == "extraction":
-                from Z_alg.models import cached_fit_transform_extractor_regression, transform_extractor_regression
+                from models import cached_fit_transform_extractor_regression, transform_extractor_regression
                 extractor, X_train_reduced = cached_fit_transform_extractor_regression(
                     X_train_merged, aligned_y_train, extr_obj, ncomps, ds_name=ds_name, modality_name=None, fold_idx=fold_idx
                 )
@@ -631,7 +631,7 @@ def process_cv_fold(
                 final_X_train, final_X_val = X_train_reduced, X_val_reduced
             else:
                 # Selection pipeline
-                from Z_alg.models import cached_fit_transform_selector_regression, transform_selector_regression
+                from models import cached_fit_transform_selector_regression, transform_selector_regression
                 selected_features, X_train_reduced = cached_fit_transform_selector_regression(
                     extr_obj, X_train_merged, aligned_y_train, ncomps, fold_idx=fold_idx, ds_name=ds_name
                 )
@@ -646,7 +646,7 @@ def process_cv_fold(
         else:
             # Classification
             if pipeline_type == "extraction":
-                from Z_alg.models import cached_fit_transform_extractor_classification, transform_extractor_classification
+                from models import cached_fit_transform_extractor_classification, transform_extractor_classification
                 extractor, X_train_reduced = cached_fit_transform_extractor_classification(
                     X_train_merged, aligned_y_train, extr_obj, ncomps, ds_name=ds_name, modality_name=None, fold_idx=fold_idx
                 )
@@ -660,7 +660,7 @@ def process_cv_fold(
                 final_X_train, final_X_val = X_train_reduced, X_val_reduced
             else:
                 # Selection pipeline
-                from Z_alg.models import cached_fit_transform_selector_classification, transform_selector_classification
+                from models import cached_fit_transform_selector_classification, transform_selector_classification
                 selected_features, X_train_reduced = cached_fit_transform_selector_classification(
                     X_train_merged, aligned_y_train, extr_obj, ncomps, ds_name=ds_name, modality_name=None, fold_idx=fold_idx
                 )
@@ -689,7 +689,7 @@ def process_cv_fold(
             try:
                 # Perform one final verification before training the model
                 # This is critical to ensure X and y have the same number of samples
-                from Z_alg.models import validate_and_fix_shape_mismatch
+                from models import validate_and_fix_shape_mismatch
                 final_X_train, final_y_train = validate_and_fix_shape_mismatch(
                     final_X_train, aligned_y_train, 
                     name=f"training data for {model_name} (fold {fold_idx})", 
@@ -922,8 +922,8 @@ def run_selection_pipeline(
 
 def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None, make_plots=True, n_features=None, train_n_components=None):
     """Train regression model and evaluate it."""
-    from Z_alg.models import get_model_object
-    from Z_alg.plots import plot_regression_scatter, plot_regression_residuals, plot_feature_importance
+    from models import get_model_object
+    from plots import plot_regression_scatter, plot_regression_residuals, plot_feature_importance
     import os
     import numpy as np
     import time
@@ -1069,8 +1069,8 @@ def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, 
 
 def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None, make_plots=True, n_features=None, train_n_components=None):
     """Train classification model and evaluate it."""
-    from Z_alg.models import get_model_object
-    from Z_alg.plots import plot_confusion_matrix, plot_roc_curve_binary, plot_feature_importance
+    from models import get_model_object
+    from plots import plot_confusion_matrix, plot_roc_curve_binary, plot_feature_importance
     import os
     import numpy as np
     import time
@@ -1179,7 +1179,7 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
                 else:
                     logger.debug(f"predict_proba returned unexpected shape: {y_proba.shape}")
         except Exception as e:
-            from Z_alg.config import WARNING_SUPPRESSION_CONFIG
+            from config import WARNING_SUPPRESSION_CONFIG
             if not WARNING_SUPPRESSION_CONFIG.get("suppress_auc_warnings", False):
                 logger.warning(f"Could not calculate AUC: {str(e)}")
             else:
@@ -1216,7 +1216,7 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
                         log_plot_save_info(dataset_name, "roc_curve_binary", roc_path, success=False)
                 else:
                     # Multi-class ROC (create a multi-class ROC plot)
-                    from Z_alg.plots import plot_roc_curve_multiclass
+                    from plots import plot_roc_curve_multiclass
                     if plot_roc_curve_multiclass(model, X_val, y_val, class_labels, 
                                                f"{model_name} ROC Curve", roc_path):
                         plot_success_count += 1
@@ -1870,7 +1870,7 @@ def _run_pipeline(
         )
     
     # Process each transformer and parameter combination
-    from Z_alg.config import MISSING_MODALITIES_CONFIG
+    from config import MISSING_MODALITIES_CONFIG
     
     # Save all results for batch processing
     all_pipeline_results = []

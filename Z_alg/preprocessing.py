@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Union, Any, Tuple
 import logging
 
 # Local imports
-from Z_alg.config import MAX_VARIABLE_FEATURES
+from config import MAX_VARIABLE_FEATURES
 
 logger = logging.getLogger(__name__)
 

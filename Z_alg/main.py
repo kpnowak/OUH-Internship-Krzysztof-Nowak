@@ -13,10 +13,10 @@ import os
 # Add the current directory to the Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from Z_alg.cli import main
-from Z_alg.utils import monitor_memory_usage, comprehensive_logger, memory_monitor, force_garbage_collection
-from Z_alg.models import clear_all_caches, get_cache_stats
-from Z_alg.config import CACHE_CONFIG, MEMORY_OPTIMIZATION
+from cli import main
+from utils import monitor_memory_usage, comprehensive_logger, memory_monitor, force_garbage_collection
+from models import clear_all_caches, get_cache_stats
+from config import CACHE_CONFIG, MEMORY_OPTIMIZATION
 import threading
 import time
 import logging
