@@ -6,6 +6,7 @@ This module contains logging functions to avoid circular imports between cli.py 
 
 import logging
 import os
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -212,4 +213,59 @@ def log_plot_save_info(dataset: str, plot_type: str, plot_path: str, success: bo
     else:
         logger.error(f"[PLOT_SAVE] {dataset} - Failed to save {plot_type} plot to: {plot_path}")
         if error_msg:
-            logger.error(f"[PLOT_SAVE] {dataset} - {plot_type} plot save error: {error_msg}") 
+            logger.error(f"[PLOT_SAVE] {dataset} - {plot_type} plot save error: {error_msg}")
+
+
+def log_timing_summary(start_time: float, operation_name: str = "Algorithm", print_to_console: bool = True):
+    """
+    Log timing summary with consistent formatting.
+    
+    Parameters
+    ----------
+    start_time : float
+        Start time (from time.time())
+    operation_name : str
+        Name of the operation being timed
+    print_to_console : bool
+        Whether to also print to console
+    """
+    # Calculate total runtime
+    total_elapsed_time = time.time() - start_time
+    hours, remainder = divmod(total_elapsed_time, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    # Format times
+    start_time_formatted = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))
+    end_time_formatted = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    
+    # Create timing summary
+    timing_summary = (
+        f"{operation_name} started: {start_time_formatted}\n"
+        f"{operation_name} ended: {end_time_formatted}\n"
+        f"Total runtime: {int(hours)}h {int(minutes)}m {int(seconds)}s"
+    )
+    
+    # Log to debug.log
+    logger.info("\n" + "=" * 70)
+    logger.info(f"{operation_name.upper()} TIMING SUMMARY")
+    logger.info("=" * 70)
+    logger.info(timing_summary)
+    logger.info("=" * 70)
+    
+    # Print to console if requested
+    if print_to_console:
+        print("\n" + "=" * 70)
+        print(f"{operation_name.upper()} TIMING SUMMARY")
+        print("=" * 70)
+        print(timing_summary)
+        print("=" * 70)
+    
+    return {
+        'total_seconds': total_elapsed_time,
+        'hours': int(hours),
+        'minutes': int(minutes),
+        'seconds': int(seconds),
+        'start_time': start_time_formatted,
+        'end_time': end_time_formatted,
+        'summary': timing_summary
+    } 

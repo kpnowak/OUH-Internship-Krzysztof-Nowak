@@ -6,6 +6,7 @@ Script to create only the critical difference diagrams from existing MAD data.
 import os
 import pandas as pd
 import numpy as np
+import time
 
 # Configure matplotlib backend before any matplotlib imports to prevent tkinter errors
 import matplotlib
@@ -78,7 +79,14 @@ def create_modality_diagram(mad_df, modality, output_dir="output"):
 
 def main():
     """Main function to create diagrams from existing CSV data."""
+    # Record start time
+    start_time = time.time()
+    start_time_formatted = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))
+    
+    logger.info("=" * 70)
     logger.info("Creating critical difference diagrams from existing MAD data...")
+    logger.info(f"Started at: {start_time_formatted}")
+    logger.info("=" * 70)
     
     # Load existing MAD data
     csv_path = Path("output/mad_detailed_statistics.csv")
@@ -107,6 +115,24 @@ def main():
     logger.info("Creating Methylation modality diagram...")
     create_modality_diagram(mad_df, 'methy')
     
+    # Calculate and log total time
+    total_elapsed_time = time.time() - start_time
+    hours, remainder = divmod(total_elapsed_time, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    end_time_formatted = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    
+    timing_summary = (
+        f"Diagram creation started: {start_time_formatted}\n"
+        f"Diagram creation ended: {end_time_formatted}\n"
+        f"Total runtime: {int(hours)}h {int(minutes)}m {int(seconds)}s"
+    )
+    
+    logger.info("=" * 70)
+    logger.info("DIAGRAM CREATION TIMING SUMMARY")
+    logger.info("=" * 70)
+    logger.info(timing_summary)
+    logger.info("=" * 70)
     logger.info("All critical difference diagrams created successfully!")
 
 if __name__ == "__main__":

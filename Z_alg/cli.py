@@ -29,7 +29,8 @@ from Z_alg.utils import comprehensive_logger
 from Z_alg.mad_analysis import run_mad_analysis
 from Z_alg.logging_utils import (
     setup_logging_levels, log_pipeline_stage, log_mad_analysis_info,
-    log_dataset_preparation, log_model_training_info, log_data_save_info, log_plot_save_info
+    log_dataset_preparation, log_model_training_info, log_data_save_info, log_plot_save_info,
+    log_timing_summary
 )
 
 # Remove any existing handlers
@@ -476,7 +477,16 @@ def main():
     logger.info("=" * 70)
     logger.debug(f"Command line arguments: {vars(args)}")
     
-    start_time = time.time()
+    # Record the start time for total algorithm timing
+    algorithm_start_time = time.time()
+    start_time_formatted = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(algorithm_start_time))
+    
+    # Log algorithm start time
+    startup_msg = f"Algorithm started at: {start_time_formatted}"
+    logger.info(startup_msg)
+    logger.info("=" * 70)
+    print(f"\n{startup_msg}")
+    print("=" * 70)
     
     # Handle MAD analysis
     if args.skip_mad:
@@ -494,7 +504,8 @@ def main():
             import traceback
             logger.debug(f"MAD analysis traceback:\n{traceback.format_exc()}")
         
-        logger.info("MAD-only analysis completed. Exiting.")
+        # Calculate and log total time for MAD-only run
+        log_timing_summary(algorithm_start_time, "MAD-only analysis")
         return
     else:
         # Run MAD analysis before model training
@@ -536,20 +547,12 @@ def main():
         process_classification_datasets(args)
         log_pipeline_stage("ALL_DATASETS_END")
     
-    # Print completion information
-    elapsed_time = time.time() - start_time
-    hours, remainder = divmod(elapsed_time, 3600)
-    minutes, seconds = divmod(remainder, 60)
+    # Calculate total algorithm runtime and log comprehensive timing summary
+    timing_info = log_timing_summary(algorithm_start_time, "Pipeline")
     
-    completion_msg = f"Pipeline completed in {int(hours)}h {int(minutes)}m {int(seconds)}s"
+    # Log completion information to pipeline stage
+    completion_msg = f"Pipeline completed in {timing_info['hours']}h {timing_info['minutes']}m {timing_info['seconds']}s"
     log_pipeline_stage("PIPELINE_COMPLETE", details=completion_msg)
-    
-    logger.info("\n" + "=" * 70)
-    logger.info(completion_msg)
-    logger.info("=" * 70)
-    print("\n" + "=" * 70)
-    print(completion_msg)
-    print("=" * 70)
 
 def process_single_dataset(target_ds, args):
     """Process a single dataset specified by name."""
