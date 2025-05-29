@@ -1207,24 +1207,30 @@ def transform_selector_regression(X, selected_features):
         # Make sure selected_features indices are valid for this X
         if isinstance(X, pd.DataFrame):
             # For DataFrame, check column count
-            if max(selected_features) >= X.shape[1]:
-                logger.warning(f"Selected feature indices exceed X dimensions: max index {max(selected_features)} vs {X.shape[1]} columns")
+            max_index = max(selected_features) if len(selected_features) > 0 else -1
+            if max_index >= X.shape[1]:
+                logger.warning(f"Selected feature indices exceed X dimensions: max index {max_index} vs {X.shape[1]} columns")
                 # Take only valid indices
                 valid_indices = [i for i in selected_features if i < X.shape[1]]
                 if len(valid_indices) == 0:
                     # If no valid indices, take first column as fallback
+                    logger.warning("No valid feature indices found, using first column as fallback")
                     return X.iloc[:, 0:1].values
+                logger.debug(f"Using {len(valid_indices)} valid indices out of {len(selected_features)} selected")
                 return X.iloc[:, valid_indices].values
             return X.iloc[:, selected_features].values
         else:
             # For numpy arrays
-            if max(selected_features) >= X.shape[1]:
-                logger.warning(f"Selected feature indices exceed X dimensions: max index {max(selected_features)} vs {X.shape[1]} columns")
+            max_index = max(selected_features) if len(selected_features) > 0 else -1
+            if max_index >= X.shape[1]:
+                logger.warning(f"Selected feature indices exceed X dimensions: max index {max_index} vs {X.shape[1]} columns")
                 # Take only valid indices
                 valid_indices = [i for i in selected_features if i < X.shape[1]]
                 if len(valid_indices) == 0:
                     # If no valid indices, take first column as fallback
+                    logger.warning("No valid feature indices found, using first column as fallback")
                     return X[:, 0:1]
+                logger.debug(f"Using {len(valid_indices)} valid indices out of {len(selected_features)} selected")
                 return X[:, valid_indices]
             return X[:, selected_features]
     except Exception as e:
@@ -2607,24 +2613,30 @@ def transform_selector_classification(X, selected_features):
         # Make sure selected_features indices are valid for this X
         if isinstance(X, pd.DataFrame):
             # For DataFrame, check column count
-            if max(selected_features) >= X.shape[1]:
-                logger.warning(f"Selected feature indices exceed X dimensions: max index {max(selected_features)} vs {X.shape[1]} columns")
+            max_index = max(selected_features) if len(selected_features) > 0 else -1
+            if max_index >= X.shape[1]:
+                logger.warning(f"Selected feature indices exceed X dimensions: max index {max_index} vs {X.shape[1]} columns")
                 # Take only valid indices
                 valid_indices = [i for i in selected_features if i < X.shape[1]]
                 if len(valid_indices) == 0:
                     # If no valid indices, take first column as fallback
+                    logger.warning("No valid feature indices found, using first column as fallback")
                     return X.iloc[:, 0:1].values
+                logger.debug(f"Using {len(valid_indices)} valid indices out of {len(selected_features)} selected")
                 return X.iloc[:, valid_indices].values
             return X.iloc[:, selected_features].values
         else:
             # For numpy arrays
-            if max(selected_features) >= X.shape[1]:
-                logger.warning(f"Selected feature indices exceed X dimensions: max index {max(selected_features)} vs {X.shape[1]} columns")
+            max_index = max(selected_features) if len(selected_features) > 0 else -1
+            if max_index >= X.shape[1]:
+                logger.warning(f"Selected feature indices exceed X dimensions: max index {max_index} vs {X.shape[1]} columns")
                 # Take only valid indices
                 valid_indices = [i for i in selected_features if i < X.shape[1]]
                 if len(valid_indices) == 0:
                     # If no valid indices, take first column as fallback
+                    logger.warning("No valid feature indices found, using first column as fallback")
                     return X[:, 0:1]
+                logger.debug(f"Using {len(valid_indices)} valid indices out of {len(selected_features)} selected")
                 return X[:, valid_indices]
             return X[:, selected_features] 
     except Exception as e:
@@ -2632,7 +2644,7 @@ def transform_selector_classification(X, selected_features):
         # Return a safe fallback - first column
         if isinstance(X, pd.DataFrame):
             return X.iloc[:, 0:1].values
-        return X[:, 0:1] 
+        return X[:, 0:1]
 
 def get_cache_stats():
     """

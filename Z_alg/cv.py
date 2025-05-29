@@ -574,8 +574,16 @@ def process_cv_fold(
 
         # Merge modalities - all should have identical dimensions now
         try:
-            X_train_merged = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps)
-            X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps)
+            # Handle early_fusion_pca strategy specially to ensure consistent transformations
+            if integration_technique == "early_fusion_pca":
+                # For training data: fit and get the fusion object
+                X_train_merged, fitted_fusion = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps)
+                # For validation data: use the fitted fusion object
+                X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps, fitted_fusion=fitted_fusion)
+            else:
+                # For other strategies, use the original approach
+                X_train_merged = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps)
+                X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps)
             
             # Final verification: merged arrays should match the target vectors exactly
             if X_train_merged.shape[0] != len(final_aligned_y_train):

@@ -288,7 +288,8 @@ def merge_modalities(*arrays: np.ndarray,
                     strategy: str = "weighted_concat", 
                     imputer: Optional[ModalityImputer] = None, 
                     is_train: bool = True,
-                    n_components: int = None) -> np.ndarray:
+                    n_components: int = None,
+                    fitted_fusion: Optional['EarlyFusionPCA'] = None) -> Union[np.ndarray, Tuple[np.ndarray, 'EarlyFusionPCA']]:
     """
     Merge an arbitrary number of numpy arrays (same number of rows).
 
@@ -304,11 +305,14 @@ def merge_modalities(*arrays: np.ndarray,
         Whether this is training data (True) or validation/test data (False)
     n_components : int, optional
         Number of components for EarlyFusionPCA (only used with early_fusion_pca strategy)
+    fitted_fusion : Optional[EarlyFusionPCA], optional
+        Pre-fitted EarlyFusionPCA object for validation data transformation
 
     Returns
     -------
-    np.ndarray
-        The merged matrix (float32).
+    np.ndarray or Tuple[np.ndarray, EarlyFusionPCA]
+        The merged matrix (float32). If strategy is 'early_fusion_pca' and is_train=True,
+        returns tuple of (merged_array, fitted_fusion_object).
     """
     # Skip None or empty arrays
     filtered_arrays = [arr for arr in arrays if arr is not None and arr.size > 0]
@@ -316,7 +320,10 @@ def merge_modalities(*arrays: np.ndarray,
     # Check if we have any arrays to merge
     if not filtered_arrays:
         logger.warning("No valid arrays provided for merging")
-        return np.zeros((0, 0), dtype=np.float32)
+        empty_result = np.zeros((0, 0), dtype=np.float32)
+        if strategy == "early_fusion_pca" and is_train:
+            return empty_result, None
+        return empty_result
     
     # Convert all arrays to float32 numpy arrays and ensure they're 2D
     processed_arrays = []
@@ -345,7 +352,10 @@ def merge_modalities(*arrays: np.ndarray,
     # If no arrays remain after processing, return empty array
     if not processed_arrays:
         logger.warning("No arrays to merge after processing")
-        return np.zeros((0, 0), dtype=np.float32)
+        empty_result = np.zeros((0, 0), dtype=np.float32)
+        if strategy == "early_fusion_pca" and is_train:
+            return empty_result, None
+        return empty_result
     
     # Find row counts and check for mismatches
     row_counts = [arr.shape[0] for arr in processed_arrays]
@@ -387,10 +397,43 @@ def merge_modalities(*arrays: np.ndarray,
                 logger.debug(f"Weighted concatenation with weights: {weights}")
                 
         elif strategy == "early_fusion_pca":
-            # Early Fusion with PCA
-            early_fusion = EarlyFusionPCA(n_components=n_components, random_state=42)
-            merged = early_fusion.fit_transform(*processed_arrays)
-            logger.debug(f"EarlyFusionPCA applied with n_components={n_components}")
+            # Early Fusion with PCA - handle training vs validation differently
+            if is_train:
+                # For training data: fit new EarlyFusionPCA and return both result and fitted object
+                early_fusion = EarlyFusionPCA(n_components=n_components, random_state=42)
+                merged = early_fusion.fit_transform(*processed_arrays)
+                logger.debug(f"EarlyFusionPCA fitted and applied with n_components={n_components}")
+                
+                # Apply imputation if an imputer is provided
+                if imputer is not None:
+                    try:
+                        merged = imputer.fit_transform(merged)
+                    except Exception as e:
+                        logger.warning(f"Imputation failed: {str(e)}, using original data")
+                        np.nan_to_num(merged, nan=0.0, copy=False)
+                else:
+                    np.nan_to_num(merged, nan=0.0, copy=False)
+                    
+                # Final cleanup
+                if not np.isfinite(merged).all():
+                    np.nan_to_num(merged, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+                
+                if merged.size == 0 or merged.shape[0] == 0:
+                    logger.warning("Merged array has 0 rows")
+                    merged = np.zeros((1, 1), dtype=np.float32)
+                    
+                logger.debug(f"Merged array shape: {merged.shape} using strategy: {strategy}")
+                return merged, early_fusion
+            else:
+                # For validation data: use pre-fitted EarlyFusionPCA
+                if fitted_fusion is None:
+                    logger.error("fitted_fusion is required for validation data with early_fusion_pca strategy")
+                    # Fallback to concatenation
+                    merged = np.column_stack(processed_arrays)
+                    logger.debug(f"Fallback concatenation applied, shape: {merged.shape}")
+                else:
+                    merged = fitted_fusion.transform(*processed_arrays)
+                    logger.debug(f"EarlyFusionPCA transform applied with fitted object")
             
         elif strategy in ["average", "sum"]:
             # For these strategies, we need arrays with the same shape
@@ -439,8 +482,8 @@ def merge_modalities(*arrays: np.ndarray,
             # Fallback to simple concatenation if weighting fails
             merged = np.column_stack(processed_arrays)
 
-        # Apply imputation if an imputer is provided
-        if imputer is not None:
+        # Apply imputation if an imputer is provided (skip for early_fusion_pca training as it's already done)
+        if imputer is not None and not (strategy == "early_fusion_pca" and is_train):
             try:
                 if is_train:
                     merged = imputer.fit_transform(merged)
@@ -451,19 +494,23 @@ def merge_modalities(*arrays: np.ndarray,
                 # Replace NaNs with 0 as a fallback - do in-place if possible
                 np.nan_to_num(merged, nan=0.0, copy=False)
         else:
-            # Always ensure there are no NaNs in the result - in-place operation
-            np.nan_to_num(merged, nan=0.0, copy=False)
+            # Always ensure there are no NaNs in the result - in-place operation (skip for early_fusion_pca training as it's already done)
+            if not (strategy == "early_fusion_pca" and is_train):
+                np.nan_to_num(merged, nan=0.0, copy=False)
             
-        # Last check for inf values - in-place operation
-        if not np.isfinite(merged).all():
-            np.nan_to_num(merged, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+        # Last check for inf values - in-place operation (skip for early_fusion_pca training as it's already done)
+        if not (strategy == "early_fusion_pca" and is_train):
+            if not np.isfinite(merged).all():
+                np.nan_to_num(merged, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
         
-        # Verify the merged array's shape and ensure it's not empty
-        if merged.size == 0 or merged.shape[0] == 0:
-            logger.warning("Merged array has 0 rows")
-            return np.zeros((1, 1), dtype=np.float32)
-            
-        logger.debug(f"Merged array shape: {merged.shape} using strategy: {strategy}")
+        # Verify the merged array's shape and ensure it's not empty (skip for early_fusion_pca training as it's already done)
+        if not (strategy == "early_fusion_pca" and is_train):
+            if merged.size == 0 or merged.shape[0] == 0:
+                logger.warning("Merged array has 0 rows")
+                return np.zeros((1, 1), dtype=np.float32)
+                
+            logger.debug(f"Merged array shape: {merged.shape} using strategy: {strategy}")
+        
         return merged
         
     except Exception as e:
@@ -471,5 +518,11 @@ def merge_modalities(*arrays: np.ndarray,
         # Return a safe fallback array
         if processed_arrays:
             # Just return the first array if merging failed
-            return processed_arrays[0]
-        return np.zeros((1, 1), dtype=np.float32) 
+            fallback = processed_arrays[0]
+            if strategy == "early_fusion_pca" and is_train:
+                return fallback, None
+            return fallback
+        fallback = np.zeros((1, 1), dtype=np.float32)
+        if strategy == "early_fusion_pca" and is_train:
+            return fallback, None
+        return fallback 
