@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-Simple script to create only the critical difference diagrams from existing MAD data.
+Script to create only the critical difference diagrams from existing MAD data.
 """
 
+import os
 import pandas as pd
 import numpy as np
+
+# Configure matplotlib backend before any matplotlib imports to prevent tkinter errors
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
+
 import scikit_posthocs as sp
 from pathlib import Path
 import logging

@@ -9,7 +9,12 @@ single CSV file for downstream inspection.
 import os
 import pandas as pd
 import numpy as np
+
+# Configure matplotlib backend before any matplotlib imports to prevent tkinter errors
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for parallel processing
 import matplotlib.pyplot as plt
+
 import scikit_posthocs as sp
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
@@ -20,6 +25,7 @@ from scipy import stats
 # Local imports
 from Z_alg.config import REGRESSION_DATASETS, CLASSIFICATION_DATASETS
 from Z_alg.data_io import load_dataset
+from Z_alg.logging_utils import log_mad_analysis_info, log_data_save_info, log_plot_save_info
 
 logger = logging.getLogger(__name__)
 
@@ -242,37 +248,94 @@ def create_detailed_statistics_table(mad_df: pd.DataFrame, output_dir: str = "ou
     logger.info("=" * 60)
 
 
-
 def run_mad_analysis(output_dir: str = "output") -> None:
     """Run the complete MAD analysis pipeline."""
+    log_mad_analysis_info("Starting MAD analysis pipeline")
     logger.info("Starting MAD analysis pipeline…")
 
+    log_mad_analysis_info("Step 1: Calculating MAD metrics for all datasets")
     logger.info("Step 1: Calculating MAD metrics for all datasets…")
-    mad_df = calculate_all_mad_metrics()
+    
+    try:
+        mad_df = calculate_all_mad_metrics()
 
-    if mad_df.empty:
-        logger.error("No MAD metrics calculated. Exiting.")
-        return
+        if mad_df.empty:
+            log_mad_analysis_info("No MAD metrics calculated - analysis failed", level="error")
+            logger.error("No MAD metrics calculated. Exiting.")
+            return
 
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        log_mad_analysis_info(f"Created output directory: {output_dir}")
 
-    # Save detailed + summary statistics table
-    create_detailed_statistics_table(mad_df, output_dir)
+        # Save detailed + summary statistics table
+        log_mad_analysis_info("Saving detailed statistics table")
+        try:
+            create_detailed_statistics_table(mad_df, output_dir)
+            stats_path = Path(output_dir) / "mad_detailed_statistics.csv"
+            log_data_save_info("MAD_Analysis", "detailed_statistics", str(stats_path), success=True)
+            log_mad_analysis_info(f"Detailed statistics saved to: {stats_path}")
+        except Exception as e:
+            log_data_save_info("MAD_Analysis", "detailed_statistics", str(Path(output_dir) / "mad_detailed_statistics.csv"), success=False, error_msg=str(e))
+            log_mad_analysis_info(f"Failed to save detailed statistics: {str(e)}", level="error")
 
-    # Print high‑level summary to logger
-    logger.info("\nHigh‑level MAD Summary:")
-    logger.info(f"Total dataset‑modality combinations: {len(mad_df)}")
-    logger.info(f"Unique datasets: {mad_df['dataset'].nunique()}")
-    logger.info(f"Unique modalities: {mad_df['modality'].nunique()}")
+        # Print high‑level summary to logger
+        log_mad_analysis_info("Generating high-level MAD summary")
+        logger.info("\nHigh‑level MAD Summary:")
+        logger.info(f"Total dataset‑modality combinations: {len(mad_df)}")
+        logger.info(f"Unique datasets: {mad_df['dataset'].nunique()}")
+        logger.info(f"Unique modalities: {mad_df['modality'].nunique()}")
+        
+        log_mad_analysis_info(f"Processed {len(mad_df)} dataset-modality combinations from {mad_df['dataset'].nunique()} datasets")
 
-    modality_stats = mad_df.groupby('modality')['mad_value'].agg(['count', 'mean', 'std', 'min', 'max'])
-    logger.info("\nMAD statistics by modality:")
-    logger.info(modality_stats)
+        modality_stats = mad_df.groupby('modality')['mad_value'].agg(['count', 'mean', 'std', 'min', 'max'])
+        logger.info("\nMAD statistics by modality:")
+        logger.info(modality_stats)
+        
+        # Log modality statistics
+        for modality in modality_stats.index:
+            stats = modality_stats.loc[modality]
+            log_mad_analysis_info(f"{modality.upper()} modality: {stats['count']} datasets, mean MAD={stats['mean']:.6f}")
 
-    # Step 2: Critical difference diagrams
-    logger.info("\nStep 2: Creating modality‑specific critical difference diagrams…")
-    for mod in ['exp', 'mirna', 'methy']:
-        logger.info(f"Creating {mod.upper()} modality diagram…")
-        create_modality_specific_critical_difference_diagram(mad_df, mod, output_dir)
+        # Step 2: Critical difference diagrams
+        log_mad_analysis_info("Step 2: Creating modality-specific critical difference diagrams")
+        logger.info("\nStep 2: Creating modality‑specific critical difference diagrams…")
+        
+        plot_success_count = 0
+        plot_total_count = 0
+        
+        for mod in ['exp', 'mirna', 'methy']:
+            plot_total_count += 1
+            log_mad_analysis_info(f"Creating {mod.upper()} modality diagram")
+            logger.info(f"Creating {mod.upper()} modality diagram…")
+            
+            try:
+                create_modality_specific_critical_difference_diagram(mad_df, mod, output_dir)
+                plot_path = Path(output_dir) / f"mad_{mod}_critical_difference_diagram.png"
+                
+                # Check if plot was actually created
+                if plot_path.exists() and plot_path.stat().st_size > 0:
+                    plot_success_count += 1
+                    log_plot_save_info("MAD_Analysis", f"{mod}_critical_difference", str(plot_path), success=True)
+                    log_mad_analysis_info(f"{mod.upper()} diagram saved successfully")
+                else:
+                    log_plot_save_info("MAD_Analysis", f"{mod}_critical_difference", str(plot_path), success=False, error_msg="Plot file not created or empty")
+                    log_mad_analysis_info(f"{mod.upper()} diagram creation failed - file not found", level="warning")
+                    
+            except Exception as e:
+                plot_path = Path(output_dir) / f"mad_{mod}_critical_difference_diagram.png"
+                log_plot_save_info("MAD_Analysis", f"{mod}_critical_difference", str(plot_path), success=False, error_msg=str(e))
+                log_mad_analysis_info(f"Failed to create {mod.upper()} diagram: {str(e)}", level="error")
+                logger.error(f"Error creating {mod} critical difference diagram: {str(e)}")
 
-    logger.info("MAD analysis pipeline completed successfully!")
+        # Log plot creation summary
+        log_mad_analysis_info(f"Created {plot_success_count}/{plot_total_count} critical difference diagrams successfully")
+        
+        log_mad_analysis_info("MAD analysis pipeline completed successfully")
+        logger.info("MAD analysis pipeline completed successfully!")
+        
+    except Exception as e:
+        log_mad_analysis_info(f"MAD analysis pipeline failed: {str(e)}", level="error")
+        logger.error(f"Error in MAD analysis pipeline: {str(e)}")
+        import traceback
+        logger.debug(f"MAD analysis traceback:\n{traceback.format_exc()}")
+        raise

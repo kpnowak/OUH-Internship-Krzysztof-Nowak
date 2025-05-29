@@ -44,6 +44,7 @@ from Z_alg.models import (
 )
 # Removed unused legacy imports
 from Z_alg._process_single_modality import align_samples_to_modalities, verify_data_alignment
+from Z_alg.logging_utils import log_pipeline_stage, log_data_save_info, log_model_training_info, log_plot_save_info
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -853,10 +854,18 @@ def _run_pipeline(
     -------
     None
     """
+    # Log pipeline start
+    task_type = "regression" if is_regression else "classification"
+    log_pipeline_stage(f"{pipeline_type.upper()}_PIPELINE_START", dataset=ds_name, 
+                      details=f"{task_type} with {len(transformers)} transformers, {len(n_trans_list)} parameters")
+    logger.debug(f"[PIPELINE] {ds_name} - Starting {pipeline_type} pipeline for {task_type}")
+    
     # Ensure output directories exist
     os.makedirs(base_out, exist_ok=True)
     for subdir in ["models", "metrics", "plots"]:
-        os.makedirs(os.path.join(base_out, subdir), exist_ok=True)
+        subdir_path = os.path.join(base_out, subdir)
+        os.makedirs(subdir_path, exist_ok=True)
+        logger.debug(f"[PIPELINE] {ds_name} - Created directory: {subdir_path}")
     
     # Convert y to numpy array
     y_arr = np.array(y)
@@ -864,6 +873,7 @@ def _run_pipeline(
     # Warn if sample size is very small
     if len(y_arr) < 30:
         logger.warning(f"Sample size for {ds_name} is very small ({len(y_arr)} samples). Model performance may be unstable.")
+        logger.debug(f"[PIPELINE] {ds_name} - Small sample size warning: {len(y_arr)} samples")
     
     # Create indices array for row-based indexing
     indices = np.arange(len(common_ids))
@@ -872,10 +882,13 @@ def _run_pipeline(
     id_to_idx = {id_: idx for idx, id_ in enumerate(common_ids)}
     idx_to_id = {idx: id_ for id_, idx in id_to_idx.items()}
     
+    logger.debug(f"[PIPELINE] {ds_name} - Created sample mappings for {len(common_ids)} samples")
+    
     # Split with stratification if possible
     try:
         # For small datasets (< 15 samples), use a larger test proportion to ensure some test samples
         test_size = 0.3 if len(indices) < 15 else 0.2
+        logger.debug(f"[PIPELINE] {ds_name} - Using test_size={test_size} for {len(indices)} samples")
         # For regression, bin continuous values for stratified split
         if is_regression:
             # Validate that y_arr contains numeric data
@@ -990,11 +1003,13 @@ def _run_pipeline(
                 # Always show progress in terminal
                 print(progress_msg)
                 logger.info(progress_msg)
+                log_pipeline_stage(f"{trans_type}_CV", dataset=ds_name, details=f"{trans_name}-{n_val} ({run_idx}/{total_runs})")
 
                 # Use the new robust CV splitter
                 cv_splitter, n_splits, cv_type_used = create_robust_cv_splitter(idx_temp, y_temp, is_regression)
                 
                 logger.info(f"Dataset: {ds_name}, using {cv_type_used} {n_splits}-fold CV with {len(idx_temp)} training samples")
+                logger.debug(f"[PIPELINE] {ds_name} - {trans_name}-{n_val}: Using {cv_type_used} {n_splits}-fold CV")
                 
                 # Log detailed CV summary for classification tasks
                 if not is_regression:
@@ -1502,84 +1517,143 @@ def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, 
     import time
     from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
     
+    # Extract dataset name from plot_prefix for logging
+    dataset_name = plot_prefix.split('_')[0] if '_' in plot_prefix else "unknown"
+    
     # Data should already be aligned by process_cv_fold, so just do basic validation
     if X_train is None or y_train is None or X_val is None or y_val is None:
         logger.warning(f"Invalid data for {model_name} in fold {fold_idx}")
+        log_model_training_info(model_name, dataset_name, fold_idx, 0, 0, success=False, error_msg="Invalid input data")
         return None, {}
     
     # Basic sanity check without redundant alignment
     if X_train.shape[0] != len(y_train):
         logger.error(f"Data alignment error for {model_name} in fold {fold_idx}: X_train={X_train.shape[0]}, y_train={len(y_train)}")
+        log_model_training_info(model_name, dataset_name, fold_idx, X_train.shape[0], 0, success=False, error_msg="Training data alignment error")
         return None, {}
     
     if X_val.shape[0] != len(y_val):
         logger.error(f"Data alignment error for {model_name} in fold {fold_idx}: X_val={X_val.shape[0]}, y_val={len(y_val)}")
+        log_model_training_info(model_name, dataset_name, fold_idx, X_train.shape[0], X_val.shape[0], success=False, error_msg="Validation data alignment error")
         return None, {}
 
-    # Create the model (with early stopping enabled by default)
-    model = get_model_object(model_name)
-    
-    # Train the model with timing
-    t0 = time.time()
-    model.fit(X_train, y_train)
-    train_time = time.time() - t0
-    
-    # Get early stopping information if available
-    early_stopping_info = {}
-    if hasattr(model, 'best_score_'):
-        early_stopping_info = {
-            'early_stopping_used': True,
-            'best_validation_score': model.best_score_,
-            'stopped_epoch': model.stopped_epoch_ or 'N/A',
-            'early_stopping_history': model.history_ if hasattr(model, 'history_') else [],
-            'patience_used': model.wait_ if hasattr(model, 'wait_') else None
-        }
-        logger.info(f"Early stopping for {model_name} (fold {fold_idx}): best score={model.best_score_:.4f}, stopped at epoch {model.stopped_epoch_ or 'N/A'}")
-    else:
-        early_stopping_info = {
-            'early_stopping_used': False
-        }
-    
-    # Make predictions
-    y_pred = model.predict(X_val)
-    
-    # Calculate metrics
-    mse = mean_squared_error(y_val, y_pred)
-    rmse = np.sqrt(mse)
-    mae = mean_absolute_error(y_val, y_pred)
-    r2 = r2_score(y_val, y_pred)
-    
-    # Use passed train_n_components if provided, else fallback to X_train.shape[1]
-    if train_n_components is None:
-        train_n_components = X_train.shape[1]
-    
-    # Create plots
-    if out_dir and make_plots:
-        os.makedirs(out_dir, exist_ok=True)
-        plot_regression_scatter(y_val, y_pred, f"{model_name} Scatter", os.path.join(out_dir, f"{plot_prefix}_scatter.png"))
-        plot_regression_residuals(y_val, y_pred, f"{model_name} Residuals", os.path.join(out_dir, f"{plot_prefix}_residuals.png"))
-        # Feature importance plot
-        if hasattr(model, 'feature_importances_') or hasattr(model, 'coef_'):
-            if hasattr(X_train, 'columns'):
-                feat_names = list(X_train.columns)
-            else:
-                feat_names = [f"Feature {i}" for i in range(X_train.shape[1])]
-            plot_feature_importance(model, feat_names, f"{model_name} Feature Importance", os.path.join(out_dir, f"{plot_prefix}_featimp.png"))
-    
-    # Return model and metrics (including early stopping info)
-    metrics = {
-        'mse': mse,
-        'rmse': rmse,
-        'mae': mae,
-        'r2': r2,
-        'train_time': train_time,
-        'n_features': n_features if n_features is not None else -1,  # Original feature count or -1 if unknown
-        'train_n_components': train_n_components,  # Actual feature count used in training
-        **early_stopping_info  # Include early stopping metrics
-    }
-    
-    return model, metrics
+    # Log training start
+    logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Starting training with {X_train.shape[0]} train, {X_val.shape[0]} val samples")
 
+    try:
+        # Create the model (with early stopping enabled by default)
+        model = get_model_object(model_name)
+        
+        # Train the model with timing
+        t0 = time.time()
+        model.fit(X_train, y_train)
+        train_time = time.time() - t0
+        
+        # Check if fallback strategy was used
+        fallback_used = False
+        if hasattr(model, '_fallback_used'):
+            fallback_used = model._fallback_used
+        
+        # Get early stopping information if available
+        early_stopping_info = {}
+        if hasattr(model, 'best_score_'):
+            early_stopping_info = {
+                'early_stopping_used': True,
+                'best_validation_score': model.best_score_,
+                'stopped_epoch': model.stopped_epoch_ or 'N/A',
+                'early_stopping_history': model.history_ if hasattr(model, 'history_') else [],
+                'patience_used': model.wait_ if hasattr(model, 'wait_') else None
+            }
+            logger.info(f"Early stopping for {model_name} (fold {fold_idx}): best score={model.best_score_:.4f}, stopped at epoch {model.stopped_epoch_ or 'N/A'}")
+            logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Early stopping used, best score: {model.best_score_:.4f}")
+        else:
+            early_stopping_info = {
+                'early_stopping_used': False
+            }
+        
+        # Make predictions
+        y_pred = model.predict(X_val)
+        
+        # Calculate metrics
+        mse = mean_squared_error(y_val, y_pred)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(y_val, y_pred)
+        r2 = r2_score(y_val, y_pred)
+        
+        # Log successful training
+        log_model_training_info(model_name, dataset_name, fold_idx, X_train.shape[0], X_val.shape[0], 
+                               success=True, fallback=fallback_used)
+        logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Metrics: R2={r2:.4f}, RMSE={rmse:.4f}")
+        
+        # Use passed train_n_components if provided, else fallback to X_train.shape[1]
+        if train_n_components is None:
+            train_n_components = X_train.shape[1]
+        
+        # Create plots
+        plot_success_count = 0
+        plot_total_count = 0
+        if out_dir and make_plots:
+            os.makedirs(out_dir, exist_ok=True)
+            
+            # Scatter plot
+            plot_total_count += 1
+            scatter_path = os.path.join(out_dir, f"{plot_prefix}_scatter.png")
+            if plot_regression_scatter(y_val, y_pred, f"{model_name} Scatter", scatter_path):
+                plot_success_count += 1
+                log_plot_save_info(dataset_name, "regression_scatter", scatter_path, success=True)
+            else:
+                log_plot_save_info(dataset_name, "regression_scatter", scatter_path, success=False)
+            
+            # Residuals plot
+            plot_total_count += 1
+            residuals_path = os.path.join(out_dir, f"{plot_prefix}_residuals.png")
+            if plot_regression_residuals(y_val, y_pred, f"{model_name} Residuals", residuals_path):
+                plot_success_count += 1
+                log_plot_save_info(dataset_name, "regression_residuals", residuals_path, success=True)
+            else:
+                log_plot_save_info(dataset_name, "regression_residuals", residuals_path, success=False)
+            
+            # Feature importance plot
+            if hasattr(model, 'feature_importances_') or hasattr(model, 'coef_'):
+                plot_total_count += 1
+                if hasattr(X_train, 'columns'):
+                    feat_names = list(X_train.columns)
+                else:
+                    feat_names = [f"Feature {i}" for i in range(X_train.shape[1])]
+                featimp_path = os.path.join(out_dir, f"{plot_prefix}_featimp.png")
+                if plot_feature_importance(model, feat_names, f"{model_name} Feature Importance", featimp_path):
+                    plot_success_count += 1
+                    log_plot_save_info(dataset_name, "feature_importance", featimp_path, success=True)
+                else:
+                    log_plot_save_info(dataset_name, "feature_importance", featimp_path, success=False)
+        
+        # Log plot creation summary
+        if make_plots and out_dir:
+            logger.debug(f"[PLOT_SAVE] {dataset_name} - {model_name} (fold {fold_idx}) - Created {plot_success_count}/{plot_total_count} plots successfully")
+        
+        # Return model and metrics (including early stopping info)
+        metrics = {
+            'mse': mse,
+            'rmse': rmse,
+            'mae': mae,
+            'r2': r2,
+            'train_time': train_time,
+            'n_features': n_features if n_features is not None else -1,  # Original feature count or -1 if unknown
+            'train_n_components': train_n_components,  # Actual feature count used in training
+            **early_stopping_info  # Include early stopping metrics
+        }
+        
+        return model, metrics
+        
+    except Exception as e:
+        # Log training failure
+        error_msg = str(e)
+        log_model_training_info(model_name, dataset_name, fold_idx, X_train.shape[0], X_val.shape[0], 
+                               success=False, error_msg=error_msg)
+        logger.error(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Training failed: {error_msg}")
+        import traceback
+        logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Traceback:\n{traceback.format_exc()}")
+        return None, {}
 
 def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None, make_plots=True, n_features=None, train_n_components=None):
     """Train classification model and evaluate it."""
@@ -1590,9 +1664,13 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
     import time
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score, matthews_corrcoef
     
+    # Extract dataset name from plot_prefix for logging
+    dataset_name = plot_prefix.split('_')[0] if '_' in plot_prefix else "unknown"
+    
     # Quick validation - data should already be aligned by process_cv_fold
     if X_train is None or y_train is None or X_val is None or y_val is None:
         logger.warning(f"Invalid data for {model_name} in fold {fold_idx}")
+        log_model_training_info(model_name, dataset_name, fold_idx, 0, 0, success=False, error_msg="Invalid input data")
         return None, {}, None, None
 
     # Additional safety checks for classification
@@ -1604,126 +1682,179 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
     # Check minimum sample requirements
     if n_train_samples < 2:
         logger.warning(f"Insufficient training samples for {model_name} in fold {fold_idx}: {n_train_samples} < 2")
+        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, success=False, error_msg="Insufficient training samples")
         return None, {}, None, None
     
     if n_val_samples < 1:
         logger.warning(f"Insufficient validation samples for {model_name} in fold {fold_idx}: {n_val_samples} < 1")
+        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, success=False, error_msg="Insufficient validation samples")
         return None, {}, None, None
     
     if n_train_classes < 2:
         logger.warning(f"Insufficient classes in training data for {model_name} in fold {fold_idx}: {n_train_classes} < 2")
+        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, success=False, error_msg="Insufficient classes")
         return None, {}, None, None
     
     # Warn about very small datasets
     if n_train_samples < 10:
         logger.warning(f"Very small training set for {model_name} in fold {fold_idx}: {n_train_samples} samples")
     
-    # Create the model (with early stopping enabled by default)
-    model = get_model_object(model_name)
-    
-    # Train the model with timing
-    t0 = time.time()
-    model.fit(X_train, y_train)
-    train_time = time.time() - t0
-    
-    # Get early stopping information if available
-    early_stopping_info = {}
-    if hasattr(model, 'best_score_'):
-        early_stopping_info = {
-            'early_stopping_used': True,
-            'best_validation_score': model.best_score_,
-            'stopped_epoch': model.stopped_epoch_ or 'N/A',
-            'early_stopping_history': model.history_ if hasattr(model, 'history_') else [],
-            'patience_used': model.wait_ if hasattr(model, 'wait_') else None
-        }
-        logger.info(f"Early stopping for {model_name} (fold {fold_idx}): best score={model.best_score_:.4f}, stopped at epoch {model.stopped_epoch_ or 'N/A'}")
-    else:
-        early_stopping_info = {
-            'early_stopping_used': False
-        }
-    
-    # Make predictions
-    y_pred = model.predict(X_val)
-    
-    # Calculate metrics
-    accuracy = accuracy_score(y_val, y_pred)
-    precision = precision_score(y_val, y_pred, average='weighted', zero_division=0)
-    recall = recall_score(y_val, y_pred, average='weighted', zero_division=0)
-    f1 = f1_score(y_val, y_pred, average='weighted', zero_division=0)
-    cm = confusion_matrix(y_val, y_pred)
-    
-    # Calculate MCC (Matthews Correlation Coefficient)
-    mcc = matthews_corrcoef(y_val, y_pred)
-    
-    # Use passed train_n_components if provided, else fallback to X_train.shape[1]
-    if train_n_components is None:
-        train_n_components = X_train.shape[1]
-    
-    # Try to calculate ROC AUC if applicable (binary classification with proba method)
-    auc = 0.5
+    # Log training start
+    logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Starting training with {n_train_samples} train, {n_val_samples} val samples, {n_train_classes} classes")
+
     try:
-        if hasattr(model, 'predict_proba') and len(np.unique(y_val)) == 2:
-            y_proba = model.predict_proba(X_val)
-            # Check if predict_proba returns the expected shape
-            if y_proba.shape[1] >= 2:
-                y_score = y_proba[:, 1]
-                auc = roc_auc_score(y_val, y_score)
-            else:
-                logger.debug(f"predict_proba returned unexpected shape: {y_proba.shape}")
-    except Exception as e:
-        from Z_alg.config import WARNING_SUPPRESSION_CONFIG
-        if not WARNING_SUPPRESSION_CONFIG.get("suppress_auc_warnings", False):
-            logger.warning(f"Could not calculate AUC: {str(e)}")
+        # Create the model (with early stopping enabled by default)
+        model = get_model_object(model_name)
+        
+        # Train the model with timing
+        t0 = time.time()
+        model.fit(X_train, y_train)
+        train_time = time.time() - t0
+        
+        # Check if fallback strategy was used
+        fallback_used = False
+        if hasattr(model, '_fallback_used'):
+            fallback_used = model._fallback_used
+        
+        # Get early stopping information if available
+        early_stopping_info = {}
+        if hasattr(model, 'best_score_'):
+            early_stopping_info = {
+                'early_stopping_used': True,
+                'best_validation_score': model.best_score_,
+                'stopped_epoch': model.stopped_epoch_ or 'N/A',
+                'early_stopping_history': model.history_ if hasattr(model, 'history_') else [],
+                'patience_used': model.wait_ if hasattr(model, 'wait_') else None
+            }
+            logger.info(f"Early stopping for {model_name} (fold {fold_idx}): best score={model.best_score_:.4f}, stopped at epoch {model.stopped_epoch_ or 'N/A'}")
+            logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Early stopping used, best score: {model.best_score_:.4f}")
         else:
-            logger.debug(f"Could not calculate AUC: {str(e)}")
-    
-    # Create plots if directory is provided
-    if out_dir and make_plots:
-        os.makedirs(out_dir, exist_ok=True)
+            early_stopping_info = {
+                'early_stopping_used': False
+            }
         
-        # Confusion matrix
-        class_labels = sorted(np.unique(np.concatenate([y_train, y_val])))
-        plot_confusion_matrix(cm, class_labels, f"{model_name} Confusion Matrix", 
-                             os.path.join(out_dir, f"{plot_prefix}_confusion.png"))
+        # Make predictions
+        y_pred = model.predict(X_val)
         
-        # ROC curve - now supports both binary and multi-class
-        if hasattr(model, 'predict_proba'):
-            n_classes = len(np.unique(y_val))
-            if n_classes == 2:
-                # Binary classification ROC
-                plot_roc_curve_binary(model, X_val, y_val, class_labels, 
-                                     f"{model_name} ROC Curve", 
-                                     os.path.join(out_dir, f"{plot_prefix}_roc.png"))
+        # Calculate metrics
+        accuracy = accuracy_score(y_val, y_pred)
+        precision = precision_score(y_val, y_pred, average='weighted', zero_division=0)
+        recall = recall_score(y_val, y_pred, average='weighted', zero_division=0)
+        f1 = f1_score(y_val, y_pred, average='weighted', zero_division=0)
+        cm = confusion_matrix(y_val, y_pred)
+        
+        # Calculate MCC (Matthews Correlation Coefficient)
+        mcc = matthews_corrcoef(y_val, y_pred)
+        
+        # Log successful training
+        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, 
+                               success=True, fallback=fallback_used)
+        logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Metrics: Accuracy={accuracy:.4f}, F1={f1:.4f}")
+        
+        # Use passed train_n_components if provided, else fallback to X_train.shape[1]
+        if train_n_components is None:
+            train_n_components = X_train.shape[1]
+        
+        # Try to calculate ROC AUC if applicable (binary classification with proba method)
+        auc = 0.5
+        try:
+            if hasattr(model, 'predict_proba') and len(np.unique(y_val)) == 2:
+                y_proba = model.predict_proba(X_val)
+                # Check if predict_proba returns the expected shape
+                if y_proba.shape[1] >= 2:
+                    y_score = y_proba[:, 1]
+                    auc = roc_auc_score(y_val, y_score)
+                else:
+                    logger.debug(f"predict_proba returned unexpected shape: {y_proba.shape}")
+        except Exception as e:
+            from Z_alg.config import WARNING_SUPPRESSION_CONFIG
+            if not WARNING_SUPPRESSION_CONFIG.get("suppress_auc_warnings", False):
+                logger.warning(f"Could not calculate AUC: {str(e)}")
             else:
-                # Multi-class ROC (create a multi-class ROC plot)
-                from Z_alg.plots import plot_roc_curve_multiclass
-                plot_roc_curve_multiclass(model, X_val, y_val, class_labels, 
-                                         f"{model_name} ROC Curve", 
-                                         os.path.join(out_dir, f"{plot_prefix}_roc.png"))
+                logger.debug(f"Could not calculate AUC: {str(e)}")
         
-        # Feature importance plot
-        if hasattr(model, 'feature_importances_') or hasattr(model, 'coef_'):
-            if hasattr(X_train, 'columns'):
-                feat_names = list(X_train.columns)
+        # Create plots if directory is provided
+        plot_success_count = 0
+        plot_total_count = 0
+        if out_dir and make_plots:
+            os.makedirs(out_dir, exist_ok=True)
+            
+            # Confusion matrix
+            plot_total_count += 1
+            class_labels = sorted(np.unique(np.concatenate([y_train, y_val])))
+            confusion_path = os.path.join(out_dir, f"{plot_prefix}_confusion.png")
+            if plot_confusion_matrix(cm, class_labels, f"{model_name} Confusion Matrix", confusion_path):
+                plot_success_count += 1
+                log_plot_save_info(dataset_name, "confusion_matrix", confusion_path, success=True)
             else:
-                feat_names = [f"Feature {i}" for i in range(X_train.shape[1])]
-            plot_feature_importance(model, feat_names, f"{model_name} Feature Importance", os.path.join(out_dir, f"{plot_prefix}_featimp.png"))
-    
-    # Return model, metrics, y_val, y_pred (including early stopping info)
-    metrics = {
-        'accuracy': accuracy,
-        'precision': precision,
-        'recall': recall,
-        'f1': f1,
-        'auc': auc,
-        'mcc': mcc,
-        'train_time': train_time,
-        'n_features': n_features if n_features is not None else -1,  # Original feature count or -1 if unknown
-        'train_n_components': train_n_components,  # Actual feature count used in training
-        **early_stopping_info  # Include early stopping metrics
-    }
-    
-    return model, metrics, y_val, y_pred 
+                log_plot_save_info(dataset_name, "confusion_matrix", confusion_path, success=False)
+            
+            # ROC curve - now supports both binary and multi-class
+            if hasattr(model, 'predict_proba'):
+                plot_total_count += 1
+                n_classes = len(np.unique(y_val))
+                roc_path = os.path.join(out_dir, f"{plot_prefix}_roc.png")
+                if n_classes == 2:
+                    # Binary classification ROC
+                    if plot_roc_curve_binary(model, X_val, y_val, class_labels, 
+                                           f"{model_name} ROC Curve", roc_path):
+                        plot_success_count += 1
+                        log_plot_save_info(dataset_name, "roc_curve_binary", roc_path, success=True)
+                    else:
+                        log_plot_save_info(dataset_name, "roc_curve_binary", roc_path, success=False)
+                else:
+                    # Multi-class ROC (create a multi-class ROC plot)
+                    from Z_alg.plots import plot_roc_curve_multiclass
+                    if plot_roc_curve_multiclass(model, X_val, y_val, class_labels, 
+                                               f"{model_name} ROC Curve", roc_path):
+                        plot_success_count += 1
+                        log_plot_save_info(dataset_name, "roc_curve_multiclass", roc_path, success=True)
+                    else:
+                        log_plot_save_info(dataset_name, "roc_curve_multiclass", roc_path, success=False)
+            
+            # Feature importance plot
+            if hasattr(model, 'feature_importances_') or hasattr(model, 'coef_'):
+                plot_total_count += 1
+                if hasattr(X_train, 'columns'):
+                    feat_names = list(X_train.columns)
+                else:
+                    feat_names = [f"Feature {i}" for i in range(X_train.shape[1])]
+                featimp_path = os.path.join(out_dir, f"{plot_prefix}_featimp.png")
+                if plot_feature_importance(model, feat_names, f"{model_name} Feature Importance", featimp_path):
+                    plot_success_count += 1
+                    log_plot_save_info(dataset_name, "feature_importance", featimp_path, success=True)
+                else:
+                    log_plot_save_info(dataset_name, "feature_importance", featimp_path, success=False)
+        
+        # Log plot creation summary
+        if make_plots and out_dir:
+            logger.debug(f"[PLOT_SAVE] {dataset_name} - {model_name} (fold {fold_idx}) - Created {plot_success_count}/{plot_total_count} plots successfully")
+        
+        # Return model, metrics, y_val, y_pred (including early stopping info)
+        metrics = {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'auc': auc,
+            'mcc': mcc,
+            'train_time': train_time,
+            'n_features': n_features if n_features is not None else -1,  # Original feature count or -1 if unknown
+            'train_n_components': train_n_components,  # Actual feature count used in training
+            **early_stopping_info  # Include early stopping metrics
+        }
+        
+        return model, metrics, y_val, y_pred
+        
+    except Exception as e:
+        # Log training failure
+        error_msg = str(e)
+        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, 
+                               success=False, error_msg=error_msg)
+        logger.error(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Training failed: {error_msg}")
+        import traceback
+        logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Traceback:\n{traceback.format_exc()}")
+        return None, {}, None, None
 
 def check_and_filter_classes_in_fold(y_train, y_val, min_samples_per_class=2):
     """

@@ -3,6 +3,16 @@
 Main entry point for the multi-modal machine learning pipeline.
 """
 
+# Configure matplotlib backend before any other imports to prevent tkinter errors in parallel processing
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+
+import sys
+import os
+
+# Add the current directory to the Python path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from Z_alg.cli import main
 from Z_alg.utils import monitor_memory_usage, comprehensive_logger, memory_monitor, force_garbage_collection
 from Z_alg.models import clear_all_caches, get_cache_stats
@@ -130,7 +140,6 @@ if __name__ == "__main__":
     perf_thread.start()
     
     # Set environment variable to enable resource logging
-    import os
     os.environ["DEBUG_RESOURCES"] = "1"
     
     try:

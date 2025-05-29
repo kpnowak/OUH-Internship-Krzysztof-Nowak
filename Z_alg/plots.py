@@ -6,12 +6,19 @@ Plotting module for visualizing results.
 import os
 import numpy as np
 import pandas as pd
+import logging
+
+# Configure matplotlib backend before any matplotlib imports to prevent tkinter errors
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for parallel processing
 import matplotlib.pyplot as plt
+
 import seaborn as sns
 from sklearn.metrics import RocCurveDisplay
 from typing import List, Optional, Union, Any
-import matplotlib
-matplotlib.use('Agg')
+
+# Set up logger for this module
+logger = logging.getLogger(__name__)
 
 def verify_plot_exists(plot_path: str) -> bool:
     """
@@ -29,7 +36,8 @@ def verify_plot_exists(plot_path: str) -> bool:
     """
     try:
         return os.path.exists(plot_path) and os.path.getsize(plot_path) > 0
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Error checking plot file {plot_path}: {str(e)}")
         return False
 
 def plot_regression_scatter(y_test: np.ndarray, y_pred: np.ndarray, title: str, out_path: str) -> bool:
@@ -54,7 +62,7 @@ def plot_regression_scatter(y_test: np.ndarray, y_pred: np.ndarray, title: str, 
     """
     # Check if all values are NaN
     if np.isnan(y_test).all() or np.isnan(y_pred).all():
-        print(f"Warning: All values are NaN for {title}, skipping plot")
+        logger.warning(f"All values are NaN for {title}, skipping plot")
         return False
         
     try:
@@ -82,7 +90,8 @@ def plot_regression_scatter(y_test: np.ndarray, y_pred: np.ndarray, title: str, 
         
         return verify_plot_exists(out_path)
     except Exception as e:
-        print(f"Error creating scatter plot for {title}: {str(e)}")
+        logger.error(f"Error creating scatter plot for {title}: {str(e)}")
+        logger.debug(f"Scatter plot error details: {repr(e)}")
         plt.close('all')  # Ensure all figures are closed on error
         return False
 
@@ -108,7 +117,7 @@ def plot_regression_residuals(y_test: np.ndarray, y_pred: np.ndarray, title: str
     """
     # Check if all values are NaN
     if np.isnan(y_test).all() or np.isnan(y_pred).all():
-        print(f"Warning: All values are NaN for {title}, skipping plot")
+        logger.warning(f"All values are NaN for {title}, skipping plot")
         return False
         
     try:
@@ -135,7 +144,8 @@ def plot_regression_residuals(y_test: np.ndarray, y_pred: np.ndarray, title: str
         
         return verify_plot_exists(out_path)
     except Exception as e:
-        print(f"Error creating residuals plot for {title}: {str(e)}")
+        logger.error(f"Error creating residuals plot for {title}: {str(e)}")
+        logger.debug(f"Residuals plot error details: {repr(e)}")
         plt.close('all')  # Ensure all figures are closed on error
         return False
 
@@ -160,6 +170,18 @@ def plot_confusion_matrix(cm: np.ndarray, class_labels: List, title: str, out_pa
         True if plot was successfully created, False otherwise
     """
     try:
+        # Validate inputs
+        if cm is None or cm.size == 0:
+            logger.error(f"Empty or None confusion matrix for {title}")
+            return False
+            
+        if class_labels is None or len(class_labels) == 0:
+            logger.error(f"Empty or None class labels for {title}")
+            return False
+            
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        
         # Create a new figure for each plot
         fig = plt.figure(figsize=(5,5))
         ax = fig.add_subplot(111)
@@ -176,12 +198,18 @@ def plot_confusion_matrix(cm: np.ndarray, class_labels: List, title: str, out_pa
         
         # Save and close
         plt.tight_layout()
-        plt.savefig(out_path)
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)  # Explicitly close the figure
         
-        return verify_plot_exists(out_path)
+        success = verify_plot_exists(out_path)
+        if not success:
+            logger.error(f"Confusion matrix plot file was not created or is empty: {out_path}")
+        return success
     except Exception as e:
-        print(f"Error creating confusion matrix for {title}: {str(e)}")
+        logger.error(f"Error creating confusion matrix for {title}: {str(e)}")
+        logger.debug(f"Confusion matrix error details: {repr(e)}")
+        import traceback
+        logger.debug(f"Confusion matrix traceback:\n{traceback.format_exc()}")
         plt.close('all')  # Ensure all figures are closed on error
         return False
 
@@ -210,6 +238,22 @@ def plot_roc_curve_binary(model: Any, X_test: np.ndarray, y_test: np.ndarray, cl
         True if plot was successfully created, False otherwise
     """
     try:
+        # Validate inputs
+        if model is None:
+            logger.error(f"Model is None for {title}")
+            return False
+            
+        if X_test is None or X_test.size == 0:
+            logger.error(f"Empty or None X_test for {title}")
+            return False
+            
+        if y_test is None or len(y_test) == 0:
+            logger.error(f"Empty or None y_test for {title}")
+            return False
+        
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        
         # Convert y_test to numeric if it's string
         if isinstance(y_test[0], str):
             y_test = np.array([int(x) for x in y_test])
@@ -235,12 +279,18 @@ def plot_roc_curve_binary(model: Any, X_test: np.ndarray, y_test: np.ndarray, cl
         
         # Save and close
         plt.tight_layout()
-        plt.savefig(out_path)
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)  # Explicitly close the figure
         
-        return verify_plot_exists(out_path)
+        success = verify_plot_exists(out_path)
+        if not success:
+            logger.error(f"Binary ROC curve plot file was not created or is empty: {out_path}")
+        return success
     except Exception as e:
-        print(f"Error creating ROC curve for {title}: {str(e)}")
+        logger.error(f"Error creating ROC curve for {title}: {str(e)}")
+        logger.debug(f"Binary ROC curve error details: {repr(e)}")
+        import traceback
+        logger.debug(f"Binary ROC curve traceback:\n{traceback.format_exc()}")
         plt.close('all')  # Ensure all figures are closed on error
         return False
 
@@ -272,6 +322,26 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
         from sklearn.metrics import roc_curve, auc
         from sklearn.preprocessing import label_binarize
         
+        # Validate inputs
+        if model is None:
+            logger.error(f"Model is None for {title}")
+            return False
+            
+        if X_test is None or X_test.size == 0:
+            logger.error(f"Empty or None X_test for {title}")
+            return False
+            
+        if y_test is None or len(y_test) == 0:
+            logger.error(f"Empty or None y_test for {title}")
+            return False
+            
+        if class_labels is None or len(class_labels) == 0:
+            logger.error(f"Empty or None class_labels for {title}")
+            return False
+        
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        
         # Convert y_test to numeric if it's string
         if isinstance(y_test[0], str):
             y_test = np.array([int(x) for x in y_test])
@@ -279,6 +349,11 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
         # Get probability predictions for all classes
         y_proba = model.predict_proba(X_test)
         n_classes = len(class_labels)
+        
+        # Validate that we have the right number of classes
+        if y_proba.shape[1] != n_classes:
+            logger.error(f"Mismatch between predicted probabilities shape {y_proba.shape} and class labels {n_classes} for {title}")
+            return False
         
         # Create a new figure for each plot
         fig = plt.figure(figsize=(8, 6))
@@ -294,27 +369,33 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
             # For multi-class, binarize the output and compute ROC for each class
             y_test_bin = label_binarize(y_test, classes=range(n_classes))
             
+            # Handle case where y_test_bin might be 1D (only one class present)
+            if y_test_bin.ndim == 1:
+                y_test_bin = y_test_bin.reshape(-1, 1)
+            
             # Compute ROC curve and ROC area for each class
             fpr = dict()
             tpr = dict()
             roc_auc = dict()
             
             for i in range(n_classes):
-                fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_proba[:, i])
-                roc_auc[i] = auc(fpr[i], tpr[i])
+                if i < y_test_bin.shape[1]:
+                    fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_proba[:, i])
+                    roc_auc[i] = auc(fpr[i], tpr[i])
+                    
+                    # Plot ROC curve for each class
+                    ax.plot(fpr[i], tpr[i], lw=2, 
+                           label=f'Class {class_labels[i]} (AUC = {roc_auc[i]:.2f})')
+            
+            # Compute micro-average ROC curve and ROC area if we have multiple classes
+            if y_test_bin.shape[1] > 1:
+                fpr["micro"], tpr["micro"], _ = roc_curve(y_test_bin.ravel(), y_proba.ravel())
+                roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
                 
-                # Plot ROC curve for each class
-                ax.plot(fpr[i], tpr[i], lw=2, 
-                       label=f'Class {class_labels[i]} (AUC = {roc_auc[i]:.2f})')
-            
-            # Compute micro-average ROC curve and ROC area
-            fpr["micro"], tpr["micro"], _ = roc_curve(y_test_bin.ravel(), y_proba.ravel())
-            roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
-            
-            # Plot micro-average ROC curve
-            ax.plot(fpr["micro"], tpr["micro"], 
-                   color='deeppink', linestyle=':', linewidth=4,
-                   label=f'Micro-avg (AUC = {roc_auc["micro"]:.2f})')
+                # Plot micro-average ROC curve
+                ax.plot(fpr["micro"], tpr["micro"], 
+                       color='deeppink', linestyle=':', linewidth=4,
+                       label=f'Micro-avg (AUC = {roc_auc["micro"]:.2f})')
         
         # Plot diagonal line
         ax.plot([0, 1], [0, 1], 'k--', lw=2, alpha=0.8)
@@ -329,12 +410,18 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
         
         # Save and close
         plt.tight_layout()
-        plt.savefig(out_path)
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)  # Explicitly close the figure
         
-        return verify_plot_exists(out_path)
+        success = verify_plot_exists(out_path)
+        if not success:
+            logger.error(f"Multi-class ROC curve plot file was not created or is empty: {out_path}")
+        return success
     except Exception as e:
-        print(f"Error creating multi-class ROC curve for {title}: {str(e)}")
+        logger.error(f"Error creating multi-class ROC curve for {title}: {str(e)}")
+        logger.debug(f"Multi-class ROC curve error details: {repr(e)}")
+        import traceback
+        logger.debug(f"Multi-class ROC curve traceback:\n{traceback.format_exc()}")
         plt.close('all')  # Ensure all figures are closed on error
         return False
 
@@ -344,6 +431,14 @@ def plot_feature_importance(model, feature_names, title, out_path, top_n=20):
     Supports tree-based models (feature_importances_) and linear models (coef_).
     """
     try:
+        # Validate inputs
+        if model is None:
+            logger.error(f"Model is None for {title}")
+            return False
+        
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        
         # Try to get feature importances
         if hasattr(model, 'feature_importances_'):
             importances = model.feature_importances_
@@ -352,7 +447,7 @@ def plot_feature_importance(model, feature_names, title, out_path, top_n=20):
             if importances.ndim > 1:
                 importances = np.sum(importances, axis=0)
         else:
-            print(f"Model does not have feature importances or coefficients: {type(model)}")
+            logger.warning(f"Model does not have feature importances or coefficients: {type(model)}")
             return False
         
         # If feature_names is None or too short, use generic names
@@ -377,11 +472,17 @@ def plot_feature_importance(model, feature_names, title, out_path, top_n=20):
         
         # Save and close
         plt.tight_layout()
-        plt.savefig(out_path)
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)  # Explicitly close the figure
         
-        return verify_plot_exists(out_path)
+        success = verify_plot_exists(out_path)
+        if not success:
+            logger.error(f"Feature importance plot file was not created or is empty: {out_path}")
+        return success
     except Exception as e:
-        print(f"Error creating feature importance plot for {title}: {str(e)}")
+        logger.error(f"Error creating feature importance plot for {title}: {str(e)}")
+        logger.debug(f"Feature importance error details: {repr(e)}")
+        import traceback
+        logger.debug(f"Feature importance traceback:\n{traceback.format_exc()}")
         plt.close('all')  # Ensure all figures are closed on error
         return False 

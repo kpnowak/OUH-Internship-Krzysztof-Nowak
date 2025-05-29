@@ -27,31 +27,48 @@ from Z_alg.cv import (
 )
 from Z_alg.utils import comprehensive_logger
 from Z_alg.mad_analysis import run_mad_analysis
+from Z_alg.logging_utils import (
+    setup_logging_levels, log_pipeline_stage, log_mad_analysis_info,
+    log_dataset_preparation, log_model_training_info, log_data_save_info, log_plot_save_info
+)
 
 # Remove any existing handlers
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
 
-# Set up logging to file and console
+# Set up logging to file and console with improved configuration
 log_file = "debug.log"
-file_handler = logging.FileHandler(log_file, mode='w')
-file_handler.setLevel(logging.INFO)  # Changed from DEBUG to INFO to reduce noise
-file_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+
+# Create file handler that always logs everything to debug.log
+file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+file_handler.setLevel(logging.DEBUG)  # Always log everything to file
+file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s')
 file_handler.setFormatter(file_formatter)
 
+# Create console handler with default WARNING level (will be adjusted based on args)
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.WARNING)
-console_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+console_handler.setLevel(logging.WARNING)  # Default level, will be changed based on args
+console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(console_formatter)
 
-# Set basic config to INFO level instead of DEBUG to reduce noise
-logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
+# Set up root logger
+logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, console_handler])
 
-# Specifically suppress matplotlib debug messages
+# Suppress noisy third-party loggers
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.ticker').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
-logging.getLogger('PIL').setLevel(logging.WARNING)  # Also suppress PIL debug messages
+logging.getLogger('PIL').setLevel(logging.WARNING)
+logging.getLogger('sklearn').setLevel(logging.WARNING)
+
+# Additional matplotlib configuration for parallel processing
+import matplotlib
+matplotlib.use('Agg')  # Ensure non-interactive backend
+import matplotlib.pyplot as plt
+plt.ioff()  # Turn off interactive mode
+# Configure matplotlib to avoid tkinter issues in parallel processing
+matplotlib.rcParams['figure.max_open_warning'] = 0  # Disable figure limit warnings
+matplotlib.rcParams['agg.path.chunksize'] = 10000  # Optimize for large plots
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +94,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         # Extract the dataset name
         ds_name = ds_conf["name"]
         logger.info(f"\n>> Processing {ds_name} dataset...")
+        logger.debug(f"[DATASET_PREP] {ds_name} - Starting dataset preparation")
         
         # Load the dataset using the new optimized function
         ds_name = ds_conf["name"]
@@ -97,6 +115,9 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         outcome_col = ds_conf["outcome_col"]
         task_type = 'regression' if is_regression else 'classification'
         
+        logger.debug(f"[DATASET_PREP] {ds_name} - Loading modalities: {modality_short_names}")
+        logger.debug(f"[DATASET_PREP] {ds_name} - Outcome column: {outcome_col}, Task: {task_type}")
+        
         # Call the new optimized load_dataset function
         modalities_data, y_aligned, common_ids = load_dataset(
             ds_name.lower(), 
@@ -110,6 +131,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         # Check if loading was successful
         if modalities_data is None or len(common_ids) == 0:
             logger.warning(f"Error: Failed to load dataset {ds_name}")
+            log_dataset_preparation(ds_name, {}, [], (), success=False)
             return None
             
         # Data is already in the correct format
@@ -125,20 +147,24 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
                 logger.error(f"Regression target data is not numeric: dtype={y_aligned.dtype}")
                 logger.error(f"Sample values: {y_aligned[:5] if len(y_aligned) > 0 else 'empty'}")
                 logger.error(f"This indicates a data loading error - regression targets must be numeric")
+                log_dataset_preparation(ds_name, modalities, common_ids, y_aligned.shape, success=False)
                 return None
             
             # Ensure no NaN or infinite values
             if np.any(np.isnan(y_aligned)) or np.any(np.isinf(y_aligned)):
                 logger.warning(f"Found NaN or infinite values in regression target, cleaning...")
                 y_aligned = np.nan_to_num(y_aligned, nan=0.0, posinf=0.0, neginf=0.0)
+                logger.debug(f"[DATASET_PREP] {ds_name} - Cleaned NaN/infinite values in target")
         
         # Verify data integrity
         if len(common_ids) < 10:
             logger.warning(f"Warning: Too few samples ({len(common_ids)}) in {ds_name}, skipping")
+            log_dataset_preparation(ds_name, modalities, common_ids, y_aligned.shape, success=False)
             return None
             
         if len(y_aligned) == 0:
             logger.warning(f"Error: No target values available for {ds_name}")
+            log_dataset_preparation(ds_name, modalities, common_ids, (), success=False)
             return None
         
         # For classification datasets, validate class distribution
@@ -148,6 +174,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
             n_classes = len(unique)
             
             logger.info(f"Class distribution for {ds_name}: {dict(zip(unique, counts))}")
+            logger.debug(f"[DATASET_PREP] {ds_name} - {n_classes} classes, min samples per class: {min_samples}")
             
             # Check for problematic class distributions
             classes_with_few_samples = unique[counts < 2]
@@ -155,12 +182,14 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
                 logger.info(f"Dataset {ds_name} has classes with < 2 samples: {classes_with_few_samples}")
                 logger.info(f"Original class distribution: {dict(zip(unique, counts))}")
                 logger.info(f"Filtering out these classes to ensure proper cross-validation")
+                logger.debug(f"[DATASET_PREP] {ds_name} - Filtering classes with insufficient samples")
                 
                 # Actually filter out classes with insufficient samples
                 valid_classes = unique[counts >= 2]
                 if len(valid_classes) < 2:
                     logger.error(f"Dataset {ds_name} has insufficient valid classes for classification (< 2 classes with >= 2 samples)")
                     logger.error(f"Cannot proceed with this dataset")
+                    log_dataset_preparation(ds_name, modalities, common_ids, y_aligned.shape, success=False)
                     return None
                 
                 # Filter samples to only include valid classes
@@ -193,14 +222,17 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
                 logger.info(f"Reduced from {n_classes} to {len(valid_classes)} classes")
                 logger.info(f"Class relabeling mapping: {label_mapping}")
                 logger.info(f"Final class distribution: {dict(zip(range(len(valid_classes_sorted)), np.bincount(y_aligned)))}")
+                logger.debug(f"[DATASET_PREP] {ds_name} - Class filtering completed")
             else:
                 logger.info(f"All classes have sufficient samples (>= 2)")
+                logger.debug(f"[DATASET_PREP] {ds_name} - No class filtering needed")
         
         # Final validation after any filtering
         if not is_regression:
             unique_final, counts_final = np.unique(y_aligned, return_counts=True)
             if len(unique_final) < 2:
                 logger.error(f"Dataset {ds_name} has insufficient classes after processing (< 2)")
+                log_dataset_preparation(ds_name, modalities, common_ids, y_aligned.shape, success=False)
                 return None
             
             # Warn about very small classes that might still cause issues
@@ -211,7 +243,11 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         for mod_name, mod_df in modalities.items():
             if mod_df.empty:
                 logger.warning(f"Warning: Empty modality {mod_name} in {ds_name}")
-                
+        
+        # Log successful dataset preparation
+        log_dataset_preparation(ds_name, modalities, common_ids, y_aligned.shape, success=True)
+        logger.debug(f"[DATASET_PREP] {ds_name} - Dataset preparation completed successfully")
+        
         # Return the loaded data
         return {
             "name": ds_name,
@@ -222,6 +258,10 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         
     except Exception as e:
         logger.error(f"Error processing dataset {ds_conf['name']}: {str(e)}")
+        logger.debug(f"[DATASET_PREP] {ds_conf['name']} - Exception details: {str(e)}")
+        import traceback
+        logger.debug(f"[DATASET_PREP] {ds_conf['name']} - Traceback:\n{traceback.format_exc()}")
+        log_dataset_preparation(ds_conf['name'], {}, [], (), success=False)
         return None
 
 def process_regression_datasets(args):
@@ -428,62 +468,73 @@ def main():
     args = parser.parse_args()
     
     # Set up logging levels based on arguments
-    if args.debug:
-        os.environ["Z_ALG_DEBUG"] = "1"
-        os.environ["DEBUG_RESOURCES"] = "1"
-        logger.setLevel(logging.DEBUG)
-        # Also set the file handler to DEBUG
-        for handler in logging.root.handlers:
-            if isinstance(handler, logging.FileHandler):
-                handler.setLevel(logging.DEBUG)
-    elif args.verbose:
-        os.environ["Z_ALG_VERBOSE"] = "1"
-        logger.setLevel(logging.INFO)
-        # Also set the file handler to INFO
-        for handler in logging.root.handlers:
-            if isinstance(handler, logging.FileHandler):
-                handler.setLevel(logging.INFO)
-    else:
-        logger.setLevel(logging.WARNING)
-        
-    # Print welcome message
+    setup_logging_levels(args)
+    
+    # Log startup information
     logger.info("=" * 70)
     logger.info("Multi-modal Machine Learning Pipeline for Omics Data")
     logger.info("=" * 70)
+    logger.debug(f"Command line arguments: {vars(args)}")
     
     start_time = time.time()
     
-    # Run MAD analysis first (unless skipped)
-    if not args.skip_mad:
-        logger.info("=" * 70)
-        logger.info("RUNNING MAD ANALYSIS")
-        logger.info("=" * 70)
+    # Handle MAD analysis
+    if args.skip_mad:
+        log_mad_analysis_info("MAD analysis skipped by user request")
+    elif args.mad_only:
+        log_mad_analysis_info("Running MAD analysis only (no model training)")
+        log_pipeline_stage("MAD_ANALYSIS_START")
         try:
             run_mad_analysis(output_dir="output")
-            logger.info("MAD analysis completed successfully!")
+            log_mad_analysis_info("MAD analysis completed successfully")
+            log_pipeline_stage("MAD_ANALYSIS_END", details="Completed successfully")
         except Exception as e:
-            logger.error(f"Error in MAD analysis: {str(e)}")
-            logger.error("Continuing with model training...")
-    
-    # If only MAD analysis was requested, exit here
-    if args.mad_only:
+            log_mad_analysis_info(f"MAD analysis failed: {str(e)}", level="error")
+            logger.error(f"MAD analysis error details: {str(e)}")
+            import traceback
+            logger.debug(f"MAD analysis traceback:\n{traceback.format_exc()}")
+        
         logger.info("MAD-only analysis completed. Exiting.")
         return
+    else:
+        # Run MAD analysis before model training
+        log_pipeline_stage("MAD_ANALYSIS_START")
+        log_mad_analysis_info("Starting MAD analysis")
+        try:
+            run_mad_analysis(output_dir="output")
+            log_mad_analysis_info("MAD analysis completed successfully")
+            log_pipeline_stage("MAD_ANALYSIS_END", details="Completed successfully")
+        except Exception as e:
+            log_mad_analysis_info(f"MAD analysis failed: {str(e)}", level="error")
+            logger.error(f"Error in MAD analysis: {str(e)}")
+            logger.error("Continuing with model training...")
+            import traceback
+            logger.debug(f"MAD analysis traceback:\n{traceback.format_exc()}")
+    
+    # Start model training phase
+    log_pipeline_stage("MODEL_TRAINING_START")
     
     # Process datasets based on arguments
     if args.dataset:
         # Find and process only the specified dataset
+        log_pipeline_stage("SINGLE_DATASET", dataset=args.dataset.upper())
         process_single_dataset(args.dataset.lower(), args)
     elif args.regression_only:
         # Process only regression datasets
+        log_pipeline_stage("REGRESSION_DATASETS_START")
         process_regression_datasets(args)
+        log_pipeline_stage("REGRESSION_DATASETS_END")
     elif args.classification_only:
         # Process only classification datasets
+        log_pipeline_stage("CLASSIFICATION_DATASETS_START")
         process_classification_datasets(args)
+        log_pipeline_stage("CLASSIFICATION_DATASETS_END")
     else:
         # Process all datasets
+        log_pipeline_stage("ALL_DATASETS_START")
         process_regression_datasets(args)
         process_classification_datasets(args)
+        log_pipeline_stage("ALL_DATASETS_END")
     
     # Print completion information
     elapsed_time = time.time() - start_time
@@ -491,6 +542,8 @@ def main():
     minutes, seconds = divmod(remainder, 60)
     
     completion_msg = f"Pipeline completed in {int(hours)}h {int(minutes)}m {int(seconds)}s"
+    log_pipeline_stage("PIPELINE_COMPLETE", details=completion_msg)
+    
     logger.info("\n" + "=" * 70)
     logger.info(completion_msg)
     logger.info("=" * 70)
