@@ -258,8 +258,23 @@ def plot_roc_curve_binary(model: Any, X_test: np.ndarray, y_test: np.ndarray, cl
         if isinstance(y_test[0], str):
             y_test = np.array([int(x) for x in y_test])
             
+        # Get probability predictions - handle case where only one class is predicted
+        y_proba_full = model.predict_proba(X_test)
+        
+        # Check if we have probabilities for both classes
+        if y_proba_full.shape[1] < 2:
+            logger.warning(f"Model only predicts one class for {title}, cannot create ROC curve")
+            logger.debug(f"predict_proba shape: {y_proba_full.shape}, unique classes in y_test: {np.unique(y_test)}")
+            return False
+        
         # Get probability predictions for positive class
-        y_proba = model.predict_proba(X_test)[:, 1]
+        y_proba = y_proba_full[:, 1]
+        
+        # Validate that we have both classes in the test set
+        unique_classes = np.unique(y_test)
+        if len(unique_classes) < 2:
+            logger.warning(f"Test set only contains one class for {title}: {unique_classes}, cannot create ROC curve")
+            return False
         
         # Create a new figure for each plot
         fig = plt.figure(figsize=(5,5))
@@ -361,6 +376,10 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
         
         if n_classes == 2:
             # For binary classification, use the standard binary ROC
+            # Additional check to ensure we have probabilities for both classes
+            if y_proba.shape[1] < 2:
+                logger.warning(f"Binary classification in multiclass function only has {y_proba.shape[1]} probability columns for {title}")
+                return False
             fpr, tpr, _ = roc_curve(y_test, y_proba[:, 1])
             roc_auc = auc(fpr, tpr)
             ax.plot(fpr, tpr, color='darkorange', lw=2, 

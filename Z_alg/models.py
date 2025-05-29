@@ -2463,13 +2463,19 @@ def transform_extractor_classification(X, extractor):
         if not np.all(np.isfinite(X_safe)):
             logger.debug("Non-finite values detected in input data, replacing with zeros")
             X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Special handling for NMF: ensure all values are non-negative
+        if isinstance(extractor, NMF):
+            if np.any(X_safe < 0):
+                logger.debug("NMF detected: converting negative values to zero for transformation")
+                X_safe = np.maximum(X_safe, 0)
             
         # Transform the data
         X_transformed = extractor.transform(X_safe)
         
         # Handle any NaN values in the transformed data
         X_transformed = np.nan_to_num(X_transformed, nan=0.0, posinf=0.0, neginf=0.0)
-        
+            
         # Ensure output is also float64
         if X_transformed.dtype != np.float64:
             X_transformed = X_transformed.astype(np.float64)
@@ -2546,6 +2552,12 @@ def transform_extractor_regression(X, extractor):
         if not np.all(np.isfinite(X_safe)):
             logger.debug("Non-finite values detected in input data, replacing with zeros")
             X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Special handling for NMF: ensure all values are non-negative
+        if isinstance(extractor, NMF):
+            if np.any(X_safe < 0):
+                logger.debug("NMF detected: converting negative values to zero for transformation")
+                X_safe = np.maximum(X_safe, 0)
             
         # Transform the data
         X_transformed = extractor.transform(X_safe)

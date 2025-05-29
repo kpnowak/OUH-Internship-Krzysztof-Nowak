@@ -357,43 +357,44 @@ def process_cv_fold(
     pipeline_type,
     is_regression=True,
     make_plots=True,
-    plot_prefix_override=None
+    plot_prefix_override=None,
+    integration_technique="weighted_concat"
 ):
     """
-    Process a single CV fold, handling all modalities and models.
+    Process a single CV fold.
     
     Parameters
     ----------
-    train_idx : ndarray
+    train_idx : array-like
         Training indices
-    val_idx : ndarray
+    val_idx : array-like
         Validation indices
-    idx_temp : ndarray
-        Temporary indices (train+val)
-    idx_test : ndarray
+    idx_temp : array-like
+        Temporary indices
+    idx_test : array-like
         Test indices
-    y_temp : ndarray
-        Temporary target values (train+val)
-    y_test : ndarray
+    y_temp : array-like
+        Temporary target values
+    y_test : array-like
         Test target values
     data_modalities : Dict[str, pd.DataFrame]
         Dictionary of modality DataFrames
     models : List[str]
-        List of model names to train
+        List of model names
     extr_obj : Any
         Extractor object
     ncomps : int
-        Number of components to extract
+        Number of components
     id_to_idx : Dict[str, int]
-        Mapping from sample ID to index
+        Mapping from ID to index
     idx_to_id : Dict[int, str]
-        Mapping from index to sample ID
+        Mapping from index to ID
     all_ids : List[str]
-        List of all sample IDs
+        List of all IDs
     missing_percentage : float
-        Percentage of data to mark as missing
+        Missing percentage
     fold_idx : int
-        CV fold index
+        Fold index
     base_out : str
         Base output directory
     ds_name : str
@@ -401,18 +402,20 @@ def process_cv_fold(
     extr_name : str
         Extractor name
     pipeline_type : str
-        Type of pipeline ("extraction" or "selection")
+        Pipeline type
     is_regression : bool
-        Whether this is a regression task
+        Whether this is regression
     make_plots : bool
-        Whether to generate plots for the best fold
-    plot_prefix_override : Optional[str]
-        Override for the plot prefix
+        Whether to make plots
+    plot_prefix_override : str, optional
+        Plot prefix override
+    integration_technique : str
+        Integration technique to use for merging modalities
         
     Returns
     -------
-    Dict[str, Dict[str, float]]
-        Dictionary of model results
+    Various
+        Results depend on regression vs classification
     """
     try:
         logger.info(f"Starting fold {fold_idx} for {ds_name} with {extr_name} and n_comps={ncomps}")
@@ -571,8 +574,8 @@ def process_cv_fold(
 
         # Merge modalities - all should have identical dimensions now
         try:
-            X_train_merged = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True)
-            X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False)
+            X_train_merged = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps)
+            X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps)
             
             # Final verification: merged arrays should match the target vectors exactly
             if X_train_merged.shape[0] != len(final_aligned_y_train):
@@ -804,597 +807,6 @@ def process_cv_fold(
             return {}, {}
         else:
             return {}, {}, {}, {}
-
-def _run_pipeline(
-    ds_name: str, 
-    data_modalities: Dict[str, pd.DataFrame], 
-    common_ids: List[str], 
-    y: np.ndarray, 
-    base_out: str,
-    transformers: Dict[str, Any], 
-    n_trans_list: List[int], 
-    models: List[str],
-    progress_count: List[int], 
-    total_runs: int,
-    is_regression: bool = True, 
-    pipeline_type: str = "extraction"
-):
-    """
-    Generic pipeline function handling both extraction and selection for
-    both regression and classification tasks.
-    
-    Parameters
-    ----------
-    ds_name : str
-        Dataset name
-    data_modalities : Dict[str, pd.DataFrame]
-        Dictionary of modality DataFrames
-    common_ids : List[str]
-        List of common sample IDs
-    y : np.ndarray
-        Target values
-    base_out : str
-        Base output directory
-    transformers : Dict[str, Any]
-        Dictionary of transformers (extractors or selectors)
-    n_trans_list : List[int]
-        List of parameters for transformers (n_components or n_features)
-    models : List[str]
-        List of model names to train
-    progress_count : List[int]
-        Progress counter [0]
-    total_runs : int
-        Total number of runs
-    is_regression : bool
-        Whether this is a regression task
-    pipeline_type : str
-        Type of pipeline ("extraction" or "selection")
-        
-    Returns
-    -------
-    None
-    """
-    # Log pipeline start
-    task_type = "regression" if is_regression else "classification"
-    log_pipeline_stage(f"{pipeline_type.upper()}_PIPELINE_START", dataset=ds_name, 
-                      details=f"{task_type} with {len(transformers)} transformers, {len(n_trans_list)} parameters")
-    logger.debug(f"[PIPELINE] {ds_name} - Starting {pipeline_type} pipeline for {task_type}")
-    
-    # Ensure output directories exist
-    os.makedirs(base_out, exist_ok=True)
-    for subdir in ["models", "metrics", "plots"]:
-        subdir_path = os.path.join(base_out, subdir)
-        os.makedirs(subdir_path, exist_ok=True)
-        logger.debug(f"[PIPELINE] {ds_name} - Created directory: {subdir_path}")
-    
-    # Convert y to numpy array
-    y_arr = np.array(y)
-    
-    # Warn if sample size is very small
-    if len(y_arr) < 30:
-        logger.warning(f"Sample size for {ds_name} is very small ({len(y_arr)} samples). Model performance may be unstable.")
-        logger.debug(f"[PIPELINE] {ds_name} - Small sample size warning: {len(y_arr)} samples")
-    
-    # Create indices array for row-based indexing
-    indices = np.arange(len(common_ids))
-    
-    # Create id to index and index to id mappings
-    id_to_idx = {id_: idx for idx, id_ in enumerate(common_ids)}
-    idx_to_id = {idx: id_ for id_, idx in id_to_idx.items()}
-    
-    logger.debug(f"[PIPELINE] {ds_name} - Created sample mappings for {len(common_ids)} samples")
-    
-    # Split with stratification if possible
-    try:
-        # For small datasets (< 15 samples), use a larger test proportion to ensure some test samples
-        test_size = 0.3 if len(indices) < 15 else 0.2
-        logger.debug(f"[PIPELINE] {ds_name} - Using test_size={test_size} for {len(indices)} samples")
-        # For regression, bin continuous values for stratified split
-        if is_regression:
-            # Validate that y_arr contains numeric data
-            if not np.issubdtype(y_arr.dtype, np.number):
-                logger.error(f"Regression target data contains non-numeric values: dtype={y_arr.dtype}")
-                logger.error(f"Sample values: {y_arr[:5] if len(y_arr) > 0 else 'empty'}")
-                raise ValueError("Regression target data must be numeric")
-            
-            # Check for NaN or infinite values
-            if np.any(np.isnan(y_arr)) or np.any(np.isinf(y_arr)):
-                logger.warning(f"Found NaN or infinite values in regression target, cleaning...")
-                y_arr = np.nan_to_num(y_arr, nan=0.0, posinf=0.0, neginf=0.0)
-            
-            n_bins = min(5, len(y_arr)//3)
-            unique_vals = len(np.unique(y_arr))
-            if n_bins < 2 or unique_vals < n_bins or len(indices) < 15:
-                logger.info(f"Skipping stratification for regression: n_bins={n_bins}, unique_vals={unique_vals}, sample_size={len(indices)}")
-                raise ValueError("Too few samples or unique values for stratified split in regression")
-            
-            try:
-                y_bins = pd.qcut(y_arr, n_bins, labels=False, duplicates='drop')
-                idx_temp, idx_test, y_temp, y_test = train_test_split(
-                    indices, y_arr, test_size=test_size, random_state=0, stratify=y_bins
-                )
-            except Exception as e:
-                logger.warning(f"Failed to create quantile bins for regression stratification: {str(e)}")
-                raise ValueError("Could not create stratified split for regression")
-        else:
-            # For classification, check class distribution
-            unique, counts = np.unique(y_arr, return_counts=True)
-            min_samples = np.min(counts)
-            n_classes = len(unique)
-            
-            logger.debug(f"Class distribution for {ds_name}: {dict(zip(unique, counts))}")
-            
-            # Check if data was properly pre-filtered (classes should be consecutive starting from 0)
-            expected_classes = np.arange(n_classes)
-            if not np.array_equal(unique, expected_classes):
-                logger.info(f"Classes are not consecutive (expected {expected_classes}, got {unique}). This may indicate incomplete preprocessing.")
-            
-            # Calculate test set size and check if stratification is feasible
-            test_samples = int(len(indices) * test_size)
-            
-            # Check if stratified splitting is feasible
-            if test_samples < n_classes:
-                logger.warning(f"Dataset {ds_name}: test_size={test_samples} < n_classes={n_classes}. Stratified split not feasible, using random split.")
-                raise ValueError(f"Test size ({test_samples}) smaller than number of classes ({n_classes})")
-            
-            # If we still have problematic classes, it means the preprocessing in cli.py didn't work correctly
-            if min_samples < 2:
-                logger.warning(f"Dataset {ds_name} still has classes with < 2 samples after preprocessing: {dict(zip(unique, counts))}")
-                logger.warning(f"Applying emergency class filtering in CV pipeline...")
-                
-                # Keep only classes with at least 2 samples
-                valid_classes = unique[counts >= 2]
-                if len(valid_classes) < 2:
-                    logger.error(f"Too few valid classes for classification. Falling back to regular split.")
-                    raise ValueError("Too few valid classes for stratified split")
-                
-                # Filter samples to only include valid classes
-                valid_mask = np.isin(y_arr, valid_classes)
-                indices_filtered = indices[valid_mask]
-                y_arr_filtered = y_arr[valid_mask]
-                
-                # Relabel classes to be consecutive integers starting from 0
-                valid_classes_sorted = np.sort(valid_classes)
-                label_mapping = {old_label: new_label for new_label, old_label in enumerate(valid_classes_sorted)}
-                y_arr_relabeled = np.array([label_mapping[label] for label in y_arr_filtered])
-                
-                logger.info(f"Emergency filtering: dataset from {len(y_arr)} to {len(y_arr_filtered)} samples, {n_classes} to {len(valid_classes)} classes")
-                logger.info(f"Emergency relabeling: {label_mapping}")
-                
-                # Re-check if stratification is still feasible after filtering
-                test_samples_filtered = int(len(indices_filtered) * test_size)
-                if test_samples_filtered < len(valid_classes):
-                    logger.warning(f"Even after filtering, test_size={test_samples_filtered} < n_classes={len(valid_classes)}. Using random split.")
-                    raise ValueError(f"Test size still smaller than number of classes after filtering")
-                
-                idx_temp, idx_test, y_temp, y_test = train_test_split(
-                    indices_filtered, y_arr_filtered, test_size=test_size, random_state=0, stratify=y_arr_relabeled
-                )
-            else:
-                # Standard stratified split when all classes have sufficient samples
-                logger.debug(f"All classes have sufficient samples for {ds_name}, proceeding with stratified split")
-                idx_temp, idx_test, y_temp, y_test = train_test_split(
-                    indices, y_arr, test_size=test_size, random_state=0, stratify=y_arr
-                )
-    except ValueError as e:
-        logger.warning(f"Stratification failed for {ds_name}: {str(e)}. Falling back to regular split.")
-        if not is_regression:
-            unique, counts = np.unique(y_arr, return_counts=True)
-            logger.warning(f"Class distribution for {ds_name}: {dict(zip(unique, counts))}")
-        idx_temp, idx_test, y_temp, y_test = train_test_split(
-            indices, y_arr, test_size=0.2, random_state=0
-        )
-    
-    # Process each transformer and parameter combination
-    from Z_alg.config import MISSING_MODALITIES_CONFIG
-    
-    # Save all results for batch processing
-    all_pipeline_results = []
-    
-    for trans_name, trans_obj in transformers.items():
-        for n_val in n_trans_list:
-            try:
-                # Update and report progress
-                progress_count[0] += 1
-                run_idx = progress_count[0]
-                trans_type = "EXTRACT" if pipeline_type == "extraction" else "SELECT"
-                task_type = "REG" if is_regression else "CLF"
-                progress_msg = f"[{trans_type}-{task_type} CV] {run_idx}/{total_runs} => {ds_name} | {trans_name}-{n_val}"
-                # Always show progress in terminal
-                print(progress_msg)
-                logger.info(progress_msg)
-                log_pipeline_stage(f"{trans_type}_CV", dataset=ds_name, details=f"{trans_name}-{n_val} ({run_idx}/{total_runs})")
-
-                # Use the new robust CV splitter
-                cv_splitter, n_splits, cv_type_used = create_robust_cv_splitter(idx_temp, y_temp, is_regression)
-                
-                logger.info(f"Dataset: {ds_name}, using {cv_type_used} {n_splits}-fold CV with {len(idx_temp)} training samples")
-                logger.debug(f"[PIPELINE] {ds_name} - {trans_name}-{n_val}: Using {cv_type_used} {n_splits}-fold CV")
-                
-                # Log detailed CV summary for classification tasks
-                if not is_regression:
-                    log_cv_fold_summary(ds_name, y_temp, cv_splitter, cv_type_used, n_splits)
-                
-                # Results storage
-                pipeline_results = []
-                
-                # Process each missing percentage
-                for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
-                    try:
-                        cv_results = []
-                        model_candidates = {model_name: {"metric": None, "model": None, "fold_idx": None, "train_val": None} for model_name in models}
-                        model_yvals_folds = {model_name: [] for model_name in models}
-                        model_ypreds_folds = {model_name: [] for model_name in models}
-                        train_val_data = []  # Store (train_idx, val_idx, ...) for each fold
-                        
-                        # Process CV folds
-                        for fold_idx, (train_idx, val_idx) in enumerate(cv_splitter.split(idx_temp, y_temp)):
-                            try:
-                                train_val_data.append((train_idx, val_idx))
-                                with warnings.catch_warnings():
-                                    warnings.simplefilter("ignore", UserWarning)
-                                    if pipeline_type == "extraction":
-                                        if is_regression:
-                                            result, model_objs = process_cv_fold(
-                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
-                                                data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
-                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
-                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
-                                                is_regression,
-                                                make_plots=False
-                                            )
-                                        else:
-                                            result, model_objs, yvals, ypreds = process_cv_fold(
-                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
-                                                data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
-                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
-                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
-                                                is_regression,
-                                                make_plots=False
-                                            )
-                                    else:
-                                        if is_regression:
-                                            result, model_objs = process_cv_fold(
-                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
-                                                data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
-                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
-                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
-                                                is_regression,
-                                                make_plots=False
-                                            )
-                                        else:
-                                            result, model_objs, yvals, ypreds = process_cv_fold(
-                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
-                                                data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
-                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
-                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
-                                                is_regression,
-                                                make_plots=False
-                                            )
-                                if result:
-                                    cv_results.append(result)
-                                    for model_name in models:
-                                        if not is_regression and model_name in yvals and model_name in ypreds:
-                                            model_yvals_folds[model_name].append(yvals[model_name])
-                                            model_ypreds_folds[model_name].append(ypreds[model_name])
-                                        
-                                        # Add this missing code to update model_candidates based on model performance
-                                        if model_name in result:
-                                            # Get key metric for comparing model performance
-                                            metric_name = 'r2' if is_regression else 'f1'  # Use R² for regression, F1 for classification
-                                            current_metric = result[model_name].get(metric_name)
-                                            
-                                            if current_metric is not None:
-                                                # For regression, higher R² is better; for classification, higher F1 is better
-                                                current_best = model_candidates[model_name]["metric"]
-                                                
-                                                # If we don't have a best model yet or this one is better, update
-                                                if current_best is None or current_metric > current_best:
-                                                    model_candidates[model_name]["metric"] = current_metric
-                                                    model_candidates[model_name]["model"] = model_objs.get(model_name)
-                                                    model_candidates[model_name]["fold_idx"] = fold_idx
-                                                    model_candidates[model_name]["train_val"] = (train_idx, val_idx)
-                            except Exception as e:
-                                logger.error(f"Error processing fold {fold_idx} for {ds_name} with {trans_name}-{n_val} (missing={missing_percentage}): {str(e)}")
-                                continue  # Continue to next fold
-                        
-                        # After all folds, find the best fold and rerun only that fold with make_plots=True, saving model and plots
-                        best_fold_metrics = {}  # Store best fold metrics for CSV saving
-                        for model_name in models:
-                            try:
-                                best_model = model_candidates[model_name]["model"]
-                                best_metric = model_candidates[model_name]["metric"]
-                                best_fold_idx = model_candidates[model_name]["fold_idx"]
-                                if best_model is not None and best_fold_idx is not None:
-                                    # Get the train/val indices for the best fold
-                                    train_idx, val_idx = train_val_data[best_fold_idx]
-                                    # Rerun process_cv_fold for the best fold, but with make_plots=True
-                                    if is_regression:
-                                        # Use a modified plot prefix with "best_fold", pipeline_type, and missing_percentage
-                                        best_plot_prefix = f"{ds_name}_best_fold_{pipeline_type}_{trans_name}_{n_val}_{model_name}_{missing_percentage}"
-                                        
-                                        best_fold_results, best_model_obj = process_cv_fold(
-                                            train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
-                                            data_modalities, [model_name], (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
-                                            id_to_idx, idx_to_id, common_ids, missing_percentage,
-                                            best_fold_idx, base_out, ds_name, trans_name, pipeline_type,
-                                            is_regression,
-                                            make_plots=True,
-                                            plot_prefix_override=best_plot_prefix
-                                        )
-                                    else:
-                                        # Use a modified plot prefix with "best_fold", pipeline_type, and missing_percentage
-                                        best_plot_prefix = f"{ds_name}_best_fold_{pipeline_type}_{trans_name}_{n_val}_{model_name}_{missing_percentage}"
-                                        
-                                        best_fold_results, best_model_obj, _, _ = process_cv_fold(
-                                            train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
-                                            data_modalities, [model_name], (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
-                                            id_to_idx, idx_to_id, common_ids, missing_percentage,
-                                            best_fold_idx, base_out, ds_name, trans_name, pipeline_type,
-                                            is_regression,
-                                            make_plots=True,
-                                            plot_prefix_override=best_plot_prefix
-                                        )
-                                    
-                                    # Store best fold metrics for this model
-                                    if model_name in best_fold_results:
-                                        best_fold_metrics[model_name] = best_fold_results[model_name].copy()
-                                        best_fold_metrics[model_name]['best_fold_idx'] = best_fold_idx
-                                    
-                                    # Save the best model
-                                    model_path = os.path.join(
-                                        base_out, "models",
-                                        f"best_model_{pipeline_type}_{model_name}_{trans_name}_{n_val}_{missing_percentage}.pkl"
-                                    )
-                                    # Save best_model_obj instead of best_model since it's the freshly retrained model
-                                    # with make_plots=True
-                                    if model_name in best_model_obj:
-                                        joblib.dump(best_model_obj[model_name], model_path)
-                                        logger.info(f"Saved best model for {model_name} to {model_path}")
-                                    else:
-                                        # Fallback to the original model if something went wrong
-                                        joblib.dump(best_model, model_path)
-                                        logger.info(f"Fallback: Saved original best model for {model_name} to {model_path}")
-                            except Exception as e:
-                                logger.error(f"Error processing best fold for model {model_name} with {trans_name}-{n_val} (missing={missing_percentage}): {str(e)}")
-                                continue  # Continue to next model
-                        
-                        # Save best fold metrics to CSV
-                        if best_fold_metrics:
-                            best_fold_results_list = []
-                            for model_name, metrics in best_fold_metrics.items():
-                                # Create result entry for best fold with consistent column naming
-                                best_fold_entry = {
-                                    "Dataset": ds_name, 
-                                    "Workflow": f"{pipeline_type.title()}-BestFold",
-                                    "Algorithm": trans_name,
-                                    "n_features": metrics.get('n_features', -1),
-                                    "n_components": n_val,
-                                    "train_n_components": metrics.get('train_n_components', -1),
-                                    "Model": model_name,
-                                    "Missing_Percentage": missing_percentage,
-                                    "best_fold_idx": metrics.get('best_fold_idx', -1)
-                                }
-                                
-                                # Add the performance metrics
-                                if is_regression:
-                                    # For regression metrics
-                                    best_fold_entry.update({
-                                        'mse': metrics.get('mse', float('nan')),
-                                        'rmse': metrics.get('rmse', float('nan')),
-                                        'mae': metrics.get('mae', float('nan')),
-                                        'r2': metrics.get('r2', float('nan')),
-                                        'train_time': metrics.get('train_time', float('nan')),
-                                        # Early stopping metrics
-                                        'early_stopping_used': metrics.get('early_stopping_used', False),
-                                        'best_validation_score': metrics.get('best_validation_score', float('nan')),
-                                        'stopped_epoch': str(metrics.get('stopped_epoch', 'N/A')),
-                                        'patience_used': metrics.get('patience_used', float('nan'))
-                                    })
-                                else:
-                                    # For classification metrics
-                                    best_fold_entry.update({
-                                        'accuracy': metrics.get('accuracy', float('nan')),
-                                        'precision': metrics.get('precision', float('nan')),
-                                        'recall': metrics.get('recall', float('nan')),
-                                        'f1': metrics.get('f1', float('nan')),
-                                        'auc': metrics.get('auc', float('nan')),
-                                        'mcc': metrics.get('mcc', float('nan')),
-                                        'train_time': metrics.get('train_time', float('nan')),
-                                        # Early stopping metrics
-                                        'early_stopping_used': metrics.get('early_stopping_used', False),
-                                        'best_validation_score': metrics.get('best_validation_score', float('nan')),
-                                        'stopped_epoch': str(metrics.get('stopped_epoch', 'N/A')),
-                                        'patience_used': metrics.get('patience_used', float('nan'))
-                                    })
-                                
-                                best_fold_results_list.append(best_fold_entry)
-                            
-                            # Save best fold metrics to CSV
-                            try:
-                                best_fold_metrics_file = os.path.join(
-                                    base_out, "metrics", 
-                                    f"{ds_name}_{pipeline_type}_best_fold_metrics.csv"
-                                )
-                                
-                                # Check if file exists
-                                file_exists = os.path.exists(best_fold_metrics_file)
-                                
-                                # Append results to CSV
-                                pd.DataFrame(best_fold_results_list).to_csv(
-                                    best_fold_metrics_file,
-                                    mode='a',
-                                    header=not file_exists,
-                                    index=False
-                                )
-                                logger.info(f"Saved {len(best_fold_results_list)} best fold results to {best_fold_metrics_file}")
-                            except Exception as e:
-                                logger.error(f"Error saving best fold metrics: {str(e)}")
-                        
-                        # Aggregate metrics across folds
-                        cv_metrics = {}
-                        for model_name in models:
-                            valid_results = []
-                            for i in range(n_splits):  # <- Use n_splits instead of cv.n_splits
-                                if i < len(cv_results) and model_name in cv_results[i]:
-                                    valid_results.append(cv_results[i][model_name])
-                            
-                            if valid_results:
-                                # Average metrics across folds
-                                metric_keys = valid_results[0].keys()
-                                avg_metrics = {}
-                                
-                                for k in metric_keys:
-                                    values = []
-                                    for m in valid_results:
-                                        if k in m:
-                                            val = m[k]
-                                            # Only include numeric values for averaging
-                                            if isinstance(val, (int, float, np.number)) and not (isinstance(val, float) and np.isnan(val)):
-                                                values.append(val)
-                                    
-                                    if values:
-                                        # Average numeric values
-                                        avg_metrics[k] = np.mean(values)
-                                    elif k in valid_results[0]:
-                                        # For non-numeric values, take the first occurrence
-                                        # This handles early stopping info like 'early_stopping_used', 'stopped_epoch', etc.
-                                        first_val = valid_results[0][k]
-                                        if k == 'early_stopping_history':
-                                            # For history, take the longest one (best performing fold)
-                                            longest_history = max([m.get(k, []) for m in valid_results], key=len, default=[])
-                                            avg_metrics[k] = longest_history
-                                        elif k == 'stopped_epoch':
-                                            # For stopped_epoch, take the average if numeric, else first non-N/A value
-                                            numeric_epochs = [m[k] for m in valid_results if k in m and isinstance(m[k], (int, float, np.number)) and not np.isnan(m[k])]
-                                            if numeric_epochs:
-                                                avg_metrics[k] = np.mean(numeric_epochs)
-                                            else:
-                                                avg_metrics[k] = first_val
-                                        else:
-                                            # For other non-numeric values, take the first
-                                            avg_metrics[k] = first_val
-                                
-                                cv_metrics[model_name] = avg_metrics
-                        
-                        # Add combined results
-                        for model_name, metrics in cv_metrics.items():
-                            # Add additional metrics to the result entry with consistent column naming
-                            result_entry = {
-                                "Dataset": ds_name, 
-                                "Workflow": f"{pipeline_type.title()}-CV",
-                                "Algorithm": trans_name,
-                                "n_features": metrics.get('n_features', -1),  # Original feature count
-                                "n_components": n_val,  # Intended number of components/features
-                                "train_n_components": metrics.get('train_n_components', -1),  # Actual components used in training
-                                "Model": model_name,
-                                "Missing_Percentage": missing_percentage
-                            }
-                            
-                            # Add the performance metrics
-                            if is_regression:
-                                # For regression metrics
-                                result_entry.update({
-                                    'mse': metrics.get('mse', float('nan')),
-                                    'rmse': metrics.get('rmse', float('nan')),
-                                    'mae': metrics.get('mae', float('nan')),
-                                    'r2': metrics.get('r2', float('nan')),
-                                    'train_time': metrics.get('train_time', float('nan')),
-                                    # Early stopping metrics
-                                    'early_stopping_used': metrics.get('early_stopping_used', False),
-                                    'best_validation_score': metrics.get('best_validation_score', float('nan')),
-                                    'stopped_epoch': str(metrics.get('stopped_epoch', 'N/A')),  # Convert to string for CSV
-                                    'patience_used': metrics.get('patience_used', float('nan'))
-                                })
-                            else:
-                                # For classification metrics
-                                result_entry.update({
-                                    'accuracy': metrics.get('accuracy', float('nan')),
-                                    'precision': metrics.get('precision', float('nan')),
-                                    'recall': metrics.get('recall', float('nan')),
-                                    'f1': metrics.get('f1', float('nan')),
-                                    'auc': metrics.get('auc', float('nan')),
-                                    'mcc': metrics.get('mcc', float('nan')),
-                                    'train_time': metrics.get('train_time', float('nan')),
-                                    # Early stopping metrics
-                                    'early_stopping_used': metrics.get('early_stopping_used', False),
-                                    'best_validation_score': metrics.get('best_validation_score', float('nan')),
-                                    'stopped_epoch': str(metrics.get('stopped_epoch', 'N/A')),  # Convert to string for CSV
-                                    'patience_used': metrics.get('patience_used', float('nan'))
-                                })
-                            
-                            pipeline_results.append(result_entry)
-                    except Exception as e:
-                        logger.error(f"Error processing missing percentage {missing_percentage} for {ds_name} with {trans_name}-{n_val}: {str(e)}")
-                        continue  # Continue to next missing percentage
-                
-                # Add results to the batch for later processing
-                all_pipeline_results.extend(pipeline_results)
-                
-                # Write results to file every 10 transformers or at the end
-                # This reduces disk I/O while still providing regular checkpoints
-                if len(all_pipeline_results) >= 20 or (trans_name == list(transformers.keys())[-1] and n_val == n_trans_list[-1]):
-                    try:
-                        # Save results to CSV in batches
-                        if all_pipeline_results:
-                            metrics_file = os.path.join(
-                                base_out, "metrics", 
-                                f"{ds_name}_{pipeline_type}_cv_metrics.csv"
-                            )
-                            
-                            # Check if file exists
-                            file_exists = os.path.exists(metrics_file)
-                            
-                            # Append results to CSV
-                            pd.DataFrame(all_pipeline_results).to_csv(
-                                metrics_file,
-                                mode='a',
-                                header=not file_exists,
-                                index=False
-                            )
-                            logger.info(f"Saved {len(all_pipeline_results)} results to {metrics_file}")
-                            
-                            # Clear batch after saving
-                            all_pipeline_results = []
-                            
-                            # Force garbage collection to free memory
-                            import gc
-                            gc.collect()
-                    except Exception as e:
-                        logger.error(f"Error saving metrics batch: {str(e)}")
-                
-            except KeyboardInterrupt:
-                logger.warning(f"KeyboardInterrupt during {ds_name} with {trans_name}-{n_val}. Aborting all processing.")
-                raise  # Re-raise to abort all processing
-            except Exception as e:
-                logger.error(f"Error processing {trans_name}-{n_val} for {ds_name}: {str(e)}")
-                continue  # Continue to next n_val
-    
-    # Final save of any remaining results
-    if all_pipeline_results:
-        try:
-            metrics_file = os.path.join(
-                base_out, "metrics", 
-                f"{ds_name}_{pipeline_type}_cv_metrics.csv"
-            )
-            
-            # Check if file exists
-            file_exists = os.path.exists(metrics_file)
-            
-            # Append results to CSV
-            pd.DataFrame(all_pipeline_results).to_csv(
-                metrics_file,
-                mode='a',
-                header=not file_exists,
-                index=False
-            )
-            logger.info(f"Saved final {len(all_pipeline_results)} results to {metrics_file}")
-        except Exception as e:
-            logger.error(f"Error saving final metrics batch: {str(e)}")
-    
-    # Clean up resources
-    import gc
-    gc.collect()
 
 def run_extraction_pipeline(
     ds_name: str, 
@@ -2276,3 +1688,730 @@ def combine_best_fold_metrics(ds_name: str, base_out: str):
     except Exception as e:
         logger.error(f"Error combining best fold metrics for {ds_name}: {str(e)}")
         return None
+
+def _run_pipeline(
+    ds_name: str, 
+    data_modalities: Dict[str, pd.DataFrame], 
+    common_ids: List[str], 
+    y: np.ndarray, 
+    base_out: str,
+    transformers: Dict[str, Any], 
+    n_trans_list: List[int], 
+    models: List[str],
+    progress_count: List[int], 
+    total_runs: int,
+    is_regression: bool = True, 
+    pipeline_type: str = "extraction"
+):
+    """
+    Generic pipeline function handling both extraction and selection for
+    both regression and classification tasks.
+    
+    Parameters
+    ----------
+    ds_name : str
+        Dataset name
+    data_modalities : Dict[str, pd.DataFrame]
+        Dictionary of modality DataFrames
+    common_ids : List[str]
+        List of common sample IDs
+    y : np.ndarray
+        Target values
+    base_out : str
+        Base output directory
+    transformers : Dict[str, Any]
+        Dictionary of transformers (extractors or selectors)
+    n_trans_list : List[int]
+        List of parameters for transformers (n_components or n_features)
+    models : List[str]
+        List of model names to train
+    progress_count : List[int]
+        Progress counter [0]
+    total_runs : int
+        Total number of runs
+    is_regression : bool
+        Whether this is a regression task
+    pipeline_type : str
+        Type of pipeline ("extraction" or "selection")
+        
+    Returns
+    -------
+    None
+    """
+    # Log pipeline start
+    task_type = "regression" if is_regression else "classification"
+    log_pipeline_stage(f"{pipeline_type.upper()}_PIPELINE_START", dataset=ds_name, 
+                      details=f"{task_type} with {len(transformers)} transformers, {len(n_trans_list)} parameters")
+    logger.debug(f"[PIPELINE] {ds_name} - Starting {pipeline_type} pipeline for {task_type}")
+    
+    # Ensure output directories exist
+    os.makedirs(base_out, exist_ok=True)
+    for subdir in ["models", "metrics", "plots"]:
+        subdir_path = os.path.join(base_out, subdir)
+        os.makedirs(subdir_path, exist_ok=True)
+        logger.debug(f"[PIPELINE] {ds_name} - Created directory: {subdir_path}")
+    
+    # Convert y to numpy array
+    y_arr = np.array(y)
+    
+    # Warn if sample size is very small
+    if len(y_arr) < 30:
+        logger.warning(f"Sample size for {ds_name} is very small ({len(y_arr)} samples). Model performance may be unstable.")
+        logger.debug(f"[PIPELINE] {ds_name} - Small sample size warning: {len(y_arr)} samples")
+    
+    # Create indices array for row-based indexing
+    indices = np.arange(len(common_ids))
+    
+    # Create id to index and index to id mappings
+    id_to_idx = {id_: idx for idx, id_ in enumerate(common_ids)}
+    idx_to_id = {idx: id_ for id_, idx in id_to_idx.items()}
+    
+    logger.debug(f"[PIPELINE] {ds_name} - Created sample mappings for {len(common_ids)} samples")
+    
+    # Split with stratification if possible
+    try:
+        # For small datasets (< 15 samples), use a larger test proportion to ensure some test samples
+        test_size = 0.3 if len(indices) < 15 else 0.2
+        logger.debug(f"[PIPELINE] {ds_name} - Using test_size={test_size} for {len(indices)} samples")
+        # For regression, bin continuous values for stratified split
+        if is_regression:
+            # Validate that y_arr contains numeric data
+            if not np.issubdtype(y_arr.dtype, np.number):
+                logger.error(f"Regression target data contains non-numeric values: dtype={y_arr.dtype}")
+                logger.error(f"Sample values: {y_arr[:5] if len(y_arr) > 0 else 'empty'}")
+                raise ValueError("Regression target data must be numeric")
+            
+            # Check for NaN or infinite values
+            if np.any(np.isnan(y_arr)) or np.any(np.isinf(y_arr)):
+                logger.warning(f"Found NaN or infinite values in regression target, cleaning...")
+                y_arr = np.nan_to_num(y_arr, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            n_bins = min(5, len(y_arr)//3)
+            unique_vals = len(np.unique(y_arr))
+            if n_bins < 2 or unique_vals < n_bins or len(indices) < 15:
+                logger.info(f"Skipping stratification for regression: n_bins={n_bins}, unique_vals={unique_vals}, sample_size={len(indices)}")
+                raise ValueError("Too few samples or unique values for stratified split in regression")
+            
+            try:
+                y_bins = pd.qcut(y_arr, n_bins, labels=False, duplicates='drop')
+                idx_temp, idx_test, y_temp, y_test = train_test_split(
+                    indices, y_arr, test_size=test_size, random_state=0, stratify=y_bins
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create quantile bins for regression stratification: {str(e)}")
+                raise ValueError("Could not create stratified split for regression")
+        else:
+            # For classification, check class distribution
+            unique, counts = np.unique(y_arr, return_counts=True)
+            min_samples = np.min(counts)
+            n_classes = len(unique)
+            
+            logger.debug(f"Class distribution for {ds_name}: {dict(zip(unique, counts))}")
+            
+            # Check if data was properly pre-filtered (classes should be consecutive starting from 0)
+            expected_classes = np.arange(n_classes)
+            if not np.array_equal(unique, expected_classes):
+                logger.info(f"Classes are not consecutive (expected {expected_classes}, got {unique}). This may indicate incomplete preprocessing.")
+            
+            # Calculate test set size and check if stratification is feasible
+            test_samples = int(len(indices) * test_size)
+            
+            # Check if stratified splitting is feasible
+            if test_samples < n_classes:
+                logger.warning(f"Dataset {ds_name}: test_size={test_samples} < n_classes={n_classes}. Stratified split not feasible, using random split.")
+                raise ValueError(f"Test size ({test_samples}) smaller than number of classes ({n_classes})")
+            
+            # If we still have problematic classes, it means the preprocessing in cli.py didn't work correctly
+            if min_samples < 2:
+                logger.warning(f"Dataset {ds_name} still has classes with < 2 samples after preprocessing: {dict(zip(unique, counts))}")
+                logger.warning(f"Applying emergency class filtering in CV pipeline...")
+                
+                # Keep only classes with at least 2 samples
+                valid_classes = unique[counts >= 2]
+                if len(valid_classes) < 2:
+                    logger.error(f"Too few valid classes for classification. Falling back to regular split.")
+                    raise ValueError("Too few valid classes for stratified split")
+                
+                # Filter samples to only include valid classes
+                valid_mask = np.isin(y_arr, valid_classes)
+                indices_filtered = indices[valid_mask]
+                y_arr_filtered = y_arr[valid_mask]
+                
+                # Relabel classes to be consecutive integers starting from 0
+                valid_classes_sorted = np.sort(valid_classes)
+                label_mapping = {old_label: new_label for new_label, old_label in enumerate(valid_classes_sorted)}
+                y_arr_relabeled = np.array([label_mapping[label] for label in y_arr_filtered])
+                
+                logger.info(f"Emergency filtering: dataset from {len(y_arr)} to {len(y_arr_filtered)} samples, {n_classes} to {len(valid_classes)} classes")
+                logger.info(f"Emergency relabeling: {label_mapping}")
+                
+                # Re-check if stratification is still feasible after filtering
+                test_samples_filtered = int(len(indices_filtered) * test_size)
+                if test_samples_filtered < len(valid_classes):
+                    logger.warning(f"Even after filtering, test_size={test_samples_filtered} < n_classes={len(valid_classes)}. Using random split.")
+                    raise ValueError(f"Test size still smaller than number of classes after filtering")
+                
+                idx_temp, idx_test, y_temp, y_test = train_test_split(
+                    indices_filtered, y_arr_filtered, test_size=test_size, random_state=0, stratify=y_arr_relabeled
+                )
+            else:
+                # Standard stratified split when all classes have sufficient samples
+                logger.debug(f"All classes have sufficient samples for {ds_name}, proceeding with stratified split")
+                idx_temp, idx_test, y_temp, y_test = train_test_split(
+                    indices, y_arr, test_size=test_size, random_state=0, stratify=y_arr
+                )
+    except ValueError as e:
+        logger.warning(f"Stratification failed for {ds_name}: {str(e)}. Falling back to regular split.")
+        if not is_regression:
+            unique, counts = np.unique(y_arr, return_counts=True)
+            logger.warning(f"Class distribution for {ds_name}: {dict(zip(unique, counts))}")
+        idx_temp, idx_test, y_temp, y_test = train_test_split(
+            indices, y_arr, test_size=0.2, random_state=0
+        )
+    
+    # Process each transformer and parameter combination
+    from Z_alg.config import MISSING_MODALITIES_CONFIG
+    
+    # Save all results for batch processing
+    all_pipeline_results = []
+    
+    for trans_name, trans_obj in transformers.items():
+        for n_val in n_trans_list:
+            try:
+                # Update and report progress
+                progress_count[0] += 1
+                run_idx = progress_count[0]
+                trans_type = "EXTRACT" if pipeline_type == "extraction" else "SELECT"
+                task_type = "REG" if is_regression else "CLF"
+                progress_msg = f"[{trans_type}-{task_type} CV] {run_idx}/{total_runs} => {ds_name} | {trans_name}-{n_val}"
+                # Always show progress in terminal
+                print(progress_msg)
+                logger.info(progress_msg)
+                log_pipeline_stage(f"{trans_type}_CV", dataset=ds_name, details=f"{trans_name}-{n_val} ({run_idx}/{total_runs})")
+
+                # Use the new robust CV splitter
+                cv_splitter, n_splits, cv_type_used = create_robust_cv_splitter(idx_temp, y_temp, is_regression)
+                
+                logger.info(f"Dataset: {ds_name}, using {cv_type_used} {n_splits}-fold CV with {len(idx_temp)} training samples")
+                logger.debug(f"[PIPELINE] {ds_name} - {trans_name}-{n_val}: Using {cv_type_used} {n_splits}-fold CV")
+                
+                # Log detailed CV summary for classification tasks
+                if not is_regression:
+                    log_cv_fold_summary(ds_name, y_temp, cv_splitter, cv_type_used, n_splits)
+                
+                # Results storage
+                pipeline_results = []
+                
+                # Process each missing percentage
+                for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
+                    try:
+                        # Determine which integration techniques to use
+                        if missing_percentage == 0.0:
+                            # For 0% missing, use all 4 integration techniques
+                            integration_techniques = ["weighted_concat", "average", "sum", "early_fusion_pca"]
+                        else:
+                            # For other missing percentages, only use weighted_concat
+                            integration_techniques = ["weighted_concat"]
+                        
+                        # Process each integration technique
+                        for integration_technique in integration_techniques:
+                            try:
+                                cv_results = []
+                                model_candidates = {model_name: {"metric": None, "model": None, "fold_idx": None, "train_val": None} for model_name in models}
+                                model_yvals_folds = {model_name: [] for model_name in models}
+                                model_ypreds_folds = {model_name: [] for model_name in models}
+                                train_val_data = []  # Store (train_idx, val_idx, ...) for each fold
+                                
+                                logger.info(f"Processing {ds_name} with {trans_name}-{n_val}, missing={missing_percentage}%, integration={integration_technique}")
+                                
+                                # Process CV folds
+                                for fold_idx, (train_idx, val_idx) in enumerate(cv_splitter.split(idx_temp, y_temp)):
+                                    try:
+                                        train_val_data.append((train_idx, val_idx))
+                                        with warnings.catch_warnings():
+                                            warnings.simplefilter("ignore", UserWarning)
+                                            if pipeline_type == "extraction":
+                                                if is_regression:
+                                                    result, model_objs = process_cv_fold(
+                                                        train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                        data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                        id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                        fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                        is_regression,
+                                                        make_plots=False,
+                                                        integration_technique=integration_technique
+                                                    )
+                                                else:
+                                                    result, model_objs, yvals, ypreds = process_cv_fold(
+                                                        train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                        data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                        id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                        fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                        is_regression,
+                                                        make_plots=False,
+                                                        integration_technique=integration_technique
+                                                    )
+                                            else:
+                                                if is_regression:
+                                                    result, model_objs = process_cv_fold(
+                                                        train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                        data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                        id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                        fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                        is_regression,
+                                                        make_plots=False,
+                                                        integration_technique=integration_technique
+                                                    )
+                                                else:
+                                                    result, model_objs, yvals, ypreds = process_cv_fold(
+                                                        train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                        data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                        id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                        fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                        is_regression,
+                                                        make_plots=False,
+                                                        integration_technique=integration_technique
+                                                    )
+                                        if result:
+                                            cv_results.append(result)
+                                            for model_name in models:
+                                                if not is_regression and model_name in yvals and model_name in ypreds:
+                                                    model_yvals_folds[model_name].append(yvals[model_name])
+                                                    model_ypreds_folds[model_name].append(ypreds[model_name])
+                                                
+                                                # Add this missing code to update model_candidates based on model performance
+                                                if model_name in result:
+                                                    # Get key metric for comparing model performance
+                                                    metric_name = 'r2' if is_regression else 'f1'  # Use R² for regression, F1 for classification
+                                                    current_metric = result[model_name].get(metric_name)
+                                                    
+                                                    if current_metric is not None:
+                                                        # For regression, higher R² is better; for classification, higher F1 is better
+                                                        current_best = model_candidates[model_name]["metric"]
+                                                        
+                                                        # If we don't have a best model yet or this one is better, update
+                                                        if current_best is None or current_metric > current_best:
+                                                            model_candidates[model_name]["metric"] = current_metric
+                                                            model_candidates[model_name]["model"] = model_objs.get(model_name)
+                                                            model_candidates[model_name]["fold_idx"] = fold_idx
+                                                            model_candidates[model_name]["train_val"] = (train_idx, val_idx)
+                                    except Exception as e:
+                                        logger.error(f"Error processing fold {fold_idx} for {ds_name} with {trans_name}-{n_val} (missing={missing_percentage}%, integration={integration_technique}): {str(e)}")
+                                        continue  # Continue to next fold
+                                
+                                # After all folds, find the best fold and rerun only that fold with make_plots=True, saving model and plots
+                                best_fold_metrics = {}  # Store best fold metrics for CSV saving
+                                for model_name in models:
+                                    try:
+                                        best_model = model_candidates[model_name]["model"]
+                                        best_metric = model_candidates[model_name]["metric"]
+                                        best_fold_idx = model_candidates[model_name]["fold_idx"]
+                                        if best_model is not None and best_fold_idx is not None:
+                                            # Get the train/val indices for the best fold
+                                            train_idx, val_idx = train_val_data[best_fold_idx]
+                                            # Rerun process_cv_fold for the best fold, but with make_plots=True
+                                            if is_regression:
+                                                # Use a modified plot prefix with "best_fold", pipeline_type, missing_percentage, and integration technique
+                                                best_plot_prefix = f"{ds_name}_best_fold_{pipeline_type}_{trans_name}_{n_val}_{model_name}_{missing_percentage}_{integration_technique}"
+                                                
+                                                best_fold_results, best_model_obj = process_cv_fold(
+                                                    train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                    data_modalities, [model_name], (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                    id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                    best_fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                    is_regression,
+                                                    make_plots=True,
+                                                    plot_prefix_override=best_plot_prefix,
+                                                    integration_technique=integration_technique
+                                                )
+                                            else:
+                                                # Use a modified plot prefix with "best_fold", pipeline_type, missing_percentage, and integration technique
+                                                best_plot_prefix = f"{ds_name}_best_fold_{pipeline_type}_{trans_name}_{n_val}_{model_name}_{missing_percentage}_{integration_technique}"
+                                                
+                                                best_fold_results, best_model_obj, _, _ = process_cv_fold(
+                                                    train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                    data_modalities, [model_name], (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                    id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                    best_fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                    is_regression,
+                                                    make_plots=True,
+                                                    plot_prefix_override=best_plot_prefix,
+                                                    integration_technique=integration_technique
+                                                )
+                                            
+                                            # Store best fold metrics for this model
+                                            if model_name in best_fold_results:
+                                                best_fold_metrics[model_name] = best_fold_results[model_name].copy()
+                                                best_fold_metrics[model_name]['best_fold_idx'] = best_fold_idx
+                                            
+                                            # Save the best model with integration technique in filename
+                                            model_path = os.path.join(
+                                                base_out, "models",
+                                                f"best_model_{pipeline_type}_{model_name}_{trans_name}_{n_val}_{missing_percentage}_{integration_technique}.pkl"
+                                            )
+                                            # Save best_model_obj instead of best_model since it's the freshly retrained model
+                                            # with make_plots=True
+                                            if model_name in best_model_obj:
+                                                joblib.dump(best_model_obj[model_name], model_path)
+                                                logger.info(f"Saved best model for {model_name} to {model_path}")
+                                            else:
+                                                # Fallback to the original model if something went wrong
+                                                joblib.dump(best_model, model_path)
+                                                logger.info(f"Fallback: Saved original best model for {model_name} to {model_path}")
+                                    except Exception as e:
+                                        logger.error(f"Error processing best fold for model {model_name} with {trans_name}-{n_val} (missing={missing_percentage}%, integration={integration_technique}): {str(e)}")
+                                        continue  # Continue to next model
+                                
+                                # Save best fold metrics to CSV
+                                if best_fold_metrics:
+                                    best_fold_results_list = []
+                                    for model_name, metrics in best_fold_metrics.items():
+                                        # Create result entry for best fold with consistent column naming
+                                        best_fold_entry = {
+                                            "Dataset": ds_name, 
+                                            "Workflow": f"{pipeline_type.title()}-BestFold",
+                                            "Algorithm": trans_name,
+                                            "n_features": metrics.get('n_features', -1),
+                                            "n_components": n_val,
+                                            "train_n_components": metrics.get('train_n_components', -1),
+                                            "integration_tech": integration_technique,
+                                            "Model": model_name,
+                                            "Missing_Percentage": missing_percentage,
+                                            "best_fold_idx": metrics.get('best_fold_idx', -1)
+                                        }
+                                        
+                                        # Add the performance metrics
+                                        if is_regression:
+                                            # For regression metrics
+                                            best_fold_entry.update({
+                                                'mse': metrics.get('mse', float('nan')),
+                                                'rmse': metrics.get('rmse', float('nan')),
+                                                'mae': metrics.get('mae', float('nan')),
+                                                'r2': metrics.get('r2', float('nan')),
+                                                'train_time': metrics.get('train_time', float('nan')),
+                                                # Early stopping metrics
+                                                'early_stopping_used': metrics.get('early_stopping_used', False),
+                                                'best_validation_score': metrics.get('best_validation_score', float('nan')),
+                                                'stopped_epoch': str(metrics.get('stopped_epoch', 'N/A')),
+                                                'patience_used': metrics.get('patience_used', float('nan'))
+                                            })
+                                        else:
+                                            # For classification metrics
+                                            best_fold_entry.update({
+                                                'accuracy': metrics.get('accuracy', float('nan')),
+                                                'precision': metrics.get('precision', float('nan')),
+                                                'recall': metrics.get('recall', float('nan')),
+                                                'f1': metrics.get('f1', float('nan')),
+                                                'auc': metrics.get('auc', float('nan')),
+                                                'mcc': metrics.get('mcc', float('nan')),
+                                                'train_time': metrics.get('train_time', float('nan')),
+                                                # Early stopping metrics
+                                                'early_stopping_used': metrics.get('early_stopping_used', False),
+                                                'best_validation_score': metrics.get('best_validation_score', float('nan')),
+                                                'stopped_epoch': str(metrics.get('stopped_epoch', 'N/A')),
+                                                'patience_used': metrics.get('patience_used', float('nan'))
+                                            })
+                                        
+                                        best_fold_results_list.append(best_fold_entry)
+                                    
+                                    # Save best fold metrics to CSV
+                                    try:
+                                        best_fold_metrics_file = os.path.join(
+                                            base_out, "metrics", 
+                                            f"{ds_name}_{pipeline_type}_best_fold_metrics.csv"
+                                        )
+                                        
+                                        # Check if file exists
+                                        file_exists = os.path.exists(best_fold_metrics_file)
+                                        
+                                        # Append results to CSV
+                                        pd.DataFrame(best_fold_results_list).to_csv(
+                                            best_fold_metrics_file,
+                                            mode='a',
+                                            header=not file_exists,
+                                            index=False
+                                        )
+                                        logger.info(f"Saved {len(best_fold_results_list)} best fold results to {best_fold_metrics_file}")
+                                    except Exception as e:
+                                        logger.error(f"Error saving best fold metrics: {str(e)}")
+                                
+                                # Aggregate metrics across folds
+                                cv_metrics = {}
+                                for model_name in models:
+                                    valid_results = []
+                                    for i in range(n_splits):  # <- Use n_splits instead of cv.n_splits
+                                        if i < len(cv_results) and model_name in cv_results[i]:
+                                            valid_results.append(cv_results[i][model_name])
+                                    
+                                    if valid_results:
+                                        # Average metrics across folds
+                                        metric_keys = valid_results[0].keys()
+                                        avg_metrics = {}
+                                        
+                                        for k in metric_keys:
+                                            values = []
+                                            for m in valid_results:
+                                                if k in m:
+                                                    val = m[k]
+                                                    # Only include numeric values for averaging
+                                                    if isinstance(val, (int, float, np.number)) and not (isinstance(val, float) and np.isnan(val)):
+                                                        values.append(val)
+                                            
+                                            if values:
+                                                # Average numeric values
+                                                avg_metrics[k] = np.mean(values)
+                                            elif k in valid_results[0]:
+                                                # For non-numeric values, take the first occurrence
+                                                # This handles early stopping info like 'early_stopping_used', 'stopped_epoch', etc.
+                                                first_val = valid_results[0][k]
+                                                if k == 'early_stopping_history':
+                                                    # For history, take the longest one (best performing fold)
+                                                    longest_history = max([m.get(k, []) for m in valid_results], key=len, default=[])
+                                                    avg_metrics[k] = longest_history
+                                                elif k == 'stopped_epoch':
+                                                    # For stopped_epoch, take the average if numeric, else first non-N/A value
+                                                    numeric_epochs = [m[k] for m in valid_results if k in m and isinstance(m[k], (int, float, np.number)) and not np.isnan(m[k])]
+                                                    if numeric_epochs:
+                                                        avg_metrics[k] = np.mean(numeric_epochs)
+                                                    else:
+                                                        avg_metrics[k] = first_val
+                                                else:
+                                                    # For other non-numeric values, take the first
+                                                    avg_metrics[k] = first_val
+                                        
+                                        cv_metrics[model_name] = avg_metrics
+                                
+                                # Add combined results
+                                for model_name, metrics in cv_metrics.items():
+                                    # Add additional metrics to the result entry with consistent column naming
+                                    result_entry = {
+                                        "Dataset": ds_name, 
+                                        "Workflow": f"{pipeline_type.title()}-CV",
+                                        "Algorithm": trans_name,
+                                        "n_features": metrics.get('n_features', -1),  # Original feature count
+                                        "n_components": n_val,  # Intended number of components/features
+                                        "train_n_components": metrics.get('train_n_components', -1),  # Actual components used in training
+                                        "integration_tech": integration_technique,
+                                        "Model": model_name,
+                                        "Missing_Percentage": missing_percentage
+                                    }
+                                    
+                                    # Add the performance metrics
+                                    if is_regression:
+                                        # For regression metrics
+                                        result_entry.update({
+                                            'mse': metrics.get('mse', float('nan')),
+                                            'rmse': metrics.get('rmse', float('nan')),
+                                            'mae': metrics.get('mae', float('nan')),
+                                            'r2': metrics.get('r2', float('nan')),
+                                            'train_time': metrics.get('train_time', float('nan')),
+                                            # Early stopping metrics
+                                            'early_stopping_used': metrics.get('early_stopping_used', False),
+                                            'best_validation_score': metrics.get('best_validation_score', float('nan')),
+                                            'stopped_epoch': str(metrics.get('stopped_epoch', 'N/A')),  # Convert to string for CSV
+                                            'patience_used': metrics.get('patience_used', float('nan'))
+                                        })
+                                    else:
+                                        # For classification metrics
+                                        result_entry.update({
+                                            'accuracy': metrics.get('accuracy', float('nan')),
+                                            'precision': metrics.get('precision', float('nan')),
+                                            'recall': metrics.get('recall', float('nan')),
+                                            'f1': metrics.get('f1', float('nan')),
+                                            'auc': metrics.get('auc', float('nan')),
+                                            'mcc': metrics.get('mcc', float('nan')),
+                                            'train_time': metrics.get('train_time', float('nan')),
+                                            # Early stopping metrics
+                                            'early_stopping_used': metrics.get('early_stopping_used', False),
+                                            'best_validation_score': metrics.get('best_validation_score', float('nan')),
+                                            'stopped_epoch': str(metrics.get('stopped_epoch', 'N/A')),  # Convert to string for CSV
+                                            'patience_used': metrics.get('patience_used', float('nan'))
+                                        })
+                                    
+                                    pipeline_results.append(result_entry)
+                            except Exception as e:
+                                logger.error(f"Error processing integration technique {integration_technique} for {ds_name} with {trans_name}-{n_val} (missing={missing_percentage}%): {str(e)}")
+                                continue  # Continue to next integration technique
+                    except Exception as e:
+                        logger.error(f"Error processing missing percentage {missing_percentage} for {ds_name} with {trans_name}-{n_val}: {str(e)}")
+                        continue  # Continue to next missing percentage
+                
+                # Add results to the batch for later processing
+                all_pipeline_results.extend(pipeline_results)
+                
+                # Write results to file every 10 transformers or at the end
+                # This reduces disk I/O while still providing regular checkpoints
+                if len(all_pipeline_results) >= 20 or (trans_name == list(transformers.keys())[-1] and n_val == n_trans_list[-1]):
+                    try:
+                        # Save results to CSV in batches
+                        if all_pipeline_results:
+                            metrics_file = os.path.join(
+                                base_out, "metrics", 
+                                f"{ds_name}_{pipeline_type}_cv_metrics.csv"
+                            )
+                            
+                            # Check if file exists
+                            file_exists = os.path.exists(metrics_file)
+                            
+                            # Append results to CSV
+                            pd.DataFrame(all_pipeline_results).to_csv(
+                                metrics_file,
+                                mode='a',
+                                header=not file_exists,
+                                index=False
+                            )
+                            logger.info(f"Saved {len(all_pipeline_results)} results to {metrics_file}")
+                            
+                            # Clear batch after saving
+                            all_pipeline_results = []
+                            
+                            # Force garbage collection to free memory
+                            import gc
+                            gc.collect()
+                    except Exception as e:
+                        logger.error(f"Error saving metrics batch: {str(e)}")
+                
+            except KeyboardInterrupt:
+                logger.warning(f"KeyboardInterrupt during {ds_name} with {trans_name}-{n_val}. Aborting all processing.")
+                raise  # Re-raise to abort all processing
+            except Exception as e:
+                logger.error(f"Error processing {trans_name}-{n_val} for {ds_name}: {str(e)}")
+                continue  # Continue to next n_val
+    
+    # Final save of any remaining results
+    if all_pipeline_results:
+        try:
+            metrics_file = os.path.join(
+                base_out, "metrics", 
+                f"{ds_name}_{pipeline_type}_cv_metrics.csv"
+            )
+            
+            # Check if file exists
+            file_exists = os.path.exists(metrics_file)
+            
+            # Append results to CSV
+            pd.DataFrame(all_pipeline_results).to_csv(
+                metrics_file,
+                mode='a',
+                header=not file_exists,
+                index=False
+            )
+            logger.info(f"Saved final {len(all_pipeline_results)} results to {metrics_file}")
+        except Exception as e:
+            logger.error(f"Error saving final metrics batch: {str(e)}")
+    
+    # Clean up resources
+    import gc
+    gc.collect()
+
+def run_extraction_pipeline(
+    ds_name: str, 
+    data_modalities: Dict[str, pd.DataFrame], 
+    common_ids: List[str], 
+    y: np.ndarray, 
+    base_out: str,
+    extractors: Dict[str, Any], 
+    n_comps_list: List[int], 
+    models: List[str],
+    progress_count: List[int], 
+    total_runs: int,
+    is_regression: bool = True
+):
+    """
+    Run extraction pipeline for a dataset.
+    
+    Parameters
+    ----------
+    ds_name : str
+        Dataset name
+    data_modalities : Dict[str, pd.DataFrame]
+        Dictionary of modality DataFrames
+    common_ids : List[str]
+        List of common sample IDs
+    y : np.ndarray
+        Target values
+    base_out : str
+        Base output directory
+    extractors : Dict[str, Any]
+        Dictionary of extractors
+    n_comps_list : List[int]
+        List of n_components values
+    models : List[str]
+        List of model names to train
+    progress_count : List[int]
+        Progress counter [0]
+    total_runs : int
+        Total number of runs
+    is_regression : bool
+        Whether this is a regression task
+    """
+    _run_pipeline(
+        ds_name=ds_name, 
+        data_modalities=data_modalities, 
+        common_ids=common_ids, 
+        y=y, 
+        base_out=base_out,
+        transformers=extractors, 
+        n_trans_list=n_comps_list, 
+        models=models,
+        progress_count=progress_count, 
+        total_runs=total_runs,
+        is_regression=is_regression, 
+        pipeline_type="extraction"
+    )
+
+def run_selection_pipeline(
+    ds_name: str, 
+    data_modalities: Dict[str, pd.DataFrame], 
+    common_ids: List[str], 
+    y: np.ndarray, 
+    base_out: str,
+    selectors: Dict[str, str], 
+    n_feats_list: List[int], 
+    models: List[str],
+    progress_count: List[int], 
+    total_runs: int,
+    is_regression: bool = True
+):
+    """
+    Run selection pipeline for a dataset.
+    
+    Parameters
+    ----------
+    ds_name : str
+        Dataset name
+    data_modalities : Dict[str, pd.DataFrame]
+        Dictionary of modality DataFrames
+    common_ids : List[str]
+        List of common sample IDs
+    y : np.ndarray
+        Target values
+    base_out : str
+        Base output directory
+    selectors : Dict[str, str]
+        Dictionary of selectors
+    n_feats_list : List[int]
+        List of n_features values
+    models : List[str]
+        List of model names to train
+    progress_count : List[int]
+        Progress counter [0]
+    total_runs : int
+        Total number of runs
+    is_regression : bool
+        Whether this is a regression task
+    """
+    _run_pipeline(
+        ds_name=ds_name, 
+        data_modalities=data_modalities, 
+        common_ids=common_ids, 
+        y=y, 
+        base_out=base_out,
+        transformers=selectors, 
+        n_trans_list=n_feats_list, 
+        models=models,
+        progress_count=progress_count, 
+        total_runs=total_runs,
+        is_regression=is_regression, 
+        pipeline_type="selection"
+    )
