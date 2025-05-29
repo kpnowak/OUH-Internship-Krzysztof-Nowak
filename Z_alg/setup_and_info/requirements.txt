@@ -1,0 +1,33 @@
+# Core Dependencies for Multi-Omics Data Fusion Pipeline
+# Essential packages required for basic functionality
+
+# Numerical computing and data manipulation
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# Machine learning and statistical analysis
+scikit-learn>=1.0.0
+
+# Visualization and plotting
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# Parallel processing and performance optimization
+joblib>=1.1.0
+threadpoolctl>=3.0.0
+
+# System monitoring and resource management
+psutil>=5.8.0
+
+# Feature selection algorithms
+boruta>=0.3.0
+
+# Additional dependencies found in the codebase
+# Standard library modules are included with Python, but some packages might need explicit installation
+
+# Note: The following are standard library modules and don't need installation:
+# - logging, os, sys, time, warnings, hashlib, copy, gc, threading
+# - random, re, datetime, pathlib, argparse, subprocess, importlib
+# - functools, contextlib, collections, itertools, typing, difflib
+# - traceback, dataclasses 

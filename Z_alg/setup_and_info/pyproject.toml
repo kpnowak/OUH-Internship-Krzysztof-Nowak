@@ -1,0 +1,145 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-fusion-pipeline"
+version = "1.0.0"
+description = "Multi-Omics Data Fusion Optimization Pipeline for Cancer Detection"
+license = {text = "MIT"}
+authors = [
+    {name = "Krzysztof Nowak", email = "krzysztof.nowak.krakow@gmail.com"},
+]
+maintainers = [
+    {name = "Krzysztof Nowak", email = "krzysztof.nowak.krakow@gmail.com"},
+]
+keywords = [
+    "machine-learning",
+    "bioinformatics", 
+    "multi-omics",
+    "data-fusion",
+    "cancer-detection",
+    "feature-selection",
+    "dimensionality-reduction"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.21.0",
+    "pandas>=1.3.0",
+    "scipy>=1.7.0",
+    "scikit-learn>=1.0.0",
+    "matplotlib>=3.5.0",
+    "seaborn>=0.11.0",
+    "joblib>=1.1.0",
+    "threadpoolctl>=3.0.0",
+    "psutil>=5.8.0",
+    "boruta>=0.3.0",
+]
+
+[project.optional-dependencies]
+visualization = [
+    "scikit-posthocs>=0.6.0",
+]
+development = [
+    "pytest>=6.0.0",
+    "pytest-cov>=2.12.0",
+    "black>=21.0.0",
+    "flake8>=3.9.0",
+    "mypy>=0.910",
+]
+all = [
+    "scikit-posthocs>=0.6.0",
+    "pytest>=6.0.0",
+    "pytest-cov>=2.12.0",
+    "black>=21.0.0",
+    "flake8>=3.9.0",
+    "mypy>=0.910",
+]
+
+[project.scripts]
+data-fusion = "main:main"
+mad-analysis = "mad_analysis:main"
+
+[project.urls]
+Homepage = "https://github.com/your-username/data-fusion-pipeline"
+Documentation = "https://github.com/your-username/data-fusion-pipeline/blob/main/README.md"
+Repository = "https://github.com/your-username/data-fusion-pipeline"
+"Bug Tracker" = "https://github.com/your-username/data-fusion-pipeline/issues"
+
+[tool.setuptools]
+package-dir = {"" = ".."}
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["*"]
+exclude = ["tests*", "test_data*", "output*", "output_old*", ".cache*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+  | output
+  | output_old
+  | .cache
+)/
+'''
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = [
+    "../tests",
+]
+python_files = [
+    "test_*.py",
+    "*_test.py",
+]
+python_classes = [
+    "Test*",
+]
+python_functions = [
+    "test_*",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+] 

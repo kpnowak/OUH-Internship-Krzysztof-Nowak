@@ -1,9 +1,0 @@
-2025-05-23 00:37:23,004 INFO [MEMORY] Starting memory monitor: current usage 72.9%
-2025-05-23 00:37:24,013 INFO [INFO] Starting AML - RAM used: 72.9%, CPU: 5.1%
-2025-05-23 00:37:24,013 WARNING Warning: File data\clinical\aml.csv does not exist
-2025-05-23 00:37:24,013 ERROR Error: Failed to load outcome data for AML
-2025-05-23 00:37:24,014 WARNING Error: Failed to load dataset AML
-2025-05-23 00:37:25,023 INFO [INFO] Starting Colon - RAM used: 72.8%, CPU: 5.5%
-2025-05-23 00:37:25,023 WARNING Warning: File data\clinical\colon.csv does not exist
-2025-05-23 00:37:25,025 ERROR Error: Failed to load outcome data for Colon
-2025-05-23 00:37:25,025 WARNING Error: Failed to load dataset Colon

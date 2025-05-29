@@ -1,0 +1,19 @@
+# Development Dependencies for Multi-Omics Data Fusion Pipeline
+# Includes core dependencies plus development and testing tools
+
+# Include all core dependencies
+-r requirements.txt
+
+# Enhanced visualization capabilities
+scikit-posthocs>=0.6.0  # Critical difference diagrams for MAD analysis
+
+# Testing framework and coverage
+pytest>=6.0.0
+pytest-cov>=2.12.0
+
+# Code formatting and quality tools
+black>=21.0.0
+flake8>=3.9.0
+
+# Type checking
+mypy>=0.910 

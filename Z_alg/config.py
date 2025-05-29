@@ -30,8 +30,8 @@ MEMORY_OPTIMIZATION = {
     "chunk_size": 10000,  # Much larger chunks for high-memory systems
     "cache_dir": "./.cache",  # Cache directory
     "cache_size": "8GB",  # Increased cache size per type for 60GB system
-    "total_cache_limit": "8GB",  # Use ~50% of available RAM for caching
-    #"total_cache_limit": "32GB",  # Use ~50% of available RAM for caching
+    #"total_cache_limit": "8GB",  # Use ~50% of available RAM for caching
+    "total_cache_limit": "32GB",  # Use ~50% of available RAM for caching
     "auto_clear_threshold": 0.85,  # Higher threshold for high-memory systems
     "memory_monitor_interval": 60,  # Less frequent monitoring for stable systems
     "shape_mismatch_auto_fix": True,  # Enable automatic shape mismatch fixing
@@ -41,24 +41,24 @@ MEMORY_OPTIMIZATION = {
 
 # High-memory server caching configuration (60GB RAM available)
 CACHE_CONFIG = {
-    "selector_regression": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit
-    "selector_classification": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit  
-    "extractor_regression": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit
-    "extractor_classification": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit
-    "total_limit_mb": 4000,  # 4GB total limit (reduced from 8GB)
-    #"selector_regression": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
-    #"selector_classification": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
-    #"extractor_regression": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
-    #"extractor_classification": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
-    #"total_limit_mb": 32000,  # 32GB total limit (~50% of 60GB RAM)
+    #"selector_regression": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit
+    #"selector_classification": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit  
+    #"extractor_regression": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit
+    #"extractor_classification": {"maxsize": 32, "maxmemory_mb": 1000},  # 1GB limit
+    #"total_limit_mb": 4000,  # 4GB total limit (reduced from 8GB)
+    "selector_regression": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
+    "selector_classification": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
+    "extractor_regression": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
+    "extractor_classification": {"maxsize": 128, "maxmemory_mb": 8000},  # 8GB limit per cache
+    "total_limit_mb": 32000,  # 32GB total limit (~50% of 60GB RAM)
     "eviction_strategy": "lru",  # Least Recently Used eviction
     "memory_check_interval": 300,  # Check memory usage every 5 minutes
 }
 
 # High-memory parallel processing configuration
 JOBLIB_PARALLEL_CONFIG = {
-    'max_nbytes': '50M',  # Limit memory per worker
-    #'max_nbytes': '2G',  # Increased memory per worker for 60GB system
+    #'max_nbytes': '50M',  # Limit memory per worker
+    'max_nbytes': '2G',  # Increased memory per worker for 60GB system
     'prefer': 'threads',  # Prefer threads over processes
     'require': 'sharedmem',  # Require shared memory
     'verbose': 0  # No verbose output
@@ -264,7 +264,35 @@ class DatasetConfig:
 
 # Regression datasets
 REGRESSION_DATASETS = [
-
+    DatasetConfig(
+        name="AML",
+        base_path="data/aml",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/aml.csv",
+        outcome_col="lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
+        id_col="sampleID",
+        outcome_type="continuous",
+        fix_tcga_ids=True
+    ).to_dict(),
+    
+    DatasetConfig(
+        name="Sarcoma",
+        base_path="data/sarcoma",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/sarcoma.csv",
+        outcome_col="pathologic_tumor_length",
+        id_col="metsampleID",
+        outcome_type="continuous",
+        fix_tcga_ids=True
+    ).to_dict()
 ]
 
 """
@@ -319,6 +347,21 @@ REGRESSION_DATASETS = [
 # Classification datasets
 CLASSIFICATION_DATASETS = [
     DatasetConfig(
+        name="Breast",
+        base_path="data/breast",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/breast.csv",
+        outcome_col="pathologic_T",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
+    
+    DatasetConfig(
         name="Colon",
         base_path="data/colon",
         modalities={
@@ -332,6 +375,81 @@ CLASSIFICATION_DATASETS = [
         outcome_type="class",
         fix_tcga_ids=True
     ).to_dict(),
+    
+    DatasetConfig(
+        name="Kidney",
+        base_path="data/kidney",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/kidney.csv",
+        outcome_col="pathologic_T",
+        id_col="submitter_id.samples",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
+    
+    DatasetConfig(
+        name="Liver",
+        base_path="data/liver",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/liver.csv",
+        outcome_col="pathologic_T",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
+    
+    DatasetConfig(
+        name="Lung",
+        base_path="data/lung",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/lung.csv",
+        outcome_col="pathologic_T",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
+    
+    DatasetConfig(
+        name="Melanoma",
+        base_path="data/melanoma",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/melanoma.csv",
+        outcome_col="pathologic_T",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
+    
+    DatasetConfig(
+        name="Ovarian",
+        base_path="data/ovarian",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/ovarian.csv",
+        outcome_col="clinical_stage",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict()
 ]
 
 """

@@ -1,0 +1,37 @@
+# Package manifest for Multi-Omics Data Fusion Pipeline
+# Specifies which files to include in the distribution
+
+# Include documentation and configuration files
+include ../README.md
+include ../INTEGRATION_TECHNIQUES_CHANGES.md
+include ../config.py
+
+# Include setup and installation files
+include setup.py
+include pyproject.toml
+include requirements.txt
+include requirements-dev.txt
+include MANIFEST.in
+
+# Include source code files
+include ../*.py
+
+# Include test data (but exclude large output directories)
+recursive-include ../test_data *
+recursive-include ../tests *
+
+# Exclude output directories and cache
+recursive-exclude ../output *
+recursive-exclude ../output_old *
+recursive-exclude ../.cache *
+recursive-exclude ../__pycache__ *
+recursive-exclude ../Z_alg.egg-info *
+
+# Exclude log files
+exclude ../debug.log
+exclude ../mad_analysis.log
+
+# Include data directory structure but not the actual large data files
+include ../data/README.md
+recursive-include ../data *.md
+recursive-exclude ../data *.csv 
