@@ -893,29 +893,29 @@ def get_regression_extractors() -> Dict[str, Any]:
     }
     
     return {
-        #"PCA": PCA(random_state=42),
-        #"NMF": NMF(
-        #    init='nndsvdar',
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3,      # Relaxed tolerance
-        #    beta_loss='frobenius',
-        #    solver='mu'
-        #),
-        #"ICA": FastICA(
-        #    random_state=42,
-        #    **ica_params
-        #),
-        #"FA": FactorAnalysis(
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3       # Relaxed tolerance
-        #),
-        #"PLS": PLSRegression(
-        #    n_components=8,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3       # Relaxed tolerance
-        #)
+        "PCA": PCA(random_state=42),
+        "NMF": NMF(
+            init='nndsvdar',
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3,      # Relaxed tolerance
+            beta_loss='frobenius',
+            solver='mu'
+        ),
+        "ICA": FastICA(
+            random_state=42,
+            **ica_params
+        ),
+        "FA": FactorAnalysis(
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        ),
+        "PLS": PLSRegression(
+            n_components=8,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        )
     }
 
 def get_regression_selectors() -> Dict[str, str]:
@@ -928,13 +928,13 @@ def get_regression_selectors() -> Dict[str, str]:
         Dictionary mapping selector names to selector codes
     """
     return {
-        "MRMR": "mrmr_reg",
-        #"LASSO": "lasso",
-        #"ElasticNetFS": "enet",
-        #"f_regressionFS": "freg",
+        #"MRMR": "mrmr_reg",
+        "LASSO": "lasso",
+        "ElasticNetFS": "enet",
+        "f_regressionFS": "freg",
         # Boruta running takes 20 mins per fold. It was replaced with RandomForestFS, but may be tested in the future.
         # "Boruta": "boruta_reg",
-        #"RandomForestFS": "rf_reg"
+        "RandomForestFS": "rf_reg"
     }
 
 def get_classification_extractors() -> Dict[str, Any]:
@@ -963,29 +963,29 @@ def get_classification_extractors() -> Dict[str, Any]:
     }
     
     return {
-        #"PCA": PCA(random_state=42),
-        #"NMF": NMF(
-        #    init='nndsvdar',
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3,      # Relaxed tolerance
-        #    beta_loss='frobenius',
-        #    solver='mu'
-        #),
-        #"ICA": FastICA(
-        #    random_state=42,
-        #    **ica_params
-        #),
-        #"FA": FactorAnalysis(
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3       # Relaxed tolerance
-        #),
-        #"LDA": LDA(),
-        #"KernelPCA": KernelPCA(
-        #    kernel='rbf',
-        #    random_state=42
-        #)
+        "PCA": PCA(random_state=42),
+        "NMF": NMF(
+            init='nndsvdar',
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3,      # Relaxed tolerance
+            beta_loss='frobenius',
+            solver='mu'
+        ),
+        "ICA": FastICA(
+            random_state=42,
+            **ica_params
+        ),
+        "FA": FactorAnalysis(
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        ),
+        "LDA": LDA(),
+        "KernelPCA": KernelPCA(
+            kernel='rbf',
+            random_state=42
+        )
     }
 
 def get_classification_selectors() -> Dict[str, str]:
@@ -998,13 +998,13 @@ def get_classification_selectors() -> Dict[str, str]:
         Dictionary mapping selector names to selector codes
     """
     return {
-        "MRMR": "mrmr_clf",
-        #"fclassifFS": "fclassif",
-        #"LogisticL1": "logistic_l1",
+        #"MRMR": "mrmr_clf",
+        "fclassifFS": "fclassif",
+        "LogisticL1": "logistic_l1",
         # Boruta running takes 20 mins per fold. It was replaced with XGBoostFS, but may be tested in the future.
         # "Boruta": "boruta_clf",
-        #"Chi2FS": "chi2_selection",
-        #"XGBoostFS": "xgb_clf"
+        "Chi2FS": "chi2_selection",
+        "XGBoostFS": "xgb_clf"
     }
 
 def get_selector_object(selector_code: str, n_feats: int):

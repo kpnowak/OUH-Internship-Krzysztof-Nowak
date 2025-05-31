@@ -1212,9 +1212,18 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         if out_dir and make_plots:
             os.makedirs(out_dir, exist_ok=True)
             
+            # Generate class labels - prefer model's classes if available to avoid shape mismatches
+            if hasattr(model, 'classes_'):
+                # Use the classes that the model was actually trained on
+                class_labels = list(model.classes_)
+                logger.debug(f"Using model's classes for plots: {class_labels}")
+            else:
+                # Fallback to unique classes from train+val data
+                class_labels = sorted(np.unique(np.concatenate([y_train, y_val])))
+                logger.debug(f"Using train+val unique classes for plots: {class_labels}")
+            
             # Confusion matrix
             plot_total_count += 1
-            class_labels = sorted(np.unique(np.concatenate([y_train, y_val])))
             confusion_path = os.path.join(out_dir, f"{plot_prefix}_confusion.png")
             if plot_confusion_matrix(cm, class_labels, f"{model_name} Confusion Matrix", confusion_path):
                 plot_success_count += 1

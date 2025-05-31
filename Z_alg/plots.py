@@ -475,11 +475,27 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
         
         # Handle shape mismatches more gracefully
         if n_model_classes != n_expected_classes:
-            logger.error(f"Mismatch between predicted probabilities shape ({y_proba.shape[0]}, {n_model_classes}) and class labels {n_expected_classes} for {title}")
+            logger.warning(f"Mismatch between predicted probabilities shape ({y_proba.shape[0]}, {n_model_classes}) and class labels {n_expected_classes} for {title}")
             logger.debug(f"Model predicts {n_model_classes} classes, but {n_expected_classes} class labels provided")
             logger.debug(f"Test set contains {n_test_classes} unique classes: {unique_test_classes}")
             logger.debug(f"Expected class labels: {class_labels}")
-            return False
+            
+            # Instead of failing, adapt to use only the classes the model can predict
+            # Get the classes that the model was actually trained on
+            model_classes = getattr(model, 'classes_', None)
+            if model_classes is not None:
+                logger.debug(f"Model was trained on classes: {model_classes}")
+                # Use the model's classes as the effective class labels
+                effective_class_labels = list(model_classes)
+                n_expected_classes = len(effective_class_labels)
+                logger.info(f"Adapting ROC curve to use model's {n_model_classes} classes instead of provided {len(class_labels)} class labels")
+            else:
+                # Fallback: use the first n_model_classes from class_labels
+                effective_class_labels = class_labels[:n_model_classes]
+                n_expected_classes = n_model_classes
+                logger.info(f"Using first {n_model_classes} class labels for ROC curve")
+        else:
+            effective_class_labels = class_labels
         
         # Create a new figure for each plot
         fig = plt.figure(figsize=(8, 6))
@@ -504,7 +520,7 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
                    label=f'ROC curve (AUC = {roc_auc:.2f})')
         else:
             # For multi-class, binarize the output and compute ROC for each class
-            # Use the actual range of classes present in the test set
+            # Use the actual range of classes present in the test set, but limited by model capabilities
             min_class = int(min(unique_test_classes))
             max_class = int(max(unique_test_classes))
             class_range = list(range(min_class, max_class + 1))
@@ -543,8 +559,8 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
                     fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], class_proba)
                     roc_auc[i] = auc(fpr[i], tpr[i])
                     
-                    # Use the actual class label if available, otherwise use index
-                    class_label = class_labels[i] if i < len(class_labels) else f"Class {i}"
+                    # Use the effective class label if available, otherwise use index
+                    class_label = effective_class_labels[i] if i < len(effective_class_labels) else f"Class {i}"
                     
                     # Plot ROC curve for each class
                     ax.plot(fpr[i], tpr[i], lw=2, 
