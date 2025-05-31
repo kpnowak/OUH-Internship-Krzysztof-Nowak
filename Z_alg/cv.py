@@ -1156,6 +1156,13 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         # Make predictions
         y_pred = model.predict(X_val)
         
+        # Validate predictions for NaN values
+        if np.isnan(y_pred).any():
+            logger.warning(f"Model {model_name} produced NaN predictions in fold {fold_idx}, replacing with mode")
+            # Replace NaN predictions with the most common class
+            mode_class = np.bincount(y_train).argmax()
+            y_pred = np.where(np.isnan(y_pred), mode_class, y_pred)
+        
         # Calculate metrics
         accuracy = accuracy_score(y_val, y_pred)
         precision = precision_score(y_val, y_pred, average='weighted', zero_division=0)
@@ -1180,12 +1187,18 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         try:
             if hasattr(model, 'predict_proba') and len(np.unique(y_val)) == 2:
                 y_proba = model.predict_proba(X_val)
-                # Check if predict_proba returns the expected shape
-                if y_proba.shape[1] >= 2:
-                    y_score = y_proba[:, 1]
-                    auc = roc_auc_score(y_val, y_score)
+                
+                # Validate probability predictions for NaN values
+                if np.isnan(y_proba).any():
+                    logger.warning(f"Model {model_name} produced NaN probabilities in fold {fold_idx}, cannot calculate AUC")
+                    auc = 0.5  # Default AUC for random classifier
                 else:
-                    logger.debug(f"predict_proba returned unexpected shape: {y_proba.shape}")
+                    # Check if predict_proba returns the expected shape
+                    if y_proba.shape[1] >= 2:
+                        y_score = y_proba[:, 1]
+                        auc = roc_auc_score(y_val, y_score)
+                    else:
+                        logger.debug(f"predict_proba returned unexpected shape: {y_proba.shape}")
         except Exception as e:
             from config import WARNING_SUPPRESSION_CONFIG
             if not WARNING_SUPPRESSION_CONFIG.get("suppress_auc_warnings", False):
