@@ -20,6 +20,7 @@ CORE_REQUIREMENTS = [
     "pandas>=1.3.0", 
     "scipy>=1.7.0",
     "scikit-learn>=1.0.0",
+    "xgboost>=1.6.0",
     "matplotlib>=3.5.0",
     "seaborn>=0.11.0",
     "joblib>=1.1.0",

@@ -8,6 +8,7 @@ scipy>=1.7.0
 
 # Machine learning and statistical analysis
 scikit-learn>=1.0.0
+xgboost>=1.6.0
 
 # Visualization and plotting
 matplotlib>=3.5.0
