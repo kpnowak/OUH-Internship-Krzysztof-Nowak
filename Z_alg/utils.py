@@ -24,7 +24,7 @@ class ComprehensiveLogger:
     Comprehensive logging system with memory, performance, and operation tracking.
     """
     
-    def __init__(self, name: str = "Z_alg", level: str = "WARNING"):
+    def __init__(self, name: str = "Data_Fusion", level: str = "WARNING"):
         """
         Initialize comprehensive logger.
         
@@ -36,11 +36,11 @@ class ComprehensiveLogger:
             Logging level (default: WARNING for less verbose output)
         """
         # Check environment variables for verbosity control
-        if os.getenv("Z_ALG_VERBOSE", "").lower() in ("1", "true", "yes"):
+        if os.getenv("DATA_FUSION_VERBOSE", "").lower() in ("1", "true", "yes"):
             level = "INFO"
-        elif os.getenv("Z_ALG_DEBUG", "").lower() in ("1", "true", "yes"):
+        elif os.getenv("DATA_FUSION_DEBUG", "").lower() in ("1", "true", "yes"):
             level = "DEBUG"
-        elif os.getenv("Z_ALG_QUIET", "").lower() in ("1", "true", "yes"):
+        elif os.getenv("DATA_FUSION_QUIET", "").lower() in ("1", "true", "yes"):
             level = "ERROR"
         
         self.logger = logging.getLogger(name)

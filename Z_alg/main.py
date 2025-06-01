@@ -122,7 +122,7 @@ def performance_summary_reporter(interval_seconds=1800):  # 30 minutes
 
 if __name__ == "__main__":
     # Enhanced startup logging
-    print("=== Z_ALG PIPELINE STARTING ===")
+    print("=== Multi-Omics Data Fusion Optimization Pipeline STARTING ===")
     comprehensive_logger.log_memory_usage("startup", force=True)
     
     # Start enhanced memory monitoring

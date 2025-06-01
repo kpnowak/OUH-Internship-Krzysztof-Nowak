@@ -1,5 +1,5 @@
 """
-Logging utilities for Z_alg package.
+Logging utilities for Multi-Omics Data Fusion package.
 
 This module contains logging functions to avoid circular imports between cli.py and other modules.
 """
@@ -29,7 +29,7 @@ def setup_logging_levels(args):
     
     if args.debug:
         # Debug mode: show everything in console and file
-        os.environ["Z_ALG_DEBUG"] = "1"
+        os.environ["DATA_FUSION_DEBUG"] = "1"
         os.environ["DEBUG_RESOURCES"] = "1"
         if console_handler:
             console_handler.setLevel(logging.DEBUG)
@@ -37,7 +37,7 @@ def setup_logging_levels(args):
         
     elif args.verbose:
         # Verbose mode: show info and above in console, everything in file
-        os.environ["Z_ALG_VERBOSE"] = "1"
+        os.environ["DATA_FUSION_VERBOSE"] = "1"
         if console_handler:
             console_handler.setLevel(logging.INFO)
         logger.info("Verbose mode enabled - showing detailed information")

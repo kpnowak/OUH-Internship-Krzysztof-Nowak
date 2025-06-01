@@ -963,29 +963,29 @@ def get_classification_extractors() -> Dict[str, Any]:
     }
     
     return {
-        "PCA": PCA(random_state=42),
-        "NMF": NMF(
-            init='nndsvdar',
-            random_state=42,
-            max_iter=5000,  # Increased max iterations
-            tol=1e-3,      # Relaxed tolerance
-            beta_loss='frobenius',
-            solver='mu'
-        ),
-        "ICA": FastICA(
-            random_state=42,
-            **ica_params
-        ),
-        "FA": FactorAnalysis(
-            random_state=42,
-            max_iter=5000,  # Increased max iterations
-            tol=1e-3       # Relaxed tolerance
-        ),
-        "LDA": LDA(),
-        "KernelPCA": KernelPCA(
-            kernel='rbf',
-            random_state=42
-        )
+        #"PCA": PCA(random_state=42),
+        #"NMF": NMF(
+        #    init='nndsvdar',
+        #    random_state=42,
+        #    max_iter=5000,  # Increased max iterations
+        #    tol=1e-3,      # Relaxed tolerance
+        #    beta_loss='frobenius',
+        #    solver='mu'
+        #),
+        #"ICA": FastICA(
+        #    random_state=42,
+        #    **ica_params
+        #),
+        #"FA": FactorAnalysis(
+        #    random_state=42,
+        #    max_iter=5000,  # Increased max iterations
+        #    tol=1e-3       # Relaxed tolerance
+        #),
+        #"LDA": LDA(),
+        #"KernelPCA": KernelPCA(
+        #    kernel='rbf',
+        #    random_state=42
+        #)
     }
 
 def get_classification_selectors() -> Dict[str, str]:
@@ -1087,58 +1087,82 @@ def get_classification_models() -> Dict[str, Any]:
 
 def get_model_object(model_name: str, random_state: Optional[int] = None, enable_early_stopping: bool = None):
     """
-    Create and return a model instance based on the model name.
+    Create a model object with optimized parameters and early stopping support.
     
     Parameters
     ----------
     model_name : str
         Name of the model to create
-    random_state : Optional[int]
+    random_state : int, optional
         Random state for reproducibility
     enable_early_stopping : bool, optional
-        Whether to enable early stopping. If None, uses EARLY_STOPPING_CONFIG setting
+        Whether to enable early stopping (if None, uses global config)
         
     Returns
     -------
-    model
-        Initialized model instance, optionally wrapped with early stopping
+    object
+        Configured model object
     """
-    # Determine if early stopping should be enabled
+    # Use global early stopping setting if not specified
     if enable_early_stopping is None:
         enable_early_stopping = EARLY_STOPPING_CONFIG.get("enabled", True)
     
-    # Create base model without early stopping first
-    if model_name == "RandomForestRegressor":
-        model_params = MODEL_OPTIMIZATIONS["RandomForestRegressor"].copy()
+    # Set random state if provided
+    if random_state is None:
+        random_state = 42
+    
+    # Create base models with optimized parameters
+    if model_name == "LinearRegression":
+        model_params = MODEL_OPTIMIZATIONS.get("LinearRegression", {}).copy()
+        base_model = LinearRegression(**model_params)
+    
+    elif model_name == "Lasso":
+        model_params = MODEL_OPTIMIZATIONS.get("Lasso", {}).copy()
         if random_state is not None:
             model_params["random_state"] = random_state
-        base_model = RandomForestRegressor(**model_params)
-    elif model_name == "RandomForestClassifier":
-        model_params = MODEL_OPTIMIZATIONS["RandomForestClassifier"].copy()
-        if random_state is not None:
-            model_params["random_state"] = random_state
-        base_model = RandomForestClassifier(**model_params)
-    elif model_name == "LinearRegression":
-        base_model = LinearRegression(**MODEL_OPTIMIZATIONS["LinearRegression"])
+        base_model = Lasso(**model_params)
+    
     elif model_name == "ElasticNet":
-        model_params = MODEL_OPTIMIZATIONS["ElasticNet"].copy()
+        model_params = MODEL_OPTIMIZATIONS.get("ElasticNet", {}).copy()
         if random_state is not None:
             model_params["random_state"] = random_state
         base_model = ElasticNet(**model_params)
-    elif model_name == "SVR":
-        model_params = MODEL_OPTIMIZATIONS["SVR"].copy()
-        # SVR does NOT support random_state
-        model_params.pop("random_state", None)
-        base_model = SVR(**model_params)
+    
+    elif model_name == "RandomForestRegressor":
+        model_params = MODEL_OPTIMIZATIONS.get("RandomForestRegressor", {}).copy()
+        if random_state is not None:
+            model_params["random_state"] = random_state
+        base_model = RandomForestRegressor(**model_params)
+    
+    elif model_name == "RandomForestClassifier":
+        model_params = MODEL_OPTIMIZATIONS.get("RandomForestClassifier", {}).copy()
+        if random_state is not None:
+            model_params["random_state"] = random_state
+        base_model = RandomForestClassifier(**model_params)
+    
     elif model_name == "LogisticRegression":
         model_params = MODEL_OPTIMIZATIONS.get("LogisticRegression", {}).copy()
         if random_state is not None:
             model_params["random_state"] = random_state
-        if "penalty" not in model_params:
-            model_params["penalty"] = 'l2'
-        if "solver" not in model_params:
-            model_params["solver"] = 'liblinear'
+        
+        # Use the standard LogisticRegression with improved parameters for numerical stability
+        model_params.update({
+            "solver": "lbfgs",  # More stable solver
+            "C": 10.0,  # Stronger regularization
+            "max_iter": 2000,  # More iterations for convergence
+            "class_weight": "balanced",
+            "random_state": random_state
+        })
         base_model = LogisticRegression(**model_params)
+    
+    elif model_name == "SVR":
+        model_params = MODEL_OPTIMIZATIONS.get("SVR", {}).copy()
+        if "kernel" not in model_params:
+            model_params["kernel"] = 'rbf'
+        if "cache_size" not in model_params:
+            model_params["cache_size"] = 500
+        base_model = SVR(**model_params)
+    
     elif model_name == "SVC":
         model_params = MODEL_OPTIMIZATIONS.get("SVC", {}).copy()
         if random_state is not None:
@@ -1151,27 +1175,13 @@ def get_model_object(model_name: str, random_state: Optional[int] = None, enable
     else:
         raise ValueError(f"Unknown model: {model_name}")
     
-    # Apply early stopping wrapper if enabled
-    if enable_early_stopping:
-        # Get early stopping configuration
-        early_stopping_params = EARLY_STOPPING_CONFIG.copy()
-        early_stopping_params.pop("enabled", None)  # Remove the 'enabled' key
-        
-        # Set random state for early stopping wrapper
-        if random_state is not None:
-            early_stopping_params["random_state"] = random_state
-        
-        # Create early stopping wrapper
-        wrapped_model = EarlyStoppingWrapper(
-            base_model=base_model,
-            **early_stopping_params
-        )
-        
-        logger.info(f"Created {model_name} with early stopping (patience={early_stopping_params.get('patience', 10)}, validation_split={early_stopping_params.get('validation_split', 0.2)})")
-        return wrapped_model
-    else:
-        logger.info(f"Created {model_name} without early stopping")
-        return base_model
+    # For models that support early stopping, wrap them
+    if enable_early_stopping and model_name in ["RandomForestRegressor", "RandomForestClassifier"]:
+        # Get early stopping parameters without the 'enabled' key
+        early_stopping_params = {k: v for k, v in EARLY_STOPPING_CONFIG.items() if k != 'enabled'}
+        base_model = EarlyStoppingWrapper(base_model, **early_stopping_params)
+    
+    return base_model
 
 def transform_selector_regression(X, selected_features):
     """
@@ -1550,117 +1560,76 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
         
         elif selector_type == 'fclassifFS' or selector_type == 'fclassif':
             # Convert to SelectKBest with f_classif
-            from sklearn.feature_selection import SelectKBest, f_classif
+            from sklearn.feature_selection import SelectKBest, f_classif, VarianceThreshold
             
-            # Use safe f_classif with error handling for divide-by-zero
             try:
-                # Suppress specific sklearn warnings about divide by zero
+                # First, remove constant features (zero variance) to avoid sklearn warnings
+                variance_selector = VarianceThreshold(threshold=0.0)  # Remove features with zero variance
+                X_filtered = variance_selector.fit_transform(X_safe)
+                
+                # Check if we have enough features left after filtering
+                if X_filtered.shape[1] < n_feats:
+                    logger.warning(f"Only {X_filtered.shape[1]} non-constant features available for {modality_name}, adjusting n_feats from {n_feats}")
+                    effective_n_feats = min(n_feats, X_filtered.shape[1])
+                else:
+                    effective_n_feats = n_feats
+                
+                if X_filtered.shape[1] == 0:
+                    logger.warning(f"All features are constant for {modality_name}, using first original feature as fallback")
+                    # Fallback to first feature
+                    mask = np.zeros(X_safe.shape[1], dtype=bool)
+                    mask[0] = True
+                    selected_features = mask
+                    X_selected = X_safe[:, [0]]
+                    
+                    result = (selected_features, X_selected)
+                    _selector_cache['sel_clf'].put(key, result, item_size=X_selected.nbytes)
+                    return result
+                
+                # Apply f_classif selector on filtered data with warning suppression
                 import warnings
                 with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', message='Features .* are constant.', category=UserWarning)
                     warnings.filterwarnings('ignore', message='divide by zero encountered in divide')
                     warnings.filterwarnings('ignore', message='invalid value encountered in divide')
                     
-                    selector = SelectKBest(f_classif, k=min(n_feats, X_safe.shape[1]))
-                    logger.info(f"Using SelectKBest with f_classif for {modality_name}")
+                    selector = SelectKBest(score_func=f_classif, k=effective_n_feats)
+                    X_selected_filtered = selector.fit_transform(X_filtered, y_safe)
+                    selected_indices_filtered = selector.get_support(indices=True)
+                
+                # Map back to original feature indices
+                original_feature_indices = variance_selector.get_support(indices=True)
+                selected_original_indices = original_feature_indices[selected_indices_filtered]
+                
+                # Create boolean mask for original features
+                selected_features = np.zeros(X_safe.shape[1], dtype=bool)
+                selected_features[selected_original_indices] = True
+                
+                # Get the selected data from original X_safe
+                X_selected = X_safe[:, selected_original_indices]
+                
+                logger.debug(f"f_classif selected {len(selected_original_indices)} features for {modality_name} (filtered {X_safe.shape[1] - X_filtered.shape[1]} constant features)")
+                
+                result = (selected_features, X_selected)
+                _selector_cache['sel_clf'].put(key, result, item_size=X_selected.nbytes)
+                return result
+                
             except Exception as e:
-                logger.warning(f"f_classif failed for {modality_name}: {str(e)}, using mutual_info_classif as fallback")
-                from sklearn.feature_selection import mutual_info_classif
-                selector = SelectKBest(mutual_info_classif, k=min(n_feats, X_safe.shape[1]))
-            
-        elif selector_type in ['LogisticL1', 'logistic_l1', 'lasso', 'ElasticNet', 'RandomForest']:
-            # Model-based feature selection
-            from sklearn.feature_selection import SelectFromModel
-            
-            if selector_type == 'LogisticL1' or selector_type == 'logistic_l1':
-                from sklearn.linear_model import LogisticRegression
-                model = LogisticRegression(penalty='l1', solver='liblinear', random_state=42)
-            elif selector_type == 'lasso':
-                from sklearn.linear_model import LogisticRegression
-                model = LogisticRegression(penalty='l1', solver='liblinear', random_state=42)
-            elif selector_type == 'ElasticNet':
-                from sklearn.linear_model import ElasticNet
-                model = ElasticNet(
-                    alpha=0.01,      # Lower alpha for better convergence  
-                    l1_ratio=0.5,    # Balanced L1/L2 ratio
-                    max_iter=5000,   # Increased iterations
-                    tol=1e-4,        # Convergence tolerance
-                    selection='cyclic',  # Coordinate descent selection
-                    random_state=42
-                )
-            elif selector_type == 'RandomForest':
-                from sklearn.ensemble import RandomForestClassifier
-                model = RandomForestClassifier(n_estimators=100, random_state=42)
-                
-            # Create and fit model first to avoid SelectFromModel initialization issues
-            try:
-                model.fit(X_safe, y_safe)
-                # Then create selector
-                selector = SelectFromModel(model, max_features=min(n_feats, X_safe.shape[1]), threshold=-np.inf)
-            except Exception as e:
-                logger.warning(f"Model fitting failed ({selector_type}): {str(e)}, using first feature as fallback")
-                # Fallback to first feature
-                mask = np.zeros(X_safe.shape[1], dtype=bool)
-                mask[0] = True
-                selected_features = mask
-                transformed_X = X_safe[:, [0]]
-                
-                # Cache result
-                result = (selected_features, transformed_X)
-                _selector_cache['sel_clf'].put(key, result, item_size=transformed_X.nbytes)
-                return result
-        
-        elif selector_type == 'enet':
-            # enet and freg are regression selectors and should be handled by the regression selector function
-            # This should not happen if the routing is correct in the CV pipeline
-            logger.warning(f"Regression selector '{selector_type}' called in classification function - this indicates a routing issue")
-            from sklearn.feature_selection import SelectKBest, f_classif
-            selector = SelectKBest(f_classif, k=min(n_feats, X_safe.shape[1]))
-                
-        elif selector_type == 'freg':
-            # enet and freg are regression selectors and should be handled by the regression selector function
-            # This should not happen if the routing is correct in the CV pipeline
-            logger.warning(f"Regression selector '{selector_type}' called in classification function - this indicates a routing issue")
-            from sklearn.feature_selection import SelectKBest, f_classif
-            selector = SelectKBest(f_classif, k=min(n_feats, X_safe.shape[1]))
-        
-        elif selector_type == 'boruta_reg':
-            # boruta_reg is a regression selector and should be handled by the regression selector function
-            # This should not happen if the routing is correct in the CV pipeline
-            logger.warning(f"Regression selector '{selector_type}' called in classification function - this indicates a routing issue")
-            from sklearn.feature_selection import SelectKBest, f_classif
-            selector = SelectKBest(f_classif, k=min(n_feats, X_safe.shape[1]))
-        
-        elif selector_type == 'boruta_clf' or selector_type == 'Boruta':
-            # Use the improved boruta implementation
-            from utils_boruta import boruta_selector
-            selected_features = boruta_selector(
-                X_safe, y_safe, n_feats=min(n_feats, X_safe.shape[1]), 
-                task="clf", random_state=42
-            )
-            
-            if selected_features is not None and len(selected_features) > 0:
-                # Convert indices to boolean mask
-                mask = np.zeros(X_safe.shape[1], dtype=bool)
-                mask[selected_features] = True
-                selected_features = mask
-                transformed_X = X_safe[:, selected_features]
-                
-                # Cache result
-                result = (selected_features, transformed_X)
-                _selector_cache['sel_clf'].put(key, result, item_size=transformed_X.nbytes)
-                return result
-            else:
-                logger.warning("Boruta returned no features, falling back to first feature")
-                # Fallback to first feature
-                mask = np.zeros(X_safe.shape[1], dtype=bool)
-                mask[0] = True
-                selected_features = mask
-                transformed_X = X_safe[:, [0]]
-                
-                # Cache result
-                result = (selected_features, transformed_X)
-                _selector_cache['sel_clf'].put(key, result, item_size=transformed_X.nbytes)
-                return result
+                logger.warning(f"Enhanced f_classif failed for {modality_name}: {str(e)}, using simple fallback")
+                # Fallback to simple f_classif without filtering
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', message='Features .* are constant.', category=UserWarning)
+                    warnings.filterwarnings('ignore', message='divide by zero encountered in divide')
+                    warnings.filterwarnings('ignore', message='invalid value encountered in divide')
+                    
+                    selector = SelectKBest(score_func=f_classif, k=min(n_feats, X_safe.shape[1]))
+                    X_selected = selector.fit_transform(X_safe, y_safe)
+                    selected_features = selector.get_support(indices=True)
+                    
+                    result = (selected_features, X_selected)
+                    _selector_cache['sel_clf'].put(key, result, item_size=X_selected.nbytes)
+                    return result
         
         elif selector_type == 'chi2_selection' or selector_type == 'Chi2FS':
             # Convert to SelectKBest with chi2
@@ -1671,6 +1640,39 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
                 
             selector = SelectKBest(chi2, k=min(n_feats, X_safe.shape[1]))
             logger.info(f"Using SelectKBest with chi2 for {modality_name}")
+            
+        elif selector_type == 'logistic_l1' or selector_type == 'LogisticL1':
+            # Logistic Regression with L1 penalty for feature selection
+            from sklearn.feature_selection import SelectFromModel
+            from sklearn.linear_model import LogisticRegression
+            
+            try:
+                # Create LogisticRegression with L1 penalty
+                logistic_l1 = LogisticRegression(
+                    penalty='l1',
+                    solver='liblinear',  # liblinear supports L1 penalty
+                    C=1.0,
+                    random_state=42,
+                    max_iter=1000
+                )
+                
+                # Fit the model
+                logistic_l1.fit(X_safe, y_safe)
+                
+                # Use SelectFromModel to select features based on coefficients
+                sfm = SelectFromModel(logistic_l1, max_features=n_feats, prefit=True)
+                X_selected = sfm.transform(X_safe)
+                selected_features = sfm.get_support()
+                
+                # Cache and return result
+                result = (selected_features, X_selected)
+                _selector_cache['sel_clf'].put(key, result, item_size=X_selected.nbytes)
+                return result
+                
+            except Exception as e:
+                logger.warning(f"LogisticL1 feature selection failed for {modality_name}: {str(e)}, falling back to f_classif")
+                from sklearn.feature_selection import SelectKBest, f_classif
+                selector = SelectKBest(f_classif, k=min(n_feats, X_safe.shape[1]))
             
         elif selector_type == 'xgb_clf':
             # XGBoost Feature Importance for classification
