@@ -1,0 +1,6 @@
+Dataset,Workflow,Extractor,n_components,Model,MAE,MSE,RMSE,Train_Time_Seconds,Task_Type,Dataset_Name,Metrics_File,Selector,n_features,Accuracy,Precision,Recall,F1,MCC,AUROC
+Kidney,Extraction,LDA,8.0,RandomForest,,,,0.2427818775177002,Classification,Kidney,Kidney_extraction_metrics.csv,,,0.926829268292683,0.9134727061556328,0.926829268292683,0.9145701859116492,0.9085176845191568,
+Kidney,Extraction,LDA,128.0,RandomForest,,,,0.2719259262084961,Classification,Kidney,Kidney_extraction_metrics.csv,,,0.902439024390244,0.8989547038327526,0.902439024390244,0.888868042526579,0.8798113187401568,
+Kidney,Extraction,LDA,16.0,RandomForest,,,,0.2480843067169189,Classification,Kidney,Kidney_extraction_metrics.csv,,,0.902439024390244,0.8989547038327526,0.902439024390244,0.888868042526579,0.8798113187401568,
+Kidney,Extraction,LDA,32.0,RandomForest,,,,0.2423808574676513,Classification,Kidney,Kidney_extraction_metrics.csv,,,0.902439024390244,0.8989547038327526,0.902439024390244,0.888868042526579,0.8798113187401568,
+Kidney,Extraction,LDA,64.0,RandomForest,,,,0.301448106765747,Classification,Kidney,Kidney_extraction_metrics.csv,,,0.902439024390244,0.8989547038327526,0.902439024390244,0.888868042526579,0.8798113187401568,

@@ -1,0 +1,6 @@
+Dataset,Workflow,Extractor,n_components,Model,MAE,MSE,RMSE,Train_Time_Seconds,Task_Type,Dataset_Name,Metrics_File,Selector,n_features,Accuracy,Precision,Recall,F1,MCC,AUROC
+Melanoma,Extraction,LDA,8.0,RandomForest,,,,0.3579902648925781,Classification,Melanoma,Melanoma_extraction_metrics.csv,,,0.9176470588235294,0.9196414565826332,0.9176470588235294,0.9108261555486348,0.9067103463313912,
+Melanoma,Extraction,LDA,64.0,RandomForest,,,,0.4559757709503174,Classification,Melanoma,Melanoma_extraction_metrics.csv,,,0.9058823529411764,0.9150829562594268,0.9058823529411764,0.8998433919022154,0.8941514009650383,
+Melanoma,Extraction,LDA,128.0,RandomForest,,,,0.4169731140136719,Classification,Melanoma,Melanoma_extraction_metrics.csv,,,0.9058823529411764,0.9150829562594268,0.9058823529411764,0.8998433919022154,0.8941514009650383,
+Melanoma,Extraction,LDA,16.0,RandomForest,,,,0.4359993934631347,Classification,Melanoma,Melanoma_extraction_metrics.csv,,,0.9058823529411764,0.9150829562594268,0.9058823529411764,0.8998433919022154,0.8941514009650383,
+Melanoma,Extraction,LDA,32.0,RandomForest,,,,0.6560039520263672,Classification,Melanoma,Melanoma_extraction_metrics.csv,,,0.9058823529411764,0.9150829562594268,0.9058823529411764,0.8998433919022154,0.8941514009650383,
