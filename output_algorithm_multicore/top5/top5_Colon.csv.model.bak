@@ -1,6 +1,0 @@
-Dataset,Workflow,Extractor,n_components,Model,MAE,MSE,RMSE,Train_Time_Seconds,Task_Type,Dataset_Name,Metrics_File,Selector,n_features,Accuracy,Precision,Recall,F1,MCC,AUROC
-Colon,Extraction,LDA,16.0,RandomForest,,,,0.3289892673492431,Classification,Colon,Colon_extraction_metrics.csv,,,0.9555555555555556,0.9578347578347578,0.9555555555555556,0.9508493455861878,0.8522750452093019,
-Colon,Extraction,LDA,64.0,RandomForest,,,,0.3029854297637939,Classification,Colon,Colon_extraction_metrics.csv,,,0.9555555555555556,0.9578347578347578,0.9555555555555556,0.9508493455861878,0.8522750452093019,
-Colon,Extraction,LDA,8.0,RandomForest,,,,0.3269999027252197,Classification,Colon,Colon_extraction_metrics.csv,,,0.9555555555555556,0.9578347578347578,0.9555555555555556,0.9508493455861878,0.8522750452093019,
-Colon,Extraction,LDA,32.0,RandomForest,,,,0.2760043144226074,Classification,Colon,Colon_extraction_metrics.csv,,,0.9555555555555556,0.9578347578347578,0.9555555555555556,0.9508493455861878,0.8522750452093019,
-Colon,Extraction,LDA,128.0,RandomForest,,,,0.2879979610443115,Classification,Colon,Colon_extraction_metrics.csv,,,0.9555555555555556,0.9578347578347578,0.9555555555555556,0.9508493455861878,0.8522750452093019,

@@ -1,6 +1,0 @@
-Dataset,Workflow,Extractor,n_components,Model,MAE,MSE,RMSE,Train_Time_Seconds,Task_Type,Dataset_Name,Metrics_File,Selector,n_features,Accuracy,Precision,Recall,F1,MCC,AUROC
-Ovarian,Extraction,LDA,16.0,RandomForest,,,,0.2789897918701172,Classification,Ovarian,Ovarian_extraction_metrics.csv,,,0.9827586206896552,0.9862068965517242,0.9827586206896552,0.983621742242432,0.9546626756479072,
-Ovarian,Extraction,LDA,64.0,RandomForest,,,,0.3089847564697265,Classification,Ovarian,Ovarian_extraction_metrics.csv,,,0.9827586206896552,0.9862068965517242,0.9827586206896552,0.983621742242432,0.9546626756479072,
-Ovarian,Extraction,LDA,32.0,RandomForest,,,,0.290999174118042,Classification,Ovarian,Ovarian_extraction_metrics.csv,,,0.9827586206896552,0.9862068965517242,0.9827586206896552,0.983621742242432,0.9546626756479072,
-Ovarian,Extraction,LDA,128.0,RandomForest,,,,0.3080406188964844,Classification,Ovarian,Ovarian_extraction_metrics.csv,,,0.9827586206896552,0.9862068965517242,0.9827586206896552,0.983621742242432,0.9546626756479072,
-Ovarian,Extraction,LDA,8.0,RandomForest,,,,0.2879750728607178,Classification,Ovarian,Ovarian_extraction_metrics.csv,,,0.9827586206896552,0.9862068965517242,0.9827586206896552,0.983621742242432,0.9546626756479072,
