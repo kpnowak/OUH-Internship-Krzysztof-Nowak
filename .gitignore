@@ -1,2 +1,6 @@
 __pycache__/
-cache
+.cache
+output
+output_main_without_mrmr
+debug_logs
+debug.log
