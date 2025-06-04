@@ -48,16 +48,44 @@ This multi-modal approach captures different layers of biological information, p
 > **Full code and preliminary results are available in the GitHub repository**
 > **OUH-Internship-Krzysztof-Nowak**.
 
-For each dataset group (regression / classification) the pipeline explores every combination of:
+The pipeline systematically evaluates all combinations of algorithms and parameters using the following experimental structure:
 
-| Factor                     | Regression branch                                           | Classification branch                              |
-| -------------------------- | ----------------------------------------------------------- | -------------------------------------------------- |
-| **Extractors**             | PCA, NMF, ICA, FA, PLS                                      | PCA, NMF, ICA, FA, LDA, KernelPCA                  |
-| **Selectors**              | MRMR, LASSO, ElasticNetFS, *f*-regressionFS, RandomForestFS | MRMR, *f*-classifFS, LogisticL1, Chi²FS, XGBoostFS |
-| **Feature counts**         | *n* ∈ {8, 16, 32}                                           | *n* ∈ {8, 16, 32}                                  |
-| **Integration techniques** | weighted-concat, average, sum, early-fusion-PCA             | same four techniques                               |
-| **Predictive models**      | LinearRegression, ElasticNet, RandomForestRegressor         | LogisticRegression, SVC, RandomForestClassifier    |
-| **Missing-data rates**     | 0 %, 20 %, 50 %                                             | 0 %, 20 %, 50 %                                    |
+```python
+# Regression branch algorithms
+REGRESSION_EXTRACTORS = [PCA, NMF, ICA, FA, PLS]
+REGRESSION_SELECTORS = [MRMR, LASSO, ElasticNetFS, f_regressionFS, RandomForestFS]
+REGRESSION_MODELS = [LinearRegression, ElasticNet, RandomForestRegressor]
+
+# Classification branch algorithms  
+CLASSIFICATION_EXTRACTORS = [PCA, NMF, ICA, FA, LDA, KernelPCA]
+CLASSIFICATION_SELECTORS = [MRMR, f_classifFS, LogisticL1, Chi2FS, XGBoostFS]
+CLASSIFICATION_MODELS = [LogisticRegression, SVC, RandomForestClassifier]
+
+# Experimental loop for each dataset
+for ALGORITHM in EXTRACTORS + SELECTORS:
+    for N_FEATURES in [8, 16, 32]:
+        for MISSING in [0, 0.20, 0.50]:
+            if MISSING == 0:
+                INTEGRATIONS = [weighted_concat, average, sum, early_fusion_PCA]
+            else:
+                INTEGRATIONS = [weighted_concat]
+            for INTEGRATION in INTEGRATIONS:
+                for MODEL in TASK_SPECIFIC_MODELS:
+                    run_experiment(
+                        algorithm=ALGORITHM,
+                        n_features=N_FEATURES,
+                        missing_rate=MISSING,
+                        integration=INTEGRATION,
+                        model=MODEL
+                    )
+```
+
+This comprehensive experimental design ensures systematic evaluation across:
+- **Feature extraction/selection algorithms** tailored to each task type
+- **Feature counts** (8, 16, 32 components/features)
+- **Missing data scenarios** (0%, 20%, 50% missing modalities)
+- **Integration strategies** (4 techniques for complete data, 1 for missing data)
+- **Predictive models** optimized for regression vs. classification tasks
 
 ## Deliverables
 
