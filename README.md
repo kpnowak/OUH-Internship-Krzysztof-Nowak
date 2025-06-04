@@ -4,9 +4,19 @@
 
 This repository contains a comprehensive machine learning pipeline for multi-omics data fusion optimization using intermediate integration techniques. This project is part of a Bachelor's Thesis in Artificial Intelligence at VU Amsterdam, contributing to a larger research initiative focused on developing advanced machine learning models for early and accurate cancer detection.
 
+This project investigates feature *extraction* and *selection* algorithms for multi-omics cancer data. The aim is to identify the most effective methods, validate them experimentally, and design a new algorithm tailored to this data type.
+
 ### Research Context
 
 This work is part of a broader research project aimed at creating innovative machine learning models that can detect cancer faster and more accurately in patients by leveraging multiple types of biological data. The research explores how different data integration strategies and feature extraction/selection algorithms perform when working with multi-modal omics data, which is crucial for understanding complex biological processes and disease mechanisms.
+
+### Objectives
+
+1. **Survey** the state-of-the-art extraction and selection algorithms used in machine learning.
+2. **Select** the algorithms most suitable for multi-omics data.
+3. **Evaluate** those algorithms on benchmark cancer datasets, using a comprehensive, multi-factor experiment.
+4. **Analyse** the results to determine which methods perform best and **explain why**.
+5. **Design** a purpose-built extraction or selection algorithm optimised for multi-omics cancer data.
 
 ### Project Purpose
 
@@ -32,6 +42,29 @@ The pipeline works with **multi-omics cancer data**, specifically:
 - **Clinical Data**: Patient outcomes and clinical variables for supervised learning
 
 This multi-modal approach captures different layers of biological information, providing a comprehensive view of the molecular landscape in cancer patients.
+
+## Experimental Design
+
+> **Full code and preliminary results are available in the GitHub repository**
+> **OUH-Internship-Krzysztof-Nowak**.
+
+For each dataset group (regression / classification) the pipeline explores every combination of:
+
+| Factor                     | Regression branch                                           | Classification branch                              |
+| -------------------------- | ----------------------------------------------------------- | -------------------------------------------------- |
+| **Extractors**             | PCA, NMF, ICA, FA, PLS                                      | PCA, NMF, ICA, FA, LDA, KernelPCA                  |
+| **Selectors**              | MRMR, LASSO, ElasticNetFS, *f*-regressionFS, RandomForestFS | MRMR, *f*-classifFS, LogisticL1, Chi²FS, XGBoostFS |
+| **Feature counts**         | *n* ∈ {8, 16, 32}                                           | *n* ∈ {8, 16, 32}                                  |
+| **Integration techniques** | weighted-concat, average, sum, early-fusion-PCA             | same four techniques                               |
+| **Predictive models**      | LinearRegression, ElasticNet, RandomForestRegressor         | LogisticRegression, SVC, RandomForestClassifier    |
+| **Missing-data rates**     | 0 %, 20 %, 50 %                                             | 0 %, 20 %, 50 %                                    |
+
+## Deliverables
+
+1. **Literature review** summarising extraction and selection methods for multi-omics data.
+2. **Experimental report** (methods, code links, and results tables/plots) highlighting the top-performing algorithm combinations and explaining their success.
+3. **Recommendation** of the algorithms most suitable for multi-omics cancer studies, with justification.
+4. **New algorithm** specifically designed and empirically validated for this data.
 
 ## Algorithm Architecture
 
@@ -94,18 +127,16 @@ This multi-modal approach captures different layers of biological information, p
 
 The pipeline includes multiple cancer datasets from The Cancer Genome Atlas (TCGA):
 
-### Regression Datasets
+### Regression Tasks
 - **AML (Acute Myeloid Leukemia)**: Predicting blast cell percentage
 - **Sarcoma**: Predicting tumor length
 
-### Classification Datasets  
-- **Breast Cancer**: Pathologic T-stage classification
-- **Colon Cancer**: Pathologic T-stage classification
-- **Kidney Cancer**: Pathologic T-stage classification
-- **Liver Cancer**: Pathologic T-stage classification
-- **Lung Cancer**: Pathologic T-stage classification
-- **Melanoma**: Pathologic T-stage classification
-- **Ovarian Cancer**: Clinical stage classification
+### Classification Tasks
+- **Breast, Colon, Kidney, Liver, Lung, Melanoma** and **Ovarian** datasets for pathologic T-stage and clinical stage classification
+
+All datasets originate from:
+Rappoport & Shamir (2018), *Multi-omic and multi-view clustering algorithms: review and cancer benchmark*, **Nucleic Acids Research**, 46 (20), 10546–10562.
+Download link: [https://acgt.cs.tau.ac.il/multi_omic_benchmark/download.html](https://acgt.cs.tau.ac.il/multi_omic_benchmark/download.html)
 
 ### Data Structure
 Each dataset contains:
@@ -400,38 +431,79 @@ output/
 
 ```
 OUH-Internship-Krzysztof-Nowak/
-├── install.py                 # Convenience installation script
-├── main.py                    # Main pipeline entry point
-├── cli.py                     # Command-line interface
-├── config.py                  # Configuration settings
-├── data_io.py                 # Data loading and processing
-├── preprocessing.py           # Data preprocessing utilities
-├── fusion.py                  # Multi-modal data fusion
-├── models.py                  # Machine learning models and caching
-├── cv.py                      # Cross-validation pipeline
-├── plots.py                   # Visualization functions
-├── mad_analysis.py            # MAD analysis implementation
-├── utils.py                   # Utility functions
-├── run_mad_analysis.py        # Standalone MAD analysis script
-├── _process_single_modality.py # Single modality processing utilities
-├── utils_boruta.py            # Boruta feature selection utilities
-├── mrmr_helper.py             # MRMR feature selection implementation
-├── create_diagrams_only.py    # Standalone diagram creation
-├── __init__.py                # Package initialization
-├── setup_and_info/            # Setup and documentation files
-│   ├── setup.py               # Package installation script
-│   ├── pyproject.toml         # Modern Python packaging
-│   ├── requirements.txt       # Core dependencies
-│   ├── requirements-dev.txt   # Development dependencies
-│   ├── MANIFEST.in            # Package manifest
-│   ├── test_installation.py   # Installation verification
-│   ├── MRMR_FIX_SUMMARY.md    # MRMR implementation notes
-│   └── Multi-omics data fusion optimization using intermediate integration techniques-1 (2).pdf
-├── data/                      # Dataset storage
-├── output/                    # Results and outputs
-├── tests/                     # Unit tests
-├── test_data/                 # Test datasets
-└── README.md                  # This file
+├── install.py                          # Convenience installation script
+├── main.py                             # Main pipeline entry point
+├── cli.py                              # Command-line interface
+├── config.py                           # Configuration settings
+├── data_io.py                          # Data loading and processing
+├── preprocessing.py                    # Data preprocessing utilities
+├── fusion.py                           # Multi-modal data fusion
+├── models.py                           # Machine learning models and caching
+├── cv.py                               # Cross-validation pipeline
+├── plots.py                            # Visualization functions
+├── mad_analysis.py                     # MAD analysis implementation
+├── utils.py                            # Utility functions
+├── logging_utils.py                    # Logging configuration and utilities
+├── run_mad_analysis.py                 # Standalone MAD analysis script
+├── _process_single_modality.py         # Single modality processing utilities
+├── utils_boruta.py                     # Boruta feature selection utilities
+├── mrmr_helper.py                      # MRMR feature selection implementation
+├── create_diagrams_only.py             # Standalone diagram creation
+├── combine_cv_metrics.py               # Cross-validation metrics combination
+├── create_classification_plots.py      # Basic classification visualization
+├── create_enhanced_classification_plots.py # Enhanced classification plots
+├── create_regression_plots.py          # Basic regression visualization
+├── create_enhanced_regression_plots.py # Enhanced regression plots
+├── top_algorithms_classification.py    # Top performing classification algorithms
+├── top_algorithms_regression.py        # Top performing regression algorithms
+├── __init__.py                         # Package initialization
+├── algorithm_development/              # Algorithm development and testing
+│   ├── alg1.py                        # First algorithm implementation
+│   ├── alg2_multicore.py              # Multicore algorithm implementation
+│   ├── alg3_multi_additions/          # Third algorithm with additions
+│   ├── old1_algorithm_output/         # Legacy algorithm outputs
+│   ├── old2_algorithm_output/         # Second legacy algorithm outputs
+│   └── output_algorithm_multicore/    # Multicore algorithm results
+├── setup_and_info/                     # Setup and documentation files
+│   ├── setup.py                       # Package installation script
+│   ├── pyproject.toml                 # Modern Python packaging
+│   ├── requirements.txt               # Core dependencies
+│   ├── requirements-dev.txt           # Development dependencies
+│   ├── MANIFEST.in                    # Package manifest
+│   ├── test_installation.py           # Installation verification
+│   ├── DEPENDENCIES_SUMMARY.md        # Dependencies documentation
+│   └── MRMR_FIX_SUMMARY.md           # MRMR implementation notes
+├── final_results/                      # Final experimental results
+│   ├── AML/                           # AML dataset results
+│   ├── Sarcoma/                       # Sarcoma dataset results
+│   ├── Breast/                        # Breast cancer results
+│   ├── Colon/                         # Colon cancer results
+│   ├── Kidney/                        # Kidney cancer results
+│   ├── Liver/                         # Liver cancer results
+│   ├── Lung/                          # Lung cancer results
+│   ├── Melanoma/                      # Melanoma results
+│   └── Ovarian/                       # Ovarian cancer results
+├── data/                              # Dataset storage
+│   ├── aml/                           # AML dataset files
+│   ├── sarcoma/                       # Sarcoma dataset files
+│   ├── breast/                        # Breast cancer dataset files
+│   ├── colon/                         # Colon cancer dataset files
+│   ├── kidney/                        # Kidney cancer dataset files
+│   ├── liver/                         # Liver cancer dataset files
+│   ├── lung/                          # Lung cancer dataset files
+│   ├── melanoma/                      # Melanoma dataset files
+│   ├── ovarian/                       # Ovarian cancer dataset files
+│   └── clinical/                      # Clinical data files
+├── output_main_without_mrmr/          # Pipeline outputs without MRMR
+├── debug_logs/                        # Debug and logging files
+├── tests/                             # Unit tests
+├── test_data/                         # Test datasets
+│   ├── classification/                # Classification test data
+│   └── regression/                    # Regression test data
+├── .cache/                            # Cache directory
+├── .gitignore                         # Git ignore rules
+├── .gitattributes                     # Git attributes
+└── README.md                          # This file
 ```
 
 ## Contributing
