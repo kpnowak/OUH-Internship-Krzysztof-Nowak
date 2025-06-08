@@ -299,6 +299,7 @@ def merge_modalities(*arrays: np.ndarray,
         Variable-length list of 2-D arrays (or None/empty)
     strategy : str, default="weighted_concat"
         Merge strategy: 'weighted_concat' | 'average' | 'sum' | 'early_fusion_pca'
+        Note: 'weighted_concat' works best with no missing values; uses fallback with missing data
     imputer : Optional[ModalityImputer]
         Optional ModalityImputer instance for handling missing values
     is_train : bool, default=True
@@ -372,29 +373,48 @@ def merge_modalities(*arrays: np.ndarray,
     # Get final row count after truncation
     n_rows = processed_arrays[0].shape[0]
     
+    # Check for missing values across all arrays
+    has_missing_values = any(np.isnan(arr).any() for arr in processed_arrays)
+    missing_percentage = 0.0
+    if has_missing_values:
+        total_elements = sum(arr.size for arr in processed_arrays)
+        missing_elements = sum(np.isnan(arr).sum() for arr in processed_arrays)
+        missing_percentage = (missing_elements / total_elements) * 100 if total_elements > 0 else 0.0
+        logger.debug(f"Missing data detected: {missing_percentage:.2f}% of values are NaN")
+    
     # Merge based on strategy
     try:
         if strategy == "weighted_concat":
-            # Weighted concatenation - weight by inverse of feature count to balance modalities
-            if len(processed_arrays) == 1:
-                # If only one modality, just return it
-                merged = processed_arrays[0]
+            # Weighted concatenation - warn if there's missing data but still proceed with fallback
+            if has_missing_values:
+                logger.warning(f"Weighted concatenation with missing data ({missing_percentage:.2f}% missing). "
+                             f"Using fallback concatenation with NaN replacement.")
+                # Fallback to simple concatenation but log the issue
+                merged = np.column_stack(processed_arrays)
+                # Replace NaNs with 0 for the fallback
+                merged = np.nan_to_num(merged, nan=0.0, copy=False)
+                logger.debug(f"Fallback concatenation applied with NaN replacement, shape: {merged.shape}")
             else:
-                # Calculate weights based on inverse of feature counts
-                feature_counts = [arr.shape[1] for arr in processed_arrays]
-                total_features = sum(feature_counts)
-                
-                # Weight by inverse of feature count, normalized
-                weights = [total_features / (len(processed_arrays) * count) for count in feature_counts]
-                
-                # Apply weights and concatenate
-                weighted_arrays = []
-                for arr, weight in zip(processed_arrays, weights):
-                    weighted_arr = arr * weight
-                    weighted_arrays.append(weighted_arr)
-                
-                merged = np.column_stack(weighted_arrays)
-                logger.debug(f"Weighted concatenation with weights: {weights}")
+                # Weighted concatenation - weight by inverse of feature count to balance modalities
+                if len(processed_arrays) == 1:
+                    # If only one modality, just return it
+                    merged = processed_arrays[0]
+                else:
+                    # Calculate weights based on inverse of feature counts
+                    feature_counts = [arr.shape[1] for arr in processed_arrays]
+                    total_features = sum(feature_counts)
+                    
+                    # Weight by inverse of feature count, normalized
+                    weights = [total_features / (len(processed_arrays) * count) for count in feature_counts]
+                    
+                    # Apply weights and concatenate
+                    weighted_arrays = []
+                    for arr, weight in zip(processed_arrays, weights):
+                        weighted_arr = arr * weight
+                        weighted_arrays.append(weighted_arr)
+                    
+                    merged = np.column_stack(weighted_arrays)
+                    logger.debug(f"Weighted concatenation with weights: {weights}")
                 
         elif strategy == "early_fusion_pca":
             # Early Fusion with PCA - handle training vs validation differently

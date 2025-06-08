@@ -206,6 +206,21 @@ MRMR_CONFIG = {
     "fallback_on_error": True  # Fall back to mutual_info if MRMR fails
 }
 
+# Fast Feature Selection Configuration (alternatives to MRMR)
+FAST_FEATURE_SELECTION_CONFIG = {
+    "enabled": True,  # Enable fast feature selection methods
+    "default_method_regression": "variance_f_test",  # Default method for regression
+    "default_method_classification": "variance_f_test",  # Default method for classification
+    "variance_threshold": 0.01,  # Threshold for variance-based filtering
+    "rf_n_estimators": 50,  # Number of trees for Random Forest importance
+    "rf_max_depth": 10,  # Max depth for Random Forest
+    "elastic_net_alpha": 0.01,  # Regularization strength for Elastic Net
+    "elastic_net_l1_ratio": 0.5,  # L1 ratio for Elastic Net (0=Ridge, 1=Lasso)
+    "correlation_method": "pearson",  # Correlation method: 'pearson' or 'spearman'
+    "progress_logging": True,  # Log feature selection progress
+    "fallback_on_error": True  # Fall back to univariate methods if fast methods fail
+}
+
 # Configuration for missing modalities simulation
 MISSING_MODALITIES_CONFIG = {
     "enabled": True,
@@ -241,7 +256,7 @@ class DatasetConfig:
     output_dir: str = "output"
     fix_tcga_ids: bool = False
     nfeats_list: List[int] = field(default_factory=lambda: [8, 16, 32])
-    ncomps_list: List[int] = field(default_factory=lambda: [4, 8, 16])
+    ncomps_list: List[int] = field(default_factory=lambda: [8, 16, 32])
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert dataclass to dictionary."""
@@ -264,7 +279,20 @@ class DatasetConfig:
 
 # Regression datasets
 REGRESSION_DATASETS = [
-
+    DatasetConfig(
+        name="AML",
+        base_path="data/aml",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/aml.csv",
+        outcome_col="lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
+        id_col="sampleID",
+        outcome_type="continuous",
+        fix_tcga_ids=True
+    ).to_dict(),
 ]
 
 """
@@ -319,19 +347,19 @@ REGRESSION_DATASETS = [
 # Classification datasets
 CLASSIFICATION_DATASETS = [
     DatasetConfig(
-        name="Melanoma",
-        base_path="data/melanoma",
+        name="Colon",
+        base_path="data/colon",
         modalities={
             "Gene Expression": "exp.csv",
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="data/clinical/melanoma.csv",
+        outcome_file="data/clinical/colon.csv",
         outcome_col="pathologic_T",
         id_col="sampleID",
         outcome_type="class",
         fix_tcga_ids=True
-    ).to_dict()
+    ).to_dict(),
 ]
 
 """

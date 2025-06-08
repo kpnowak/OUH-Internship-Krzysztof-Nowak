@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 def _keep_top_variable_rows(df: pd.DataFrame,
                           k: int = MAX_VARIABLE_FEATURES) -> pd.DataFrame:
     """
-    Keep at most *k* rows with the highest variance across samples.
+    Keep at most *k* rows with the highest Median Absolute Deviation (MAD) across samples.
 
     The omics matrices in this project are all shaped (features × samples),
-    so we compute row-variance. Sparse frames are handled efficiently
-    with toarray() fallback if needed.
+    so we compute row-wise MAD. MAD is more robust to outliers than variance.
+    Sparse frames are handled efficiently with toarray() fallback if needed.
 
     Parameters
     ----------
@@ -30,31 +30,59 @@ def _keep_top_variable_rows(df: pd.DataFrame,
 
     Returns
     -------
-    pd.DataFrame containing ≤ k rows with highest variance
+    pd.DataFrame containing ≤ k rows with highest MAD
     """
     # Skip if the data frame is already small enough
     if df.shape[0] <= k:
         return df
     
-    # Compute row-wise variance
+    # Compute row-wise Median Absolute Deviation (MAD)
     try:
         if hasattr(df, 'sparse') and df.sparse.density < 0.3:
-            # For sparse DataFrames, compute variance accordingly
-            variances = df.sparse.to_dense().var(axis=1)
+            # For sparse DataFrames, convert to dense for MAD computation
+            data_array = df.sparse.to_dense().values
         else:
-            variances = df.var(axis=1)
+            data_array = df.values
+        
+        # Calculate MAD for each feature (row)
+        mad_values = []
+        for i in range(data_array.shape[0]):
+            row_data = data_array[i, :]
+            # Remove NaN values for MAD calculation
+            row_data_clean = row_data[~np.isnan(row_data)]
+            if len(row_data_clean) > 0:
+                # Calculate median
+                median_val = np.median(row_data_clean)
+                # Calculate absolute deviations from median
+                abs_deviations = np.abs(row_data_clean - median_val)
+                # Calculate MAD (median of absolute deviations)
+                mad_val = np.median(abs_deviations)
+            else:
+                mad_val = 0.0
+            mad_values.append(mad_val)
+        
+        # Convert to pandas Series with original index
+        mad_series = pd.Series(mad_values, index=df.index)
+        
     except Exception as e:
-        # Fallback to a simple implementation
-        logger.warning(f"Warning: Using fallback variance computation due to: {str(e)}")
-        variances = np.nanvar(df.values, axis=1)
+        # Fallback to variance if MAD computation fails
+        logger.warning(f"Warning: MAD computation failed ({str(e)}), falling back to variance")
+        try:
+            if hasattr(df, 'sparse') and df.sparse.density < 0.3:
+                mad_series = df.sparse.to_dense().var(axis=1)
+            else:
+                mad_series = df.var(axis=1)
+        except Exception as e2:
+            logger.warning(f"Warning: Using numpy fallback due to: {str(e2)}")
+            mad_series = pd.Series(np.nanvar(df.values, axis=1), index=df.index)
     
-    # Get indices of top-k variable rows
-    if len(variances) <= k:
+    # Get indices of top-k variable rows by MAD
+    if len(mad_series) <= k:
         # If we have fewer rows than k, keep them all
         return df
     else:
-        # Get indices of top-k rows by variance
-        top_indices = variances.nlargest(k).index
+        # Get indices of top-k rows by MAD (highest MAD = most variable)
+        top_indices = mad_series.nlargest(k).index
         return df.loc[top_indices]
 
 def fix_tcga_id_slicing(id_list: List[str]) -> List[str]:

@@ -761,7 +761,7 @@ def process_cv_fold(
                     if plot_prefix_override:
                         current_plot_prefix = plot_prefix_override
                     else:
-                        current_plot_prefix = f"{ds_name}_fold_{fold_idx}_{extr_name}_{ncomps}_{model_name}"
+                        current_plot_prefix = f"{ds_name}_fold_{fold_idx}_{extr_name}_{ncomps}_{model_name}_{missing_percentage}_{integration_technique}"
                     model, metrics = train_model(
                         final_X_train, final_y_train, 
                         final_X_val, final_y_val,
@@ -779,7 +779,7 @@ def process_cv_fold(
                     if plot_prefix_override:
                         current_plot_prefix = plot_prefix_override
                     else:
-                        current_plot_prefix = f"{ds_name}_fold_{fold_idx}_{extr_name}_{ncomps}_{model_name}"
+                        current_plot_prefix = f"{ds_name}_fold_{fold_idx}_{extr_name}_{ncomps}_{model_name}_{missing_percentage}_{integration_technique}"
                     model, metrics, y_val_out, y_pred_out = train_model(
                         final_X_train, final_y_train, 
                         final_X_val, final_y_val,
@@ -1937,11 +1937,11 @@ def _run_pipeline(
                     try:
                         # Determine which integration techniques to use
                         if missing_percentage == 0.0:
-                            # For 0% missing, use all 4 integration techniques
+                            # For 0% missing, use all 4 integration techniques including weighted_concat
                             integration_techniques = ["weighted_concat", "average", "sum", "early_fusion_pca"]
                         else:
-                            # For other missing percentages, only use weighted_concat
-                            integration_techniques = ["weighted_concat"]
+                            # For other missing percentages, use techniques that handle missing data (exclude weighted_concat)
+                            integration_techniques = ["average", "sum", "early_fusion_pca"]
                         
                         # Process each integration technique
                         for integration_technique in integration_techniques:

@@ -738,8 +738,38 @@ def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=N
         if effective_n_feats < n_feats:
             logger.info(f"Limiting features from {n_feats} to {effective_n_feats} due to data dimensions")
         
+        # Handle fast feature selection methods
+        if isinstance(selector, dict) and selector.get('type') == 'fast_fs':
+            try:
+                from fast_feature_selection import FastFeatureSelector
+                logger.info(f"Using fast feature selection method: {selector['method']}")
+                
+                # Create and fit the fast selector
+                fast_selector = FastFeatureSelector(
+                    method=selector['method'],
+                    n_features=effective_n_feats,
+                    random_state=42
+                )
+                fast_selector.fit(X_arr, y_arr, is_regression=selector['is_regression'])
+                
+                # Get selected features and transform data
+                selected_indices = fast_selector.get_selected_features()
+                selected_features = selected_indices
+                X_selected = X_arr[:, selected_indices]
+                
+                # Cache and return
+                result = (selected_features, X_selected)
+                _selector_cache['sel_reg'].put(key, result, item_size=X_selected.nbytes)
+                return result
+            except ImportError:
+                logger.warning("Fast feature selection module not found, using f_regression as fallback")
+                selector = SelectKBest(f_regression, k=effective_n_feats)
+            except Exception as e:
+                logger.warning(f"Fast feature selection error: {str(e)}, using f_regression as fallback")
+                selector = SelectKBest(f_regression, k=effective_n_feats)
+        
         # Handle MRMR using our custom implementation - check both dict type and original selector code
-        if ((isinstance(selector, dict) and selector_type == "mrmr_reg") or 
+        elif ((isinstance(selector, dict) and selector_type == "mrmr_reg") or 
             (original_selector_code == "mrmr_reg")):
             try:
                 # Try to import our custom MRMR implementation
@@ -893,29 +923,29 @@ def get_regression_extractors() -> Dict[str, Any]:
     }
     
     return {
-        "PCA": PCA(random_state=42),
-        "NMF": NMF(
-            init='nndsvdar',
-            random_state=42,
-            max_iter=5000,  # Increased max iterations
-            tol=1e-3,      # Relaxed tolerance
-            beta_loss='frobenius',
-            solver='mu'
-        ),
-        "ICA": FastICA(
-            random_state=42,
-            **ica_params
-        ),
-        "FA": FactorAnalysis(
-            random_state=42,
-            max_iter=5000,  # Increased max iterations
-            tol=1e-3       # Relaxed tolerance
-        ),
-        "PLS": PLSRegression(
-            n_components=8,
-            max_iter=5000,  # Increased max iterations
-            tol=1e-3       # Relaxed tolerance
-        )
+        #"PCA": PCA(random_state=42),
+        #"NMF": NMF(
+        #    init='nndsvdar',
+        #    random_state=42,
+        #    max_iter=5000,  # Increased max iterations
+        #    tol=1e-3,      # Relaxed tolerance
+        #    beta_loss='frobenius',
+        #    solver='mu'
+        #),
+        #"ICA": FastICA(
+        #    random_state=42,
+        #    **ica_params
+        #),
+        #"FA": FactorAnalysis(
+        #    random_state=42,
+        #    max_iter=5000,  # Increased max iterations
+        #    tol=1e-3       # Relaxed tolerance
+        #),
+        #"PLS": PLSRegression(
+        #    n_components=8,
+        #    max_iter=5000,  # Increased max iterations
+        #    tol=1e-3       # Relaxed tolerance
+        #)
     }
 
 def get_regression_selectors() -> Dict[str, str]:
@@ -928,9 +958,15 @@ def get_regression_selectors() -> Dict[str, str]:
         Dictionary mapping selector names to selector codes
     """
     return {
-        #"MRMR": "mrmr_reg",
+        # Fast alternatives to MRMR (recommended for speed)
+        "VarianceFTest": "variance_f_test_reg",
+        "RFImportance": "rf_importance_reg", 
+        "ElasticNetFS": "elastic_net_reg",
+        "CorrelationFS": "correlation_reg",
+        "CombinedFast": "combined_fast_reg",
+        # MRMR running takes a lot of time. It was replaced with above methods
+        # "MRMR": "mrmr_reg",
         "LASSO": "lasso",
-        "ElasticNetFS": "enet",
         "f_regressionFS": "freg",
         # Boruta running takes 20 mins per fold. It was replaced with RandomForestFS, but may be tested in the future.
         # "Boruta": "boruta_reg",
@@ -998,18 +1034,46 @@ def get_classification_selectors() -> Dict[str, str]:
         Dictionary mapping selector names to selector codes
     """
     return {
-        #"MRMR": "mrmr_clf",
+        # Fast alternatives to MRMR (recommended for speed)
+        "VarianceFTest": "variance_f_test_clf",
+        "RFImportance": "rf_importance_clf",
+        "ElasticNetFS": "elastic_net_clf", 
+        "Chi2FS": "chi2_fast",
+        "CombinedFast": "combined_fast_clf",
+        # MRMR running takes a lot of time. It was replaced with above methods
+        # "MRMR": "mrmr_clf",
         "fclassifFS": "fclassif",
         "LogisticL1": "logistic_l1",
         # Boruta running takes 20 mins per fold. It was replaced with XGBoostFS, but may be tested in the future.
         # "Boruta": "boruta_clf",
-        "Chi2FS": "chi2_selection",
         "XGBoostFS": "xgb_clf"
     }
 
 def get_selector_object(selector_code: str, n_feats: int):
     """Create appropriate selector object based on code."""
-    if selector_code == "mrmr_reg":
+    # Fast feature selection methods (new)
+    if selector_code == "variance_f_test_reg":
+        return {"type": "fast_fs", "method": "variance_f_test", "n_feats": n_feats, "is_regression": True}
+    elif selector_code == "rf_importance_reg":
+        return {"type": "fast_fs", "method": "rf_importance", "n_feats": n_feats, "is_regression": True}
+    elif selector_code == "elastic_net_reg":
+        return {"type": "fast_fs", "method": "elastic_net", "n_feats": n_feats, "is_regression": True}
+    elif selector_code == "correlation_reg":
+        return {"type": "fast_fs", "method": "correlation", "n_feats": n_feats, "is_regression": True}
+    elif selector_code == "combined_fast_reg":
+        return {"type": "fast_fs", "method": "combined_fast", "n_feats": n_feats, "is_regression": True}
+    elif selector_code == "variance_f_test_clf":
+        return {"type": "fast_fs", "method": "variance_f_test", "n_feats": n_feats, "is_regression": False}
+    elif selector_code == "rf_importance_clf":
+        return {"type": "fast_fs", "method": "rf_importance", "n_feats": n_feats, "is_regression": False}
+    elif selector_code == "elastic_net_clf":
+        return {"type": "fast_fs", "method": "elastic_net", "n_feats": n_feats, "is_regression": False}
+    elif selector_code == "chi2_fast":
+        return {"type": "fast_fs", "method": "chi2", "n_feats": n_feats, "is_regression": False}
+    elif selector_code == "combined_fast_clf":
+        return {"type": "fast_fs", "method": "combined_fast", "n_feats": n_feats, "is_regression": False}
+    # Original methods
+    elif selector_code == "mrmr_reg":
         return SelectKBest(mutual_info_regression, k=n_feats)
     elif selector_code == "lasso":
         # Create a standalone Lasso model that we will fit manually
@@ -1412,8 +1476,55 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
         if effective_n_feats < n_feats:
             logger.info(f"Limiting features from {n_feats} to {effective_n_feats} due to data dimensions")
         
+        # Handle fast feature selection methods
+        if selector_type in ['variance_f_test_clf', 'rf_importance_clf', 'elastic_net_clf', 'chi2_fast', 'combined_fast_clf']:
+            try:
+                from fast_feature_selection import FastFeatureSelector
+                
+                # Map selector type to method name
+                method_mapping = {
+                    'variance_f_test_clf': 'variance_f_test',
+                    'rf_importance_clf': 'rf_importance', 
+                    'elastic_net_clf': 'elastic_net',
+                    'chi2_fast': 'chi2',
+                    'combined_fast_clf': 'combined_fast'
+                }
+                
+                method = method_mapping[selector_type]
+                logger.info(f"Using fast feature selection method: {method} for {modality_name}")
+                
+                # Create and fit the fast selector
+                fast_selector = FastFeatureSelector(
+                    method=method,
+                    n_features=effective_n_feats,
+                    random_state=42
+                )
+                fast_selector.fit(X_safe, y_safe, is_regression=False)
+                
+                # Get selected features and transform data
+                selected_indices = fast_selector.get_selected_features()
+                
+                # Create boolean mask
+                selected_features = np.zeros(X_safe.shape[1], dtype=bool)
+                selected_features[selected_indices] = True
+                transformed_X = X_safe[:, selected_indices]
+                
+                # Cache and return
+                result = (selected_features, transformed_X)
+                _selector_cache['sel_clf'].put(key, result, item_size=transformed_X.nbytes)
+                return result
+                
+            except ImportError:
+                logger.warning("Fast feature selection module not found, using f_classif as fallback")
+                from sklearn.feature_selection import SelectKBest, f_classif
+                selector = SelectKBest(f_classif, k=effective_n_feats)
+            except Exception as e:
+                logger.warning(f"Fast feature selection error for {modality_name}: {str(e)}, using f_classif as fallback")
+                from sklearn.feature_selection import SelectKBest, f_classif
+                selector = SelectKBest(f_classif, k=effective_n_feats)
+        
         # Enhanced feature selection with robust fallbacks
-        if selector_type == 'mrmr_clf' or selector_type == 'MRMR':
+        elif selector_type == 'mrmr_clf' or selector_type == 'MRMR':
             # Handle MRMR using our own implementation with enhanced error handling
             from config import FEATURE_SELECTION_CONFIG
             

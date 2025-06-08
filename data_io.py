@@ -795,9 +795,9 @@ def load_modality(base_path: Union[str, Path],
     # Apply genomic data preprocessing
     df = preprocess_genomic_data(df, modality_name)
     
-    # Apply variance filtering BEFORE data type optimization for better memory efficiency
+    # Apply MAD filtering BEFORE data type optimization for better memory efficiency
     if df.shape[0] > k_features:
-        logger.info(f"Applying variance filtering to {modality_name}, keeping top {k_features} features")
+        logger.info(f"Applying MAD filtering to {modality_name}, keeping top {k_features} most variable features")
         df = _keep_top_variable_rows(df, k=k_features)
     
     # Optimize data types for memory efficiency AFTER filtering
