@@ -20,7 +20,17 @@ from functools import lru_cache
 
 # Local imports
 from config import DatasetConfig, MAX_VARIABLE_FEATURES, SAMPLE_RETENTION_CONFIG
-from preprocessing import _keep_top_variable_rows, fix_tcga_id_slicing, custom_parse_outcome, normalize_sample_ids
+from preprocessing import (
+    _keep_top_variable_rows, 
+    fix_tcga_id_slicing, 
+    custom_parse_outcome, 
+    normalize_sample_ids, 
+    advanced_feature_filtering,
+    biomedical_preprocessing_pipeline,
+    log_transform_data,
+    quantile_normalize_data,
+    handle_sparse_features
+)
 
 logger = logging.getLogger(__name__)
 
@@ -633,9 +643,24 @@ def preprocess_genomic_data(df: pd.DataFrame, modality_name: str) -> pd.DataFram
     if modality_name.lower() in ['gene expression', 'mirna']:
         # Check if data appears to be already log-transformed
         max_val = df.max().max()
-        if max_val > 50:  # Likely not log-transformed
+        min_val = df.min().min()
+        
+        # Only apply log transformation if data appears to be raw counts
+        if max_val > 50 and min_val >= 0:  # Likely raw counts (non-negative, large values)
             logger.info(f"Applying log2(x+1) transformation to {modality_name}")
             df = np.log2(df + 1)
+        elif min_val < 0:
+            # Data contains negative values - likely already processed/normalized
+            logger.info(f"Data contains negative values, skipping log transformation for {modality_name}")
+        elif max_val <= 50:
+            # Data appears already log-transformed or normalized
+            logger.info(f"Data appears already transformed (max={max_val:.2f}), skipping log transformation for {modality_name}")
+        else:
+            # Edge case: positive data with moderate values - apply safe log transformation
+            logger.info(f"Applying safe log transformation to {modality_name}")
+            # Ensure all values are positive before log transformation
+            df_shifted = df - df.min().min() + 1e-6  # Shift to make all values positive
+            df = np.log2(df_shifted + 1)
     
     return df
 
@@ -795,7 +820,11 @@ def load_modality(base_path: Union[str, Path],
     # Apply genomic data preprocessing
     df = preprocess_genomic_data(df, modality_name)
     
-    # Apply MAD filtering BEFORE data type optimization for better memory efficiency
+    # Apply advanced filtering BEFORE MAD filtering for better feature quality
+    logger.info(f"Applying advanced feature filtering to {modality_name}")
+    df = advanced_feature_filtering(df)
+    
+    # Apply MAD filtering AFTER advanced filtering for final feature count
     if df.shape[0] > k_features:
         logger.info(f"Applying MAD filtering to {modality_name}, keeping top {k_features} most variable features")
         df = _keep_top_variable_rows(df, k=k_features)
@@ -818,7 +847,8 @@ def load_outcome(base_path: Union[str, Path],
                 outcome_file: str, 
                 outcome_col: str, 
                 id_col: str,
-                outcome_type: str = "os") -> Tuple[Optional[pd.Series], Optional[pd.DataFrame]]:
+                outcome_type: str = "os",
+                dataset: str = None) -> Tuple[Optional[pd.Series], Optional[pd.DataFrame]]:
     """
     Load outcome data from a CSV file.
     
@@ -896,7 +926,7 @@ def load_outcome(base_path: Union[str, Path],
             
             # Parse the outcome based on its type
             logger.info(f"Parsing outcome with type: {outcome_type}")
-            parsed_outcome = custom_parse_outcome(outcome_series, outcome_type)
+            parsed_outcome = custom_parse_outcome(outcome_series, outcome_type, dataset)
             logger.info(f"Parsed outcome type: {type(parsed_outcome)}")
             
         except Exception as e:
@@ -1579,6 +1609,11 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
     # Optimize class distribution for better CV performance (classification only)
     if task_type == 'classification':
         logger.info(f"\\n=== CLASS DISTRIBUTION OPTIMIZATION ===")
+        
+        # Apply dynamic label re-mapping before optimization
+        from preprocessing import _remap_labels
+        y_series = _remap_labels(y_series, ds_name)
+        
         y_optimized, optimized_ids = optimize_class_distribution(
             y_series, common_ids, task_type, min_class_size=5
         )
@@ -1690,49 +1725,128 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
                 sample_non_numeric = [str(val)[:50] + "..." if len(str(val)) > 50 else str(val) for val in sample_non_numeric]
                 logger.info(f"Sample pipe-separated values: {sample_non_numeric}")
             
-            # Try to extract maximum numeric value from pipe-separated strings
+            # Enhanced extraction function with better error handling
             def extract_max_numeric(value):
                 if pd.isna(value):
-                    return value
+                    return np.nan
                 if isinstance(value, (int, float)):
-                    return value
+                    # Check if the numeric value is valid (not NaN or infinite)
+                    if np.isnan(value) or np.isinf(value):
+                        return np.nan
+                    return float(value)
                 if isinstance(value, str):
                     # Handle very long concatenated strings by taking only first part
                     if len(value) > 100:
                         logger.warning(f"Detected very long string value (length: {len(value)}), taking first 100 characters")
                         value = value[:100]
                     
+                    # Clean the string first
+                    value = value.strip()
+                    if not value:  # Empty string after stripping
+                        return np.nan
+                    
                     # Split by common separators and collect all numeric values
                     numeric_values = []
-                    for sep in ['|', ',', ';', ' ']:
+                    for sep in ['|', ',', ';', ' ', '\t']:
                         if sep in value:
                             parts = value.split(sep)
                             for part in parts:
+                                part = part.strip()
+                                if not part:  # Skip empty parts
+                                    continue
                                 try:
-                                    numeric_val = float(part.strip())
-                                    numeric_values.append(numeric_val)
-                                except ValueError:
+                                    numeric_val = float(part)
+                                    # Validate the numeric value
+                                    if not np.isnan(numeric_val) and not np.isinf(numeric_val):
+                                        numeric_values.append(numeric_val)
+                                except (ValueError, TypeError):
                                     continue
                             break  # Use the first separator that works
                     
                     # If we found numeric values, return the maximum
                     if numeric_values:
-                        return max(numeric_values)
+                        max_val = max(numeric_values)
+                        logger.debug(f"Extracted max value {max_val} from '{value[:30]}...'")
+                        return max_val
                     
                     # Try to convert the whole string as fallback
                     try:
-                        return float(value.strip())
-                    except ValueError:
+                        numeric_val = float(value)
+                        if not np.isnan(numeric_val) and not np.isinf(numeric_val):
+                            return numeric_val
+                        else:
+                            return np.nan
+                    except (ValueError, TypeError):
+                        logger.debug(f"Could not extract numeric value from '{value[:30]}...'")
                         return np.nan
-                return np.nan
+                
+                # For any other type, try to convert to float
+                try:
+                    numeric_val = float(value)
+                    if not np.isnan(numeric_val) and not np.isinf(numeric_val):
+                        return numeric_val
+                    else:
+                        return np.nan
+                except (ValueError, TypeError):
+                    return np.nan
             
             logger.info("Attempting to extract maximum numeric values from pipe-separated entries...")
             y_extracted = y_filtered.apply(extract_max_numeric)
+            
+            # Count successful extractions
             extracted_count = (~y_extracted.isna()).sum() - (~y_numeric.isna()).sum()
             
             if extracted_count > 0:
                 logger.info(f"Successfully extracted {extracted_count} additional numeric values")
                 y_numeric = y_extracted
+            else:
+                logger.warning("No additional numeric values could be extracted from pipe-separated entries")
+            
+            # Additional validation: ensure no NaN values remain in the extracted data
+            remaining_nan_count = y_numeric.isna().sum()
+            if remaining_nan_count > 0:
+                logger.warning(f"Still have {remaining_nan_count} NaN values after extraction")
+                
+                # For AML dataset specifically, try more aggressive extraction
+                if ds_name.lower() == 'aml':
+                    logger.info("Applying AML-specific aggressive numeric extraction...")
+                    
+                    def aml_aggressive_extract(value):
+                        if pd.isna(value):
+                            return np.nan
+                        if isinstance(value, (int, float)):
+                            return float(value) if not (np.isnan(value) or np.isinf(value)) else np.nan
+                        
+                        # Convert to string and clean
+                        str_val = str(value).strip()
+                        if not str_val or str_val.lower() in ['nan', 'null', 'none', '']:
+                            return np.nan
+                        
+                        # Extract all numbers from the string using regex
+                        import re
+                        numbers = re.findall(r'-?\d+\.?\d*', str_val)
+                        valid_numbers = []
+                        
+                        for num_str in numbers:
+                            try:
+                                num = float(num_str)
+                                if not (np.isnan(num) or np.isinf(num)):
+                                    valid_numbers.append(num)
+                            except (ValueError, TypeError):
+                                continue
+                        
+                        if valid_numbers:
+                            # For AML blast cell percentage, return the maximum value
+                            return max(valid_numbers)
+                        else:
+                            return np.nan
+                    
+                    y_aml_extracted = y_filtered.apply(aml_aggressive_extract)
+                    aml_extracted_count = (~y_aml_extracted.isna()).sum() - (~y_numeric.isna()).sum()
+                    
+                    if aml_extracted_count > 0:
+                        logger.info(f"AML aggressive extraction recovered {aml_extracted_count} additional values")
+                        y_numeric = y_aml_extracted
             
             # Remove samples with non-numeric outcomes
             valid_numeric_mask = y_numeric.notna()
@@ -1761,7 +1875,31 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
             y_filtered = y_numeric
             logger.info(f"All values were already numeric, updated y_filtered to ensure proper dtype")
         
-        # Now calculate statistics on numeric data
+        # CRITICAL: Final validation to ensure no NaN values remain
+        final_nan_count = y_filtered.isna().sum()
+        if final_nan_count > 0:
+            logger.error(f"CRITICAL: {final_nan_count} NaN values still remain in outcome data after all processing!")
+            logger.error("This will cause 'Input contains NaN' errors in model training")
+            
+            # Emergency fallback: replace remaining NaN values with median
+            if len(y_filtered.dropna()) > 0:
+                median_value = y_filtered.median()
+                logger.warning(f"Emergency fallback: replacing {final_nan_count} NaN values with median ({median_value})")
+                y_filtered = y_filtered.fillna(median_value)
+            else:
+                logger.error("Cannot compute median - all values are NaN!")
+                raise ValueError("All outcome values are NaN - cannot proceed with regression task")
+        
+        # Final validation: ensure all values are finite
+        infinite_count = np.isinf(y_filtered).sum()
+        if infinite_count > 0:
+            logger.warning(f"Found {infinite_count} infinite values in outcome data, replacing with median")
+            median_value = y_filtered[np.isfinite(y_filtered)].median()
+            y_filtered = y_filtered.replace([np.inf, -np.inf], median_value)
+        
+        logger.info(f"Final outcome data validation: {len(y_filtered)} samples, all numeric and finite")
+        
+        # Now calculate statistics on the clean numeric data
         if len(y_filtered) > 0:
             try:
                 y_stats = y_filtered.describe()
@@ -1818,3 +1956,90 @@ def save_results(results_df: pd.DataFrame, output_dir: Union[str, Path], filenam
         header=not file_exists,
         index=False
     ) 
+
+def load_and_preprocess_data(dataset_name: str, task_type: str, 
+                           apply_advanced_filtering: bool = True,
+                           apply_biomedical_preprocessing: bool = True) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+    """
+    Load and preprocess multi-modal data with biomedical-specific preprocessing.
+    
+    Args:
+        dataset_name: Name of the dataset
+        task_type: 'classification' or 'regression'
+        apply_advanced_filtering: Whether to apply advanced feature filtering
+        apply_biomedical_preprocessing: Whether to apply biomedical preprocessing
+    
+    Returns:
+        Tuple of (data_dict, target_array)
+    """
+    logger.info(f"Loading dataset: {dataset_name} for {task_type}")
+    
+    # Load raw data
+    data_dict, target = load_multimodal_data(dataset_name, task_type)
+    
+    if data_dict is None or target is None:
+        logger.error(f"Failed to load data for {dataset_name}")
+        return None, None
+    
+    # Log initial data characteristics
+    for modality, data in data_dict.items():
+        logger.info(f"{modality} data shape: {data.shape}")
+        sparsity = np.mean(data == 0) if hasattr(data, 'shape') else 0
+        logger.info(f"{modality} sparsity: {sparsity:.2%}")
+    
+    # Apply biomedical preprocessing if enabled
+    if apply_biomedical_preprocessing:
+        logger.info("Applying biomedical preprocessing pipeline")
+        
+        processed_data_dict = {}
+        for modality, data in data_dict.items():
+            logger.info(f"Processing {modality} data")
+            
+            # Convert to numpy array if needed
+            if hasattr(data, 'values'):
+                data = data.values
+            
+            # Apply biomedical preprocessing
+            processed_data, transformers = biomedical_preprocessing_pipeline(data)
+            processed_data_dict[modality] = processed_data
+            
+            logger.info(f"{modality} processed shape: {processed_data.shape}")
+        
+        data_dict = processed_data_dict
+    
+    # Apply advanced filtering if enabled
+    if apply_advanced_filtering:
+        logger.info("Applying advanced feature filtering")
+        
+        filtered_data_dict = {}
+        for modality, data in data_dict.items():
+            logger.info(f"Filtering {modality} data")
+            
+            # Convert to DataFrame for filtering
+            if isinstance(data, np.ndarray):
+                df = pd.DataFrame(data)
+            else:
+                df = data
+            
+            # Apply advanced filtering
+            filtered_df = advanced_feature_filtering(df)
+            filtered_data_dict[modality] = filtered_df.values if hasattr(filtered_df, 'values') else filtered_df
+            
+            logger.info(f"{modality} filtered shape: {filtered_data_dict[modality].shape}")
+        
+        data_dict = filtered_data_dict
+    
+    # Final data validation
+    for modality, data in data_dict.items():
+        if data.shape[1] == 0:
+            logger.warning(f"{modality} has no features after preprocessing")
+            continue
+        
+        # Check for infinite or NaN values
+        if np.any(np.isnan(data)) or np.any(np.isinf(data)):
+            logger.warning(f"{modality} contains NaN or infinite values, cleaning...")
+            data = np.nan_to_num(data, nan=0.0, posinf=1e6, neginf=-1e6)
+            data_dict[modality] = data
+    
+    logger.info(f"Data preprocessing complete for {dataset_name}")
+    return data_dict, target

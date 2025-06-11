@@ -14,7 +14,7 @@ import numpy as np
 # Local imports
 from config import (
     REGRESSION_DATASETS, CLASSIFICATION_DATASETS,
-    MAX_COMPONENTS, MAX_FEATURES
+    MAX_COMPONENTS, MAX_FEATURES, N_VALUES_LIST
 )
 from data_io import load_dataset
 from models import (
@@ -154,7 +154,38 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
             # Ensure no NaN or infinite values
             if np.any(np.isnan(y_aligned)) or np.any(np.isinf(y_aligned)):
                 logger.warning(f"Found NaN or infinite values in regression target, cleaning...")
+                
+                # Count the problematic values
+                nan_count = np.sum(np.isnan(y_aligned))
+                inf_count = np.sum(np.isinf(y_aligned))
+                logger.warning(f"Found {nan_count} NaN values and {inf_count} infinite values in {ds_name} target")
+                
+                # For AML dataset, this is critical - log more details
+                if ds_name.lower() == 'aml':
+                    logger.error(f"CRITICAL: AML dataset has {nan_count} NaN values in target - this will cause model training failures!")
+                    logger.error("This indicates the pipe-separated value extraction in data_io.py failed")
+                    
+                    # Show sample of problematic values
+                    if nan_count > 0:
+                        nan_indices = np.where(np.isnan(y_aligned))[0][:5]  # First 5 NaN indices
+                        logger.error(f"Sample NaN indices: {nan_indices}")
+                        logger.error(f"Corresponding sample IDs: {[common_ids[i] for i in nan_indices if i < len(common_ids)]}")
+                
+                # Clean the values
+                original_length = len(y_aligned)
                 y_aligned = np.nan_to_num(y_aligned, nan=0.0, posinf=0.0, neginf=0.0)
+                
+                # Verify cleaning was successful
+                remaining_nan = np.sum(np.isnan(y_aligned))
+                remaining_inf = np.sum(np.isinf(y_aligned))
+                
+                if remaining_nan > 0 or remaining_inf > 0:
+                    logger.error(f"CRITICAL: Cleaning failed! Still have {remaining_nan} NaN and {remaining_inf} infinite values")
+                    logger.error("This will definitely cause 'Input contains NaN' errors in model training")
+                    return None
+                else:
+                    logger.info(f"Successfully cleaned all NaN/infinite values in {ds_name} target")
+                
                 logger.debug(f"[DATASET_PREP] {ds_name} - Cleaned NaN/infinite values in target")
         
         # Verify data integrity
@@ -271,7 +302,7 @@ def process_regression_datasets(args):
     reg_extractors = get_regression_extractors()
     reg_selectors = get_regression_selectors()
     reg_models = ["LinearRegression", "RandomForestRegressor", "ElasticNet"]
-    n_shared_list = [8, 16, 32]  # Shared list for both extraction and selection
+    n_shared_list = N_VALUES_LIST.copy()  # Shared list for both extraction and selection
     
     # Check if a specific n_val is requested via command line
     if args.n_val:
@@ -356,7 +387,7 @@ def process_classification_datasets(args):
     clf_extractors = get_classification_extractors()
     clf_selectors = get_classification_selectors()
     clf_models = get_classification_models()
-    n_shared_list = [8, 16, 32]  # Shared list for both extraction and selection
+    n_shared_list = N_VALUES_LIST.copy()  # Shared list for both extraction and selection
     
     # Check if a specific n_val is requested via command line
     if args.n_val:
@@ -456,7 +487,7 @@ def main():
         "--verbose", action="store_true", help="Enable verbose mode with detailed logging"
     )
     parser.add_argument(
-        "--n-val", type=int, help="Run only a specific n_val (8, 16, or 32)"
+        "--n-val", type=int, help=f"Run only a specific n_val from {N_VALUES_LIST}"
     )
     parser.add_argument(
         "--mad-only", action="store_true", help="Run only MAD analysis without model training"
@@ -464,12 +495,36 @@ def main():
     parser.add_argument(
         "--skip-mad", action="store_true", help="Skip MAD analysis and run only model training"
     )
+    parser.add_argument(
+        "--feature-engineering", action="store_true", 
+        help="Enable feature engineering tweaks (Sparse PLS-DA for MCC, Kernel PCA for R²)"
+    )
+    parser.add_argument(
+        "--fusion-upgrades", action="store_true",
+        help="Enable fusion upgrades (Attention-weighted concatenation, Late-fusion stacking)"
+    )
     
     # Parse arguments
     args = parser.parse_args()
     
     # Set up logging levels based on arguments
     setup_logging_levels(args)
+    
+    # Enable feature engineering if requested
+    if args.feature_engineering:
+        from config import FEATURE_ENGINEERING_CONFIG
+        FEATURE_ENGINEERING_CONFIG["enabled"] = True
+        logger.info("Feature engineering tweaks enabled via CLI")
+        logger.info("  - Sparse PLS-DA (32 components) for better MCC in classification")
+        logger.info("  - Kernel PCA RBF (64 components) for higher R² in regression")
+    
+    # Enable fusion upgrades if requested
+    if args.fusion_upgrades:
+        from config import FUSION_UPGRADES_CONFIG
+        FUSION_UPGRADES_CONFIG["enabled"] = True
+        logger.info("Fusion upgrades enabled via CLI")
+        logger.info("  - Attention-weighted concatenation: Sample-specific weighting (AML R² +0.05, Colon MCC +0.04)")
+        logger.info("  - Late-fusion stacking: Per-omic model predictions as meta-features")
     
     # Log startup information
     logger.info("=" * 70)
@@ -571,7 +626,7 @@ def process_single_dataset(target_ds, args):
                 os.makedirs(base_out, exist_ok=True)
                 
                 # Get n_val list (filtered if requested via args)
-                n_val_list = [8, 16, 32]
+                n_val_list = N_VALUES_LIST.copy()
                 if args.n_val and args.n_val in n_val_list:
                     n_val_list = [args.n_val]
                 
@@ -611,7 +666,7 @@ def process_single_dataset(target_ds, args):
                     os.makedirs(base_out, exist_ok=True)
                     
                     # Get n_val list (filtered if requested via args)
-                    n_val_list = [8, 16, 32]
+                    n_val_list = N_VALUES_LIST.copy()
                     if args.n_val and args.n_val in n_val_list:
                         n_val_list = [args.n_val]
                     

@@ -8,9 +8,13 @@ import pandas as pd
 import random
 from typing import Dict, List, Optional, Union, Any, Tuple
 import logging
+from sklearn.preprocessing import StandardScaler, RobustScaler, QuantileTransformer
+from sklearn.feature_selection import VarianceThreshold
+from sklearn.impute import SimpleImputer
+from scipy import stats
 
 # Local imports
-from config import MAX_VARIABLE_FEATURES
+from config import MAX_VARIABLE_FEATURES, PREPROCESSING_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +30,7 @@ def _keep_top_variable_rows(df: pd.DataFrame,
     Parameters
     ----------
     df : pd.DataFrame (features × samples)
-    k  : int – number of rows to keep (default = 5 000)
+    k  : int – number of rows to keep (default = 10,000, increased from 5,000)
 
     Returns
     -------
@@ -36,7 +40,7 @@ def _keep_top_variable_rows(df: pd.DataFrame,
     if df.shape[0] <= k:
         return df
     
-    # Compute row-wise Median Absolute Deviation (MAD)
+    # Compute row-wise Median Absolute Deviation (MAD) with improved handling
     try:
         if hasattr(df, 'sparse') and df.sparse.density < 0.3:
             # For sparse DataFrames, convert to dense for MAD computation
@@ -44,19 +48,25 @@ def _keep_top_variable_rows(df: pd.DataFrame,
         else:
             data_array = df.values
         
-        # Calculate MAD for each feature (row)
+        # Calculate MAD for each feature (row) with better NaN handling
         mad_values = []
         for i in range(data_array.shape[0]):
             row_data = data_array[i, :]
             # Remove NaN values for MAD calculation
             row_data_clean = row_data[~np.isnan(row_data)]
-            if len(row_data_clean) > 0:
+            if len(row_data_clean) >= 3:  # Require at least 3 valid values
                 # Calculate median
                 median_val = np.median(row_data_clean)
                 # Calculate absolute deviations from median
                 abs_deviations = np.abs(row_data_clean - median_val)
                 # Calculate MAD (median of absolute deviations)
                 mad_val = np.median(abs_deviations)
+                # Add small bonus for features with more valid values
+                completeness_bonus = len(row_data_clean) / len(row_data) * 0.1
+                mad_val += completeness_bonus
+            elif len(row_data_clean) > 0:
+                # For features with few valid values, use standard deviation as fallback
+                mad_val = np.std(row_data_clean) * 0.5  # Reduced weight for incomplete features
             else:
                 mad_val = 0.0
             mad_values.append(mad_val)
@@ -69,9 +79,9 @@ def _keep_top_variable_rows(df: pd.DataFrame,
         logger.warning(f"Warning: MAD computation failed ({str(e)}), falling back to variance")
         try:
             if hasattr(df, 'sparse') and df.sparse.density < 0.3:
-                mad_series = df.sparse.to_dense().var(axis=1)
+                mad_series = df.sparse.to_dense().var(axis=1, skipna=True)
             else:
-                mad_series = df.var(axis=1)
+                mad_series = df.var(axis=1, skipna=True)
         except Exception as e2:
             logger.warning(f"Warning: Using numpy fallback due to: {str(e2)}")
             mad_series = pd.Series(np.nanvar(df.values, axis=1), index=df.index)
@@ -82,7 +92,13 @@ def _keep_top_variable_rows(df: pd.DataFrame,
         return df
     else:
         # Get indices of top-k rows by MAD (highest MAD = most variable)
-        top_indices = mad_series.nlargest(k).index
+        # Filter out features with zero variance first
+        non_zero_mad = mad_series[mad_series > 0]
+        if len(non_zero_mad) >= k:
+            top_indices = non_zero_mad.nlargest(k).index
+        else:
+            # If we don't have enough non-zero variance features, include some zero-variance ones
+            top_indices = mad_series.nlargest(k).index
         return df.loc[top_indices]
 
 def fix_tcga_id_slicing(id_list: List[str]) -> List[str]:
@@ -119,7 +135,55 @@ def fix_tcga_id_slicing(id_list: List[str]) -> List[str]:
             
     return fixed_ids
 
-def custom_parse_outcome(series: pd.Series, outcome_type: str) -> pd.Series:
+def _remap_labels(y: pd.Series, dataset: str) -> pd.Series:
+    """
+    Dynamic label re-mapping helper for classification datasets.
+    
+    1. Merges ultra-rare classes (<3 samples) into the first rare label
+    2. Applies dataset-specific binary conversions
+    3. Ensures output is always numeric for downstream compatibility
+    
+    Parameters
+    ----------
+    y : pd.Series
+        Target labels
+    dataset : str
+        Dataset name for specific conversions
+        
+    Returns
+    -------
+    pd.Series
+        Re-mapped labels (always numeric)
+    """
+    # Step 1: Merge ultra-rare classes (<3 samples)
+    vc = y.value_counts()
+    rare = vc[vc < 3].index
+    if len(rare) > 0:
+        logger.info(f"Dataset {dataset}: Merging {len(rare)} ultra-rare classes with <3 samples: {list(rare)}")
+        # Merge all rare classes into the first rare label
+        y = y.replace(dict.fromkeys(rare, rare[0]))
+        logger.info(f"Dataset {dataset}: After merging, class distribution: {y.value_counts().to_dict()}")
+    
+    # Step 2: Dataset-specific binary conversions
+    if dataset == 'Colon':
+        # Convert T-stage to early/late binary classification
+        original_unique = y.unique()
+        logger.info(f"Dataset {dataset}: Original classes: {list(original_unique)}")
+        y = y.map(lambda s: 'early' if str(s) in {'T1', 'T2'} else 'late')
+        logger.info(f"Dataset {dataset}: After binary conversion: {y.value_counts().to_dict()}")
+    
+    # Step 3: Ensure output is always numeric
+    if y.dtype == 'object' or not pd.api.types.is_numeric_dtype(y):
+        # Convert string labels to numeric
+        unique_labels = y.unique()
+        label_mapping = {label: idx for idx, label in enumerate(sorted(unique_labels))}
+        y = y.map(label_mapping)
+        logger.info(f"Dataset {dataset}: Converted to numeric labels: {label_mapping}")
+        logger.info(f"Dataset {dataset}: Final numeric distribution: {y.value_counts().to_dict()}")
+    
+    return y
+
+def custom_parse_outcome(series: pd.Series, outcome_type: str, dataset: str = None) -> pd.Series:
     """
     Parse outcome data based on the specified type.
     
@@ -129,6 +193,8 @@ def custom_parse_outcome(series: pd.Series, outcome_type: str) -> pd.Series:
         Series containing outcome data
     outcome_type : str
         Type of outcome data ('os', 'pfs', 'response', etc.)
+    dataset : str, optional
+        Dataset name for specific label re-mapping
         
     Returns
     -------
@@ -152,14 +218,22 @@ def custom_parse_outcome(series: pd.Series, outcome_type: str) -> pd.Series:
         if all(isinstance(x, (int, float, np.number)) or 
                (isinstance(x, str) and x.isdigit()) for x in series if pd.notna(x)):
             # If all values are numeric or numeric strings, convert to integers
-            return pd.to_numeric(series, errors='coerce').astype('Int64')
+            parsed_series = pd.to_numeric(series, errors='coerce').astype('Int64')
         else:
             # For text categories like "Responder"/"Non-responder", encode as categorical
             try:
-                return pd.Categorical(series).codes
+                parsed_series = pd.Categorical(series).codes
+                parsed_series = pd.Series(parsed_series, index=series.index)
             except:
                 # If categorical encoding fails, try to convert to string first
-                return pd.Categorical(series.astype(str)).codes
+                parsed_series = pd.Categorical(series.astype(str)).codes
+                parsed_series = pd.Series(parsed_series, index=series.index)
+        
+        # Apply dynamic label re-mapping for classification datasets
+        if dataset is not None:
+            parsed_series = _remap_labels(parsed_series, dataset)
+        
+        return parsed_series
     else:
         # Default handling for unknown types - try numeric conversion with fallback
         try:
@@ -476,4 +550,348 @@ def filter_rare_categories(series: pd.Series, min_count: int = 3) -> pd.Series:
     filtered = series.copy()
     filtered[filtered.isin(rare_categories)] = np.nan
     
-    return filtered 
+    return filtered
+
+def advanced_feature_filtering(df: pd.DataFrame, 
+                             config: Dict = None) -> pd.DataFrame:
+    """
+    Apply advanced feature filtering for high-dimensional, small-sample data.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe (features × samples)
+    config : Dict
+        Configuration dictionary with filtering parameters
+        
+    Returns
+    -------
+    pd.DataFrame
+        Filtered dataframe
+    """
+    if config is None:
+        config = PREPROCESSING_CONFIG
+    
+    logger.info(f"Starting advanced filtering with {df.shape[0]} features")
+    
+    # 1. Remove features with too many missing values
+    missing_threshold = config.get("missing_threshold", 0.3)
+    missing_ratio = df.isnull().sum(axis=1) / df.shape[1]
+    features_to_keep = missing_ratio <= missing_threshold
+    df = df[features_to_keep]
+    logger.info(f"After missing value filter: {df.shape[0]} features")
+    
+    # 2. Remove low-variance features more aggressively
+    variance_threshold = config.get("variance_threshold", 0.01)
+    feature_variances = df.var(axis=1, skipna=True)
+    high_variance_features = feature_variances > variance_threshold
+    df = df[high_variance_features]
+    logger.info(f"After variance filter: {df.shape[0]} features")
+    
+    # 3. Remove highly correlated features
+    correlation_threshold = config.get("correlation_threshold", 0.95)
+    if df.shape[0] > 1:  # Only if we have more than 1 feature
+        try:
+            # Calculate correlation matrix
+            corr_matrix = df.T.corr().abs()  # Transpose to get feature correlations
+            
+            # Find pairs of highly correlated features
+            upper_triangle = corr_matrix.where(
+                np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+            )
+            
+            # Find features to drop (keep the one with higher variance)
+            to_drop = []
+            for column in upper_triangle.columns:
+                high_corr_features = upper_triangle.index[
+                    upper_triangle[column] > correlation_threshold
+                ].tolist()
+                
+                if high_corr_features:
+                    # Among correlated features, keep the one with highest variance
+                    all_corr_features = high_corr_features + [column]
+                    variances = feature_variances[all_corr_features]
+                    features_to_drop = variances.index[variances != variances.max()].tolist()
+                    to_drop.extend(features_to_drop)
+            
+            # Remove duplicates and drop features
+            to_drop = list(set(to_drop))
+            df = df.drop(index=to_drop, errors='ignore')
+            logger.info(f"After correlation filter: {df.shape[0]} features")
+            
+        except Exception as e:
+            logger.warning(f"Correlation filtering failed: {str(e)}")
+    
+    # 4. Remove outlier features (features with extreme values)
+    outlier_threshold = config.get("outlier_std_threshold", 3.0)
+    try:
+        # Calculate z-scores for each feature
+        feature_means = df.mean(axis=1, skipna=True)
+        feature_stds = df.std(axis=1, skipna=True)
+        
+        # Remove features where any sample has z-score > threshold
+        outlier_features = []
+        for idx in df.index:
+            feature_data = df.loc[idx].dropna()
+            if len(feature_data) > 0 and feature_stds[idx] > 0:
+                z_scores = np.abs((feature_data - feature_means[idx]) / feature_stds[idx])
+                if z_scores.max() > outlier_threshold:
+                    outlier_features.append(idx)
+        
+        df = df.drop(index=outlier_features, errors='ignore')
+        logger.info(f"After outlier filter: {df.shape[0]} features")
+        
+    except Exception as e:
+        logger.warning(f"Outlier filtering failed: {str(e)}")
+    
+    logger.info(f"Advanced filtering complete: {df.shape[0]} features remaining")
+    return df 
+
+def log_transform_data(X, offset=1e-6):
+    """
+    Apply log transformation to handle skewed gene expression data.
+    
+    Args:
+        X: Input data
+        offset: Small value to add before log to handle zeros
+    
+    Returns:
+        Log-transformed data
+    """
+    try:
+        # Check for negative values
+        min_val = np.min(X)
+        max_val = np.max(X)
+        
+        if min_val < 0:
+            # Data contains negative values - likely already processed/normalized
+            logging.info(f"Data contains negative values (min={min_val:.3f}), skipping log transformation")
+            return X
+        elif max_val <= 50:
+            # Data appears already log-transformed or normalized
+            logging.info(f"Data appears already transformed (max={max_val:.2f}), skipping log transformation")
+            return X
+        else:
+            # Apply log transformation to raw counts
+            X_log = np.log1p(X + offset)
+            logging.info(f"Applied log transformation with offset {offset}")
+            return X_log
+    except Exception as e:
+        logging.warning(f"Log transformation failed: {e}")
+        return X
+
+def quantile_normalize_data(X, n_quantiles=1000):
+    """
+    Apply quantile normalization for robust scaling of biomedical data.
+    
+    Args:
+        X: Input data
+        n_quantiles: Number of quantiles for transformation
+    
+    Returns:
+        Quantile-normalized data
+    """
+    try:
+        # Use fewer quantiles for small datasets
+        n_samples = X.shape[0]
+        n_quantiles = min(n_quantiles, n_samples)
+        
+        transformer = QuantileTransformer(
+            n_quantiles=n_quantiles,
+            output_distribution='normal',
+            random_state=42
+        )
+        X_quantile = transformer.fit_transform(X)
+        logging.info(f"Applied quantile normalization with {n_quantiles} quantiles")
+        return X_quantile, transformer
+    except Exception as e:
+        logging.warning(f"Quantile normalization failed: {e}")
+        return X, None
+
+def handle_sparse_features(X, variance_threshold=0.001):
+    """
+    Handle sparse features common in biomedical data.
+    
+    Args:
+        X: Input data
+        variance_threshold: Minimum variance threshold
+    
+    Returns:
+        Data with low-variance features removed
+    """
+    try:
+        # Calculate sparsity
+        sparsity = np.mean(X == 0)
+        logging.info(f"Data sparsity: {sparsity:.2%}")
+        
+        # Remove low-variance features
+        selector = VarianceThreshold(threshold=variance_threshold)
+        X_filtered = selector.fit_transform(X)
+        
+        n_removed = X.shape[1] - X_filtered.shape[1]
+        logging.info(f"Removed {n_removed} low-variance features (threshold: {variance_threshold})")
+        
+        return X_filtered, selector
+    except Exception as e:
+        logging.warning(f"Sparse feature handling failed: {e}")
+        return X, None
+
+def robust_outlier_detection(X, threshold=4.0):
+    """
+    Robust outlier detection for biomedical data.
+    
+    Args:
+        X: Input data
+        threshold: Z-score threshold for outlier detection
+    
+    Returns:
+        Data with outliers handled
+    """
+    try:
+        # Use robust statistics (median, MAD)
+        median = np.median(X, axis=0)
+        mad = np.median(np.abs(X - median), axis=0)
+        
+        # Avoid division by zero
+        mad = np.where(mad == 0, 1, mad)
+        
+        # Calculate modified z-scores
+        modified_z_scores = 0.6745 * (X - median) / mad
+        
+        # Identify outliers
+        outliers = np.abs(modified_z_scores) > threshold
+        
+        # Cap outliers at threshold
+        X_capped = X.copy()
+        X_capped[outliers] = np.sign(X[outliers]) * threshold * mad + median
+        
+        n_outliers = np.sum(outliers)
+        logging.info(f"Capped {n_outliers} outliers (threshold: {threshold})")
+        
+        return X_capped
+    except Exception as e:
+        logging.warning(f"Outlier detection failed: {e}")
+        return X
+
+def impute_missing_values(X, strategy='median'):
+    """
+    Impute missing values with robust strategy.
+    
+    Args:
+        X: Input data
+        strategy: Imputation strategy
+    
+    Returns:
+        Data with missing values imputed
+    """
+    try:
+        imputer = SimpleImputer(strategy=strategy)
+        X_imputed = imputer.fit_transform(X)
+        
+        n_missing = np.sum(np.isnan(X))
+        logging.info(f"Imputed {n_missing} missing values using {strategy} strategy")
+        
+        return X_imputed, imputer
+    except Exception as e:
+        logging.warning(f"Missing value imputation failed: {e}")
+        return X, None
+
+def biomedical_preprocessing_pipeline(X, y=None, config=None):
+    """
+    Comprehensive preprocessing pipeline for biomedical data.
+    
+    Args:
+        X: Feature matrix
+        y: Target vector (optional)
+        config: Preprocessing configuration
+    
+    Returns:
+        Preprocessed data and transformers
+    """
+    if config is None:
+        config = PREPROCESSING_CONFIG
+    
+    transformers = {}
+    
+    logging.info("Starting biomedical preprocessing pipeline")
+    logging.info(f"Initial data shape: {X.shape}")
+    
+    # Step 1: Handle missing values
+    if config.get('impute_missing', True):
+        X, imputer = impute_missing_values(X)
+        transformers['imputer'] = imputer
+    
+    # Step 2: Log transformation for gene expression data
+    if config.get('log_transform', True):
+        X = log_transform_data(X)
+    
+    # Step 3: Handle sparse features
+    if config.get('remove_low_variance', True):
+        X, variance_selector = handle_sparse_features(
+            X, config.get('variance_threshold', 0.001)
+        )
+        transformers['variance_selector'] = variance_selector
+    
+    # Step 4: Outlier handling
+    if config.get('handle_outliers', True):
+        X = robust_outlier_detection(X, config.get('outlier_threshold', 4.0))
+    
+    # Step 5: Quantile normalization
+    if config.get('quantile_transform', True):
+        X, quantile_transformer = quantile_normalize_data(X)
+        transformers['quantile_transformer'] = quantile_transformer
+    
+    # Step 6: Remove highly correlated features
+    if config.get('remove_highly_correlated', True):
+        X, correlation_selector = remove_highly_correlated_features(
+            X, config.get('correlation_threshold', 0.98)
+        )
+        transformers['correlation_selector'] = correlation_selector
+    
+    logging.info(f"Final preprocessed data shape: {X.shape}")
+    
+    return X, transformers
+
+def remove_highly_correlated_features(X, threshold=0.98):
+    """
+    Remove highly correlated features.
+    
+    Args:
+        X: Input data
+        threshold: Correlation threshold
+    
+    Returns:
+        Data with highly correlated features removed
+    """
+    try:
+        # Calculate correlation matrix
+        corr_matrix = np.corrcoef(X.T)
+        
+        # Find highly correlated pairs
+        high_corr_pairs = np.where(
+            (np.abs(corr_matrix) > threshold) & 
+            (np.abs(corr_matrix) < 1.0)
+        )
+        
+        # Select features to remove
+        features_to_remove = set()
+        for i, j in zip(high_corr_pairs[0], high_corr_pairs[1]):
+            if i < j:  # Avoid duplicates
+                # Remove the feature with lower variance
+                var_i = np.var(X[:, i])
+                var_j = np.var(X[:, j])
+                if var_i < var_j:
+                    features_to_remove.add(i)
+                else:
+                    features_to_remove.add(j)
+        
+        # Create selector
+        features_to_keep = [i for i in range(X.shape[1]) if i not in features_to_remove]
+        X_filtered = X[:, features_to_keep]
+        
+        logging.info(f"Removed {len(features_to_remove)} highly correlated features")
+        
+        return X_filtered, features_to_keep
+    except Exception as e:
+        logging.warning(f"Correlation filtering failed: {e}")
+        return X, None 

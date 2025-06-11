@@ -142,6 +142,9 @@ if __name__ == "__main__":
     # Set environment variable to enable resource logging
     os.environ["DEBUG_RESOURCES"] = "1"
     
+    # Set Octave executable path for oct2py
+    os.environ["OCTAVE_EXECUTABLE"] = r"C:\Users\krzys\AppData\Local\Programs\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+    
     try:
         # Run the main pipeline with memory monitoring
         with memory_monitor("main_pipeline"):

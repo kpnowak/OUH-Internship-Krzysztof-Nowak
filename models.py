@@ -12,25 +12,27 @@ from sklearn.linear_model import (
     LinearRegression, Lasso, ElasticNet, LogisticRegression
 )
 from sklearn.ensemble import (
-    RandomForestRegressor, RandomForestClassifier
+    RandomForestRegressor, RandomForestClassifier,
+    GradientBoostingRegressor, GradientBoostingClassifier
 )
 from sklearn.svm import SVR, SVC
 from sklearn.decomposition import (
     PCA, NMF, FastICA, FactorAnalysis, KernelPCA
 )
-from sklearn.cross_decomposition import PLSRegression
+from sklearn.cross_decomposition import PLSRegression, PLSCanonical
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.feature_selection import (
     mutual_info_regression, mutual_info_classif,
     f_regression, f_classif, chi2, SelectKBest,
-    SelectFromModel
+    SelectFromModel, RFE
 )
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, accuracy_score
+from sklearn.metrics import mean_squared_error, accuracy_score, r2_score, mean_absolute_error, roc_auc_score, matthews_corrcoef, f1_score
 import hashlib
 import time
 import copy
+import warnings
 
 # Local imports
 from config import MODEL_OPTIMIZATIONS
@@ -44,7 +46,673 @@ try:
 except ImportError:
     XGBOOST_AVAILABLE = False
 
+# Try to import LightGBM, fall back gracefully if not available
+try:
+    import lightgbm as lgb
+    LIGHTGBM_AVAILABLE = True
+except ImportError:
+    LIGHTGBM_AVAILABLE = False
+
+# Try to import imbalanced-learn for balanced models
+try:
+    from imblearn.ensemble import BalancedRandomForestClassifier
+    from imblearn.pipeline import Pipeline as ImbPipeline
+    from imblearn.over_sampling import SMOTE
+    from imblearn.under_sampling import RandomUnderSampler
+    IMBALANCED_LEARN_AVAILABLE = True
+except ImportError:
+    IMBALANCED_LEARN_AVAILABLE = False
+
+# Try to import scikit-optimize for hyperparameter tuning
+try:
+    from skopt import gp_minimize
+    from skopt.space import Real, Integer, Categorical
+    from skopt.utils import use_named_args
+    SKOPT_AVAILABLE = True
+except ImportError:
+    SKOPT_AVAILABLE = False
+
+# Try to import Sparse PLS from sklearn-extensions or implement fallback
+try:
+    from sklearn.cross_decomposition import CCA
+    SPARSE_PLS_AVAILABLE = True
+except ImportError:
+    SPARSE_PLS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+# Target transformation registry for regression datasets
+TARGET_TRANSFORMS = {
+    'AML': ('log1p', np.log1p, np.expm1),
+    'Sarcoma': ('sqrt', np.sqrt, lambda x: x**2),
+}
+
+class PLSDiscriminantAnalysis:
+    """
+    Partial Least Squares Discriminant Analysis (PLS-DA) implementation.
+    
+    PLS-DA is a supervised dimensionality reduction technique that uses class labels
+    to find components that maximize the covariance between features and class labels.
+    Often outperforms unsupervised methods like PCA when class information is available.
+    """
+    
+    def __init__(self, n_components=2, max_iter=500, tol=1e-6, copy=True, scale=True):
+        """
+        Initialize PLS-DA.
+        
+        Parameters
+        ----------
+        n_components : int, default=2
+            Number of components to extract
+        max_iter : int, default=500
+            Maximum number of iterations
+        tol : float, default=1e-6
+            Tolerance for convergence
+        copy : bool, default=True
+            Whether to copy X and Y or perform in-place operations
+        scale : bool, default=True
+            Whether to scale data to unit variance
+        """
+        self.n_components = n_components
+        self.max_iter = max_iter
+        self.tol = tol
+        self.copy = copy
+        self.scale = scale
+        self.pls_ = None
+        self.classes_ = None
+        self.n_classes_ = None
+        
+    def fit(self, X, y):
+        """
+        Fit PLS-DA model.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        y : array-like, shape (n_samples,)
+            Target values (class labels)
+            
+        Returns
+        -------
+        self
+        """
+        from sklearn.preprocessing import LabelEncoder, LabelBinarizer
+        
+        # Handle class labels
+        self.label_encoder_ = LabelEncoder()
+        y_encoded = self.label_encoder_.fit_transform(y)
+        self.classes_ = self.label_encoder_.classes_
+        self.n_classes_ = len(self.classes_)
+        
+        # Convert to binary matrix for multiclass
+        if self.n_classes_ > 2:
+            self.label_binarizer_ = LabelBinarizer()
+            Y_binary = self.label_binarizer_.fit_transform(y)
+        else:
+            # For binary classification, use simple 0/1 encoding
+            Y_binary = y_encoded.reshape(-1, 1)
+            
+        # Fit PLS regression on binary targets
+        self.pls_ = PLSRegression(
+            n_components=min(self.n_components, Y_binary.shape[1], X.shape[1]),
+            max_iter=self.max_iter,
+            tol=self.tol,
+            copy=self.copy,
+            scale=self.scale
+        )
+        
+        self.pls_.fit(X, Y_binary)
+        return self
+        
+    def transform(self, X):
+        """
+        Transform data to PLS-DA space.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Data to transform
+            
+        Returns
+        -------
+        X_transformed : array-like, shape (n_samples, n_components)
+            Transformed data
+        """
+        if self.pls_ is None:
+            raise ValueError("Model must be fitted before transform")
+        return self.pls_.transform(X)
+        
+    def fit_transform(self, X, y):
+        """
+        Fit model and transform data.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        y : array-like, shape (n_samples,)
+            Target values
+            
+        Returns
+        -------
+        X_transformed : array-like, shape (n_samples, n_components)
+            Transformed data
+        """
+        return self.fit(X, y).transform(X)
+    
+    def get_params(self, deep=True):
+        """
+        Get parameters for this estimator.
+        
+        Parameters
+        ----------
+        deep : bool, default=True
+            If True, will return the parameters for this estimator and
+            contained subobjects that are estimators.
+            
+        Returns
+        -------
+        params : dict
+            Parameter names mapped to their values.
+        """
+        return {
+            'n_components': self.n_components,
+            'max_iter': self.max_iter,
+            'tol': self.tol,
+            'copy': self.copy,
+            'scale': self.scale
+        }
+    
+    def set_params(self, **params):
+        """
+        Set the parameters of this estimator.
+        
+        Parameters
+        ----------
+        **params : dict
+            Estimator parameters.
+            
+        Returns
+        -------
+        self : estimator instance
+            Estimator instance.
+        """
+        for key, value in params.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                raise ValueError(f"Invalid parameter {key} for estimator {self.__class__.__name__}")
+        return self
+
+class SparsePLSDA:
+    """
+    Sparse Partial Least Squares Discriminant Analysis for improved MCC.
+    
+    Creates maximally discriminative latent space and balances class variance.
+    Optimized for genomic classification tasks with high-dimensional data.
+    """
+    
+    def __init__(self, n_components=32, alpha=0.1, max_iter=1000, tol=1e-6, scale=True):
+        """
+        Initialize Sparse PLS-DA.
+        
+        Parameters
+        ----------
+        n_components : int
+            Number of components to extract (default 32 for MCC optimization)
+        alpha : float
+            Sparsity parameter for L1 regularization
+        max_iter : int
+            Maximum number of iterations
+        tol : float
+            Convergence tolerance
+        scale : bool
+            Whether to scale the data
+        """
+        self.n_components = n_components
+        self.alpha = alpha
+        self.max_iter = max_iter
+        self.tol = tol
+        self.scale = scale
+        self.components_ = None
+        self.x_weights_ = None
+        self.y_weights_ = None
+        self.x_scores_ = None
+        self.y_scores_ = None
+        self.x_loadings_ = None
+        self.y_loadings_ = None
+        self.classes_ = None
+        self.n_classes_ = None
+        self.scaler_x_ = None
+        self.scaler_y_ = None
+        
+    def _encode_labels(self, y):
+        """Encode labels for discriminant analysis."""
+        from sklearn.preprocessing import LabelEncoder, LabelBinarizer
+        
+        self.label_encoder_ = LabelEncoder()
+        y_encoded = self.label_encoder_.fit_transform(y)
+        self.classes_ = self.label_encoder_.classes_
+        self.n_classes_ = len(self.classes_)
+        
+        # Create binary matrix for multi-class
+        if self.n_classes_ > 2:
+            self.label_binarizer_ = LabelBinarizer()
+            Y = self.label_binarizer_.fit_transform(y)
+        else:
+            # For binary classification, create a single column
+            Y = y_encoded.reshape(-1, 1).astype(float)
+            
+        return Y
+        
+    def _soft_threshold(self, x, threshold):
+        """Apply soft thresholding for sparsity."""
+        return np.sign(x) * np.maximum(np.abs(x) - threshold, 0)
+        
+    def fit(self, X, y):
+        """
+        Fit Sparse PLS-DA model.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        y : array-like, shape (n_samples,)
+            Target labels
+            
+        Returns
+        -------
+        self : object
+        """
+        from sklearn.preprocessing import StandardScaler
+        
+        X = np.asarray(X)
+        y = np.asarray(y)
+        
+        n_samples, n_features = X.shape
+        
+        # Encode labels for discriminant analysis
+        Y = self._encode_labels(y)
+        
+        # Scale data if requested
+        if self.scale:
+            self.scaler_x_ = StandardScaler()
+            X_scaled = self.scaler_x_.fit_transform(X)
+            self.scaler_y_ = StandardScaler()
+            Y_scaled = self.scaler_y_.fit_transform(Y)
+        else:
+            X_scaled = X.copy()
+            Y_scaled = Y.copy()
+            
+        # Determine actual number of components
+        max_components = min(n_samples - 1, n_features, Y.shape[1], self.n_components)
+        actual_components = max_components
+        
+        # Initialize arrays
+        self.x_weights_ = np.zeros((n_features, actual_components))
+        self.y_weights_ = np.zeros((Y.shape[1], actual_components))
+        self.x_scores_ = np.zeros((n_samples, actual_components))
+        self.y_scores_ = np.zeros((n_samples, actual_components))
+        self.x_loadings_ = np.zeros((n_features, actual_components))
+        self.y_loadings_ = np.zeros((Y.shape[1], actual_components))
+        
+        # Copy for deflation
+        X_k = X_scaled.copy()
+        Y_k = Y_scaled.copy()
+        
+        for k in range(actual_components):
+            # Compute cross-covariance matrix
+            C = X_k.T @ Y_k
+            
+            # SVD of cross-covariance
+            try:
+                U, s, Vt = np.linalg.svd(C, full_matrices=False)
+                
+                # X weights (first left singular vector)
+                w = U[:, 0]
+                
+                # Y weights (first right singular vector)
+                c = Vt[0, :]
+                
+                # Apply sparsity to X weights
+                w = self._soft_threshold(w, self.alpha)
+                w_norm = np.linalg.norm(w)
+                if w_norm > 0:
+                    w = w / w_norm
+                else:
+                    # If all weights are zero, use original weights
+                    w = U[:, 0]
+                    w = w / np.linalg.norm(w)
+                
+                # Normalize Y weights
+                c_norm = np.linalg.norm(c)
+                if c_norm > 0:
+                    c = c / c_norm
+                
+                # Compute scores
+                t = X_k @ w  # X scores
+                u = Y_k @ c  # Y scores
+                
+                # Compute loadings
+                p = (X_k.T @ t) / (t.T @ t)  # X loadings
+                q = (Y_k.T @ u) / (u.T @ u)  # Y loadings
+                
+                # Store components
+                self.x_weights_[:, k] = w
+                self.y_weights_[:, k] = c
+                self.x_scores_[:, k] = t
+                self.y_scores_[:, k] = u
+                self.x_loadings_[:, k] = p
+                self.y_loadings_[:, k] = q
+                
+                # Deflate X and Y
+                X_k = X_k - np.outer(t, p)
+                Y_k = Y_k - np.outer(u, q)
+                
+            except np.linalg.LinAlgError:
+                # If SVD fails, break early
+                actual_components = k
+                break
+        
+        # Trim arrays to actual components
+        if actual_components < self.n_components:
+            self.x_weights_ = self.x_weights_[:, :actual_components]
+            self.y_weights_ = self.y_weights_[:, :actual_components]
+            self.x_scores_ = self.x_scores_[:, :actual_components]
+            self.y_scores_ = self.y_scores_[:, :actual_components]
+            self.x_loadings_ = self.x_loadings_[:, :actual_components]
+            self.y_loadings_ = self.y_loadings_[:, :actual_components]
+        
+        # Store components for transform
+        self.components_ = self.x_weights_
+        
+        return self
+        
+    def transform(self, X):
+        """
+        Transform data using fitted Sparse PLS-DA model.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Data to transform
+            
+        Returns
+        -------
+        X_transformed : array, shape (n_samples, n_components)
+            Transformed data
+        """
+        X = np.asarray(X)
+        
+        # Scale if scaler was fitted
+        if self.scale and self.scaler_x_ is not None:
+            X_scaled = self.scaler_x_.transform(X)
+        else:
+            X_scaled = X
+            
+        # Transform using X weights
+        X_transformed = X_scaled @ self.x_weights_
+        
+        return X_transformed
+        
+    def fit_transform(self, X, y):
+        """
+        Fit model and transform data.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        y : array-like, shape (n_samples,)
+            Target labels
+            
+        Returns
+        -------
+        X_transformed : array, shape (n_samples, n_components)
+            Transformed training data
+        """
+        return self.fit(X, y).transform(X)
+        
+    def get_params(self, deep=True):
+        """Get parameters for this estimator."""
+        return {
+            'n_components': self.n_components,
+            'alpha': self.alpha,
+            'max_iter': self.max_iter,
+            'tol': self.tol,
+            'scale': self.scale
+        }
+        
+    def set_params(self, **params):
+        """Set parameters for this estimator."""
+        for key, value in params.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                raise ValueError(f"Invalid parameter {key}")
+        return self
+
+class SparsePLS:
+    """
+    Sparse Partial Least Squares implementation.
+    
+    Implements sparse PLS using L1 regularization to encourage sparsity
+    in the loading vectors, making the model more interpretable.
+    """
+    
+    def __init__(self, n_components=2, alpha=0.1, max_iter=500, tol=1e-6, copy=True, scale=True):
+        """
+        Initialize Sparse PLS.
+        
+        Parameters
+        ----------
+        n_components : int, default=2
+            Number of components to extract
+        alpha : float, default=0.1
+            Sparsity parameter (L1 regularization strength)
+        max_iter : int, default=500
+            Maximum number of iterations
+        tol : float, default=1e-6
+            Tolerance for convergence
+        copy : bool, default=True
+            Whether to copy X and Y
+        scale : bool, default=True
+            Whether to scale data
+        """
+        self.n_components = n_components
+        self.alpha = alpha
+        self.max_iter = max_iter
+        self.tol = tol
+        self.copy = copy
+        self.scale = scale
+        self.x_weights_ = None
+        self.y_weights_ = None
+        self.x_loadings_ = None
+        self.y_loadings_ = None
+        
+    def _soft_threshold(self, x, threshold):
+        """Apply soft thresholding for L1 regularization."""
+        return np.sign(x) * np.maximum(np.abs(x) - threshold, 0)
+        
+    def fit(self, X, y):
+        """
+        Fit Sparse PLS model using iterative algorithm.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        y : array-like, shape (n_samples,) or (n_samples, n_targets)
+            Target values
+            
+        Returns
+        -------
+        self
+        """
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        
+        if y.ndim == 1:
+            y = y.reshape(-1, 1)
+            
+        n_samples, n_features = X.shape
+        n_targets = y.shape[1]
+        
+        # Center and scale data
+        if self.scale:
+            from sklearn.preprocessing import StandardScaler
+            self.x_scaler_ = StandardScaler()
+            self.y_scaler_ = StandardScaler()
+            X = self.x_scaler_.fit_transform(X)
+            y = self.y_scaler_.fit_transform(y)
+        else:
+            X = X - np.mean(X, axis=0)
+            y = y - np.mean(y, axis=0)
+            
+        # Initialize storage
+        self.x_weights_ = np.zeros((n_features, self.n_components))
+        self.y_weights_ = np.zeros((n_targets, self.n_components))
+        self.x_loadings_ = np.zeros((n_features, self.n_components))
+        self.y_loadings_ = np.zeros((n_targets, self.n_components))
+        
+        X_residual = X.copy()
+        y_residual = y.copy()
+        
+        for k in range(self.n_components):
+            # Initialize weights randomly
+            w = np.random.randn(n_features)
+            w = w / np.linalg.norm(w)
+            
+            for iteration in range(self.max_iter):
+                w_old = w.copy()
+                
+                # Update weights
+                t = X_residual @ w
+                c = y_residual.T @ t / (t.T @ t + 1e-8)
+                u = y_residual @ c
+                w = X_residual.T @ u / (u.T @ u + 1e-8)
+                
+                # Apply sparsity constraint
+                w = self._soft_threshold(w, self.alpha)
+                
+                # Normalize
+                w_norm = np.linalg.norm(w)
+                if w_norm > 1e-8:
+                    w = w / w_norm
+                else:
+                    break
+                    
+                # Check convergence
+                if np.linalg.norm(w - w_old) < self.tol:
+                    break
+                    
+            # Store weights and loadings
+            self.x_weights_[:, k] = w
+            self.y_weights_[:, k] = c.flatten()
+            
+            # Compute scores and loadings
+            t = X_residual @ w
+            p = X_residual.T @ t / (t.T @ t + 1e-8)
+            q = y_residual.T @ t / (t.T @ t + 1e-8)
+            
+            self.x_loadings_[:, k] = p
+            self.y_loadings_[:, k] = q.flatten()
+            
+            # Deflate matrices
+            X_residual = X_residual - np.outer(t, p)
+            y_residual = y_residual - np.outer(t, q)
+            
+        return self
+        
+    def transform(self, X):
+        """
+        Transform data using fitted Sparse PLS model.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Data to transform
+            
+        Returns
+        -------
+        X_transformed : array-like, shape (n_samples, n_components)
+            Transformed data
+        """
+        if self.x_weights_ is None:
+            raise ValueError("Model must be fitted before transform")
+            
+        X = np.asarray(X, dtype=np.float64)
+        
+        if hasattr(self, 'x_scaler_'):
+            X = self.x_scaler_.transform(X)
+        else:
+            X = X - np.mean(X, axis=0)
+            
+        return X @ self.x_weights_
+        
+    def fit_transform(self, X, y):
+        """
+        Fit model and transform data.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        y : array-like, shape (n_samples,) or (n_samples, n_targets)
+            Target values
+            
+        Returns
+        -------
+        X_transformed : array-like, shape (n_samples, n_components)
+            Transformed data
+        """
+        return self.fit(X, y).transform(X)
+    
+    def get_params(self, deep=True):
+        """
+        Get parameters for this estimator.
+        
+        Parameters
+        ----------
+        deep : bool, default=True
+            If True, will return the parameters for this estimator and
+            contained subobjects that are estimators.
+            
+        Returns
+        -------
+        params : dict
+            Parameter names mapped to their values.
+        """
+        return {
+            'n_components': self.n_components,
+            'alpha': self.alpha,
+            'max_iter': self.max_iter,
+            'tol': self.tol,
+            'copy': self.copy,
+            'scale': self.scale
+        }
+    
+    def set_params(self, **params):
+        """
+        Set the parameters of this estimator.
+        
+        Parameters
+        ----------
+        **params : dict
+            Estimator parameters.
+            
+        Returns
+        -------
+        self : estimator instance
+            Estimator instance.
+        """
+        for key, value in params.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                raise ValueError(f"Invalid parameter {key} for estimator {self.__class__.__name__}")
+        return self
 
 # Early Stopping Configuration
 EARLY_STOPPING_CONFIG = {
@@ -56,6 +724,201 @@ EARLY_STOPPING_CONFIG = {
     "monitor_metric": "auto",  # "auto", "loss", "accuracy", "r2", etc.
     "verbose": 1  # Verbosity level for early stopping
 }
+
+class KernelPCAMedianHeuristic:
+    """
+    Kernel PCA with median heuristic for gamma parameter.
+    
+    Captures non-linear gene–methylation interactions for improved R².
+    Uses RBF kernel with gamma learned by median heuristic.
+    """
+    
+    def __init__(self, n_components=64, kernel="rbf", gamma="auto", eigen_solver="auto", 
+                 n_jobs=-1, random_state=42, sample_size=1000, percentile=50):
+        """
+        Initialize Kernel PCA with median heuristic.
+        
+        Parameters
+        ----------
+        n_components : int
+            Number of components to extract (default 64 for R² optimization)
+        kernel : str
+            Kernel type (default "rbf")
+        gamma : str or float
+            Kernel coefficient (will be overridden by median heuristic)
+        eigen_solver : str
+            Eigenvalue solver
+        n_jobs : int
+            Number of parallel jobs
+        random_state : int
+            Random state for reproducibility
+        sample_size : int
+            Sample size for median heuristic calculation
+        percentile : float
+            Percentile for median calculation
+        """
+        self.n_components = n_components
+        self.kernel = kernel
+        self.gamma = gamma
+        self.eigen_solver = eigen_solver
+        self.n_jobs = n_jobs
+        self.random_state = random_state
+        self.sample_size = sample_size
+        self.percentile = percentile
+        self.kernel_pca_ = None
+        self.gamma_computed_ = None
+        
+    def _compute_median_heuristic_gamma(self, X):
+        """
+        Compute gamma using median heuristic.
+        
+        The median heuristic sets gamma = 1 / (2 * median(pairwise_distances)^2)
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Input data
+            
+        Returns
+        -------
+        gamma : float
+            Computed gamma value
+        """
+        from sklearn.metrics.pairwise import pairwise_distances
+        
+        n_samples = X.shape[0]
+        
+        # Sample data if too large
+        if n_samples > self.sample_size:
+            np.random.seed(self.random_state)
+            indices = np.random.choice(n_samples, self.sample_size, replace=False)
+            X_sample = X[indices]
+        else:
+            X_sample = X
+            
+        # Compute pairwise distances
+        distances = pairwise_distances(X_sample, metric='euclidean')
+        
+        # Get upper triangular part (excluding diagonal)
+        triu_indices = np.triu_indices_from(distances, k=1)
+        pairwise_dists = distances[triu_indices]
+        
+        # Compute median distance
+        median_dist = np.percentile(pairwise_dists, self.percentile)
+        
+        # Avoid division by zero
+        if median_dist == 0:
+            median_dist = 1.0
+            
+        # Compute gamma using median heuristic
+        gamma = 1.0 / (2 * median_dist ** 2)
+        
+        return gamma
+        
+    def fit(self, X, y=None):
+        """
+        Fit Kernel PCA with median heuristic.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        y : array-like, optional
+            Target values (ignored)
+            
+        Returns
+        -------
+        self : object
+        """
+        from sklearn.decomposition import KernelPCA
+        
+        X = np.asarray(X)
+        
+        # Compute gamma using median heuristic
+        if self.gamma == "auto" or self.gamma is None:
+            self.gamma_computed_ = self._compute_median_heuristic_gamma(X)
+        else:
+            self.gamma_computed_ = self.gamma
+            
+        # Create and fit Kernel PCA with computed gamma
+        self.kernel_pca_ = KernelPCA(
+            n_components=self.n_components,
+            kernel=self.kernel,
+            gamma=self.gamma_computed_,
+            eigen_solver=self.eigen_solver,
+            n_jobs=self.n_jobs,
+            random_state=self.random_state
+        )
+        
+        self.kernel_pca_.fit(X)
+        
+        # Store components for compatibility
+        if hasattr(self.kernel_pca_, 'eigenvectors_'):
+            self.components_ = self.kernel_pca_.eigenvectors_.T
+        else:
+            # Fallback for different sklearn versions
+            self.components_ = None
+            
+        return self
+        
+    def transform(self, X):
+        """
+        Transform data using fitted Kernel PCA.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Data to transform
+            
+        Returns
+        -------
+        X_transformed : array, shape (n_samples, n_components)
+            Transformed data
+        """
+        if self.kernel_pca_ is None:
+            raise ValueError("Model must be fitted before transform")
+            
+        return self.kernel_pca_.transform(X)
+        
+    def fit_transform(self, X, y=None):
+        """
+        Fit model and transform data.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        y : array-like, optional
+            Target values (ignored)
+            
+        Returns
+        -------
+        X_transformed : array, shape (n_samples, n_components)
+            Transformed training data
+        """
+        return self.fit(X, y).transform(X)
+        
+    def get_params(self, deep=True):
+        """Get parameters for this estimator."""
+        return {
+            'n_components': self.n_components,
+            'kernel': self.kernel,
+            'gamma': self.gamma,
+            'eigen_solver': self.eigen_solver,
+            'n_jobs': self.n_jobs,
+            'random_state': self.random_state,
+            'sample_size': self.sample_size,
+            'percentile': self.percentile
+        }
+        
+    def set_params(self, **params):
+        """Set parameters for this estimator."""
+        for key, value in params.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                raise ValueError(f"Invalid parameter {key}")
+        return self
 
 class EarlyStoppingWrapper:
     """
@@ -99,6 +962,9 @@ class EarlyStoppingWrapper:
         # State variables
         self.best_score_ = None
         self.best_model_ = None
+        self.best_model_params_ = None
+        self.best_n_estimators_ = None
+        self.best_max_iter_ = None
         self.wait_ = 0
         self.stopped_epoch_ = 0
         self.history_ = []
@@ -278,7 +1144,10 @@ class EarlyStoppingWrapper:
                 if self._is_improvement(current_score, self.best_score_, monitor_metric):
                     self.best_score_ = current_score
                     if self.restore_best_weights:
-                        self.best_model_ = copy.deepcopy(current_model)
+                        # Store model parameters instead of the model itself to avoid pickle issues
+                        self.best_model_params_ = current_model.get_params()
+                        self.best_n_estimators_ = n_est
+                        self.best_model_ = current_model  # Keep reference for immediate use
                     self.wait_ = 0
                 else:
                     self.wait_ += 1
@@ -366,7 +1235,10 @@ class EarlyStoppingWrapper:
             if self._is_improvement(current_score, self.best_score_, monitor_metric):
                 self.best_score_ = current_score
                 if self.restore_best_weights:
-                    self.best_model_ = copy.deepcopy(current_model)
+                    # Store model parameters instead of the model itself to avoid pickle issues
+                    self.best_model_params_ = current_model.get_params()
+                    self.best_max_iter_ = current_iter
+                    self.best_model_ = current_model  # Keep reference for immediate use
                 self.wait_ = 0
             else:
                 self.wait_ += 1
@@ -444,6 +1316,31 @@ class EarlyStoppingWrapper:
                 setattr(self, key, value)
         
         return self
+    
+    def _recreate_best_model(self):
+        """Recreate the best model from stored parameters for pickling."""
+        if self.best_model_params_ is None:
+            return self.base_model
+        
+        # Create new model with best parameters
+        recreated_model = self.base_model.__class__(**self.best_model_params_)
+        return recreated_model
+    
+    def __getstate__(self):
+        """Custom pickling to avoid recursion issues."""
+        state = self.__dict__.copy()
+        # Replace the best_model_ with None to avoid pickle issues
+        # We'll recreate it from parameters when needed
+        if self.best_model_params_ is not None:
+            state['best_model_'] = None
+        return state
+    
+    def __setstate__(self, state):
+        """Custom unpickling to restore the model."""
+        self.__dict__.update(state)
+        # Recreate the best model if we have parameters
+        if self.best_model_params_ is not None and self.best_model_ is None:
+            self.best_model_ = self._recreate_best_model()
     
     def __getattr__(self, name):
         """Delegate attribute access to the best model if not found in wrapper."""
@@ -682,7 +1579,9 @@ def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=N
     
     # Convert string selector to object if needed
     if isinstance(selector, str):
-        selector = get_selector_object(selector, n_feats)
+        # We'll update the selector object after calculating effective_n_feats
+        selector_code = selector
+        selector = None
     
     # Generate a stable cache key
     if isinstance(selector, dict):
@@ -691,8 +1590,13 @@ def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=N
     elif original_selector_code:
         # Use the original selector code for cache key
         selector_type = original_selector_code
-    else:
+    elif 'selector_code' in locals():
+        # Use the selector_code if we have it
+        selector_type = selector_code
+    elif selector is not None:
         selector_type = selector.__class__.__name__
+    else:
+        selector_type = "unknown"
         
     # Create cache key
     key = _generate_cache_key(ds_name, fold_idx, selector_type, "sel_reg", n_feats, X.shape if X is not None else None)
@@ -737,6 +1641,10 @@ def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=N
         
         if effective_n_feats < n_feats:
             logger.info(f"Limiting features from {n_feats} to {effective_n_feats} due to data dimensions")
+        
+        # Create selector object with correct effective_n_feats if we have a selector_code
+        if selector is None and 'selector_code' in locals():
+            selector = get_selector_object(selector_code, effective_n_feats)
         
         # Handle fast feature selection methods
         if isinstance(selector, dict) and selector.get('type') == 'fast_fs':
@@ -899,7 +1807,17 @@ def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=N
 
 def get_regression_extractors() -> Dict[str, Any]:
     """
-    Get dictionary of regression feature extractors.
+    Get dictionary of regression feature extractors optimized for genomic data.
+    
+    Top 5 algorithms selected based on genomic data characteristics:
+    1. PLS - Excellent for genomic data, handles multicollinearity well
+    2. SparsePLS - Adds sparsity for better interpretability in genomic context  
+    3. PCA - Robust baseline, handles high dimensionality effectively
+    4. FA - Good for capturing latent biological factors
+    5. ICA - Useful for separating independent biological signals
+    
+    Feature Engineering Tweaks (enabled via CLI):
+    - Kernel PCA (RBF) - Captures non-linear gene–methylation interactions for higher R²
     
     Returns
     -------
@@ -922,60 +1840,113 @@ def get_regression_extractors() -> Dict[str, Any]:
         "fun": "logcosh"
     }
     
-    return {
-        #"PCA": PCA(random_state=42),
-        #"NMF": NMF(
-        #    init='nndsvdar',
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3,      # Relaxed tolerance
-        #    beta_loss='frobenius',
-        #    solver='mu'
-        #),
-        #"ICA": FastICA(
-        #    random_state=42,
-        #    **ica_params
-        #),
-        #"FA": FactorAnalysis(
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3       # Relaxed tolerance
-        #),
-        #"PLS": PLSRegression(
-        #    n_components=8,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3       # Relaxed tolerance
-        #)
+    extractors = {
+        # TOP 5 ALGORITHMS FOR GENOMIC DATA
+        "PCA": PCA(random_state=42),
+        "ICA": FastICA(
+            random_state=42,
+            **ica_params
+        ),
+        "FA": FactorAnalysis(
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        ),
+        "PLS": PLSRegression(
+            n_components=8,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        ),
+        "SparsePLS": SparsePLS(
+            n_components=8,
+            alpha=0.1,  # Sparsity parameter
+            max_iter=1000,
+            tol=1e-6,
+            scale=True
+        )
+        
+        # COMMENTED OUT - NOT IN TOP 5 FOR GENOMIC DATA
+        # "NMF": NMF(
+        #     init='nndsvdar',
+        #     random_state=42,
+        #     max_iter=5000,  # Increased max iterations
+        #     tol=1e-3,      # Relaxed tolerance
+        #     beta_loss='frobenius',
+        #     solver='mu'
+        # ),
+        # "KernelPCA": KernelPCA(
+        #     kernel='rbf',
+        #     random_state=42,
+        #     n_jobs=-1
+        # ),
     }
+    
+    # Add feature engineering tweaks if enabled
+    from config import FEATURE_ENGINEERING_CONFIG
+    if FEATURE_ENGINEERING_CONFIG.get("enabled", False):
+        if FEATURE_ENGINEERING_CONFIG.get("kernel_pca_enabled", True):
+            config = FEATURE_ENGINEERING_CONFIG["kernel_pca"]
+            median_config = FEATURE_ENGINEERING_CONFIG["median_heuristic"]
+            extractors["KernelPCA-RBF"] = KernelPCAMedianHeuristic(
+                n_components=config["n_components"],
+                kernel=config["kernel"],
+                gamma=config["gamma"],
+                eigen_solver=config["eigen_solver"],
+                n_jobs=config["n_jobs"],
+                random_state=config["random_state"],
+                sample_size=median_config["sample_size"],
+                percentile=median_config["percentile"]
+            )
+    
+    return extractors
 
 def get_regression_selectors() -> Dict[str, str]:
     """
     Get dictionary of regression feature selectors.
     
+    Top 5 algorithms selected based on genomic data characteristics:
+    1. ElasticNetFS - Combines L1/L2 regularization, excellent for genomic data
+    2. RFImportance - Captures non-linear relationships, robust to noise
+    3. VarianceFTest - Fast, effective for removing low-variance features
+    4. LASSO - L1 regularization promotes sparsity, good for gene selection
+    5. f_regressionFS - Statistical significance-based, appropriate for genomics
+    
     Returns
     -------
     dict
         Dictionary mapping selector names to selector codes
     """
     return {
-        # Fast alternatives to MRMR (recommended for speed)
-        "VarianceFTest": "variance_f_test_reg",
-        "RFImportance": "rf_importance_reg", 
+        # TOP 5 ALGORITHMS FOR GENOMIC DATA
         "ElasticNetFS": "elastic_net_reg",
-        "CorrelationFS": "correlation_reg",
-        "CombinedFast": "combined_fast_reg",
+        "RFImportance": "rf_importance_reg", 
+        "VarianceFTest": "variance_f_test_reg",
+        "LASSO": "lasso",
+        "f_regressionFS": "freg"
+        
+        # COMMENTED OUT - NOT IN TOP 5 FOR GENOMIC DATA
+        # "CorrelationFS": "correlation_reg",
+        # "CombinedFast": "combined_fast_reg",
+        # "RandomForestFS": "rf_reg"
         # MRMR running takes a lot of time. It was replaced with above methods
         # "MRMR": "mrmr_reg",
-        "LASSO": "lasso",
-        "f_regressionFS": "freg",
         # Boruta running takes 20 mins per fold. It was replaced with RandomForestFS, but may be tested in the future.
         # "Boruta": "boruta_reg",
-        "RandomForestFS": "rf_reg"
     }
 
 def get_classification_extractors() -> Dict[str, Any]:
     """
-    Get dictionary of classification feature extractors.
+    Get dictionary of classification feature extractors optimized for genomic data.
+    
+    Top 5 algorithms selected based on genomic data characteristics:
+    1. PLS-DA - Supervised method, excellent for genomic classification
+    2. SparsePLS - Sparse supervised extraction with interpretability
+    3. PCA - Reliable baseline for dimensionality reduction
+    4. LDA - Supervised, maximizes class separation
+    5. FA - Captures underlying biological factors
+    
+    Feature Engineering Tweaks (enabled via CLI):
+    - SparsePLS-DA - Creates maximally discriminative latent space for better MCC
     
     Returns
     -------
@@ -998,35 +1969,74 @@ def get_classification_extractors() -> Dict[str, Any]:
         "fun": "logcosh"
     }
     
-    return {
-        #"PCA": PCA(random_state=42),
-        #"NMF": NMF(
-        #    init='nndsvdar',
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3,      # Relaxed tolerance
-        #    beta_loss='frobenius',
-        #    solver='mu'
-        #),
-        #"ICA": FastICA(
-        #    random_state=42,
-        #    **ica_params
-        #),
-        #"FA": FactorAnalysis(
-        #    random_state=42,
-        #    max_iter=5000,  # Increased max iterations
-        #    tol=1e-3       # Relaxed tolerance
-        #),
-        #"LDA": LDA(),
-        #"KernelPCA": KernelPCA(
-        #    kernel='rbf',
-        #    random_state=42
-        #)
+    extractors = {
+        # TOP 5 ALGORITHMS FOR GENOMIC DATA
+        "PCA": PCA(random_state=42),
+        "FA": FactorAnalysis(
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        ),
+        "LDA": LDA(),
+        "PLS-DA": PLSDiscriminantAnalysis(
+            n_components=8,
+            max_iter=1000,
+            tol=1e-6,
+            scale=True
+        ),
+        "SparsePLS": SparsePLS(
+            n_components=8,
+            alpha=0.1,  # Sparsity parameter
+            max_iter=1000,
+            tol=1e-6,
+            scale=True
+        )
+        
+        # COMMENTED OUT - NOT IN TOP 5 FOR GENOMIC DATA
+        # "NMF": NMF(
+        #     init='nndsvdar',
+        #     random_state=42,
+        #     max_iter=5000,  # Increased max iterations
+        #     tol=1e-3,      # Relaxed tolerance
+        #     beta_loss='frobenius',
+        #     solver='mu'
+        # ),
+        # "ICA": FastICA(
+        #     random_state=42,
+        #     **ica_params
+        # ),
+        # "KernelPCA": KernelPCA(
+        #     kernel='rbf',
+        #     random_state=42,
+        #     n_jobs=-1
+        # ),
     }
+    
+    # Add feature engineering tweaks if enabled
+    from config import FEATURE_ENGINEERING_CONFIG
+    if FEATURE_ENGINEERING_CONFIG.get("enabled", False):
+        if FEATURE_ENGINEERING_CONFIG.get("sparse_plsda_enabled", True):
+            config = FEATURE_ENGINEERING_CONFIG["sparse_plsda"]
+            extractors["SparsePLS-DA"] = SparsePLSDA(
+                n_components=config["n_components"],
+                alpha=config["alpha"],
+                max_iter=config["max_iter"],
+                tol=config["tol"],
+                scale=config["scale"]
+            )
+    
+    return extractors
 
 def get_classification_selectors() -> Dict[str, str]:
     """
     Get dictionary of classification feature selectors.
+    
+    Top 5 algorithms selected based on genomic data characteristics:
+    1. ElasticNetFS - Excellent balance of L1/L2 regularization
+    2. RFImportance - Handles non-linear patterns in genomic data
+    3. VarianceFTest - Fast preprocessing step for genomic data
+    4. LogisticL1 - L1 regularization for sparse feature selection
+    5. XGBoostFS - Advanced tree-based importance for complex patterns
     
     Returns
     -------
@@ -1034,122 +2044,413 @@ def get_classification_selectors() -> Dict[str, str]:
         Dictionary mapping selector names to selector codes
     """
     return {
-        # Fast alternatives to MRMR (recommended for speed)
-        "VarianceFTest": "variance_f_test_clf",
-        "RFImportance": "rf_importance_clf",
+        # TOP 5 ALGORITHMS FOR GENOMIC DATA
         "ElasticNetFS": "elastic_net_clf", 
-        "Chi2FS": "chi2_fast",
-        "CombinedFast": "combined_fast_clf",
+        "RFImportance": "rf_importance_clf",
+        "VarianceFTest": "variance_f_test_clf",
+        "LogisticL1": "logistic_l1",
+        "XGBoostFS": "xgb_clf"
+        
+        # COMMENTED OUT - NOT IN TOP 5 FOR GENOMIC DATA
+        # "Chi2FS": "chi2_fast",
+        # "CombinedFast": "combined_fast_clf",
+        # "fclassifFS": "fclassif",
         # MRMR running takes a lot of time. It was replaced with above methods
         # "MRMR": "mrmr_clf",
-        "fclassifFS": "fclassif",
-        "LogisticL1": "logistic_l1",
         # Boruta running takes 20 mins per fold. It was replaced with XGBoostFS, but may be tested in the future.
         # "Boruta": "boruta_clf",
-        "XGBoostFS": "xgb_clf"
     }
 
 def get_selector_object(selector_code: str, n_feats: int):
-    """Create appropriate selector object based on code."""
-    # Fast feature selection methods (new)
-    if selector_code == "variance_f_test_reg":
-        return {"type": "fast_fs", "method": "variance_f_test", "n_feats": n_feats, "is_regression": True}
+    """
+    Create a feature selector object based on the selector code.
+    Improved to be less aggressive and better handle small datasets.
+    
+    Parameters
+    ----------
+    selector_code : str
+        Code identifying the selector type
+    n_feats : int
+        Number of features to select
+        
+    Returns
+    -------
+    selector object
+        Configured feature selector
+    """
+    # Ensure minimum number of features for small datasets
+    min_features = max(5, min(n_feats, 10))  # At least 5 features, but not more than requested
+    effective_n_feats = max(min_features, n_feats)
+    
+    if selector_code == "mutual_info_regression":
+        return SelectKBest(score_func=mutual_info_regression, k=effective_n_feats)
+    elif selector_code == "mutual_info_classification":
+        return SelectKBest(score_func=mutual_info_classif, k=effective_n_feats)
+    elif selector_code == "f_regression":
+        return SelectKBest(score_func=f_regression, k=effective_n_feats)
+    elif selector_code == "f_classification":
+        return SelectKBest(score_func=f_classif, k=effective_n_feats)
+    elif selector_code == "chi2":
+        return SelectKBest(score_func=chi2, k=effective_n_feats)
+    elif selector_code == "lasso_regression":
+        # Use less aggressive regularization for better feature retention
+        alpha_value = max(0.001, 0.1 / np.sqrt(effective_n_feats))  # Adaptive alpha
+        lasso = Lasso(alpha=alpha_value, max_iter=5000, random_state=42)
+        return SelectFromModel(lasso, max_features=effective_n_feats, threshold=-np.inf)
+    elif selector_code == "lasso_classification":
+        # Use less aggressive regularization for classification
+        C_value = max(0.1, 10.0 / np.sqrt(effective_n_feats))  # Adaptive C
+        logistic = LogisticRegression(
+            penalty='l1', solver='liblinear', C=C_value, 
+            max_iter=5000, random_state=42, class_weight='balanced'
+        )
+        return SelectFromModel(logistic, max_features=effective_n_feats, threshold=-np.inf)
+    elif selector_code == "elasticnet_regression":
+        # Use less aggressive regularization
+        alpha_value = max(0.001, 0.05 / np.sqrt(effective_n_feats))
+        elasticnet = ElasticNet(
+            alpha=alpha_value, l1_ratio=0.5, max_iter=5000, 
+            random_state=42, selection='cyclic'
+        )
+        return SelectFromModel(elasticnet, max_features=effective_n_feats, threshold=-np.inf)
+    elif selector_code == "elasticnet_classification":
+        # Use less aggressive regularization for classification
+        C_value = max(0.1, 5.0 / np.sqrt(effective_n_feats))
+        logistic = LogisticRegression(
+            penalty='elasticnet', solver='saga', C=C_value, l1_ratio=0.5,
+            max_iter=5000, random_state=42, class_weight='balanced'
+        )
+        return SelectFromModel(logistic, max_features=effective_n_feats, threshold=-np.inf)
+    elif selector_code == "random_forest_regression":
+        # Use more trees for better feature importance estimation
+        rf = RandomForestRegressor(
+            n_estimators=200, max_depth=10, min_samples_leaf=2,
+            random_state=42, n_jobs=-1, oob_score=False
+        )
+        return SelectFromModel(rf, max_features=effective_n_feats, threshold=-np.inf)
+    elif selector_code == "random_forest_classification":
+        # Use more trees for better feature importance estimation
+        rf = RandomForestClassifier(
+            n_estimators=200, max_depth=10, min_samples_leaf=2,
+            random_state=42, n_jobs=-1, class_weight='balanced', oob_score=False
+        )
+        return SelectFromModel(rf, max_features=effective_n_feats, threshold=-np.inf)
+    elif selector_code == "boruta_regression":
+        # Use Boruta with less aggressive settings
+        rf = RandomForestRegressor(
+            n_estimators=100, max_depth=7, random_state=42, n_jobs=-1
+        )
+        return boruta_selector(rf, n_feats=effective_n_feats, is_classification=False)
+    elif selector_code == "boruta_classification":
+        # Use Boruta with less aggressive settings
+        rf = RandomForestClassifier(
+            n_estimators=100, max_depth=7, random_state=42, 
+            n_jobs=-1, class_weight='balanced'
+        )
+        return boruta_selector(rf, n_feats=effective_n_feats, is_classification=True)
+    
+    # Fast feature selection methods for regression - return sklearn objects with genomic optimization
+    elif selector_code == "variance_f_test_reg":
+        # Use genomic-optimized F-test selector with much larger k
+        genomic_k = min(effective_n_feats, 10000)  # Much larger for genomic data
+        return SelectKBest(score_func=f_regression, k=genomic_k)
     elif selector_code == "rf_importance_reg":
-        return {"type": "fast_fs", "method": "rf_importance", "n_feats": n_feats, "is_regression": True}
+        # Use genomic-optimized RandomForest selector
+        rf = RandomForestRegressor(
+            n_estimators=1000, max_depth=None, min_samples_split=2,
+            min_samples_leaf=1, random_state=42, n_jobs=-1
+        )
+        return SelectFromModel(rf, max_features=effective_n_feats, threshold="0.001*mean")
     elif selector_code == "elastic_net_reg":
-        return {"type": "fast_fs", "method": "elastic_net", "n_feats": n_feats, "is_regression": True}
+        # Use genomic-optimized ElasticNet selector with minimal regularization
+        enet = ElasticNet(alpha=0.0001, l1_ratio=0.1, max_iter=5000, random_state=42)
+        return SelectFromModel(enet, max_features=effective_n_feats, threshold="0.001*mean")
     elif selector_code == "correlation_reg":
-        return {"type": "fast_fs", "method": "correlation", "n_feats": n_feats, "is_regression": True}
+        # Fallback to F-test for correlation-based selection
+        genomic_k = min(effective_n_feats, 10000)
+        return SelectKBest(score_func=f_regression, k=genomic_k)
     elif selector_code == "combined_fast_reg":
-        return {"type": "fast_fs", "method": "combined_fast", "n_feats": n_feats, "is_regression": True}
+        # Use F-test as the combined fast method
+        genomic_k = min(effective_n_feats, 10000)
+        return SelectKBest(score_func=f_regression, k=genomic_k)
+    
+    # Fast feature selection methods for classification - return sklearn objects with genomic optimization
     elif selector_code == "variance_f_test_clf":
-        return {"type": "fast_fs", "method": "variance_f_test", "n_feats": n_feats, "is_regression": False}
+        # Use genomic-optimized F-test selector with much larger k
+        genomic_k = min(effective_n_feats, 10000)  # Much larger for genomic data
+        return SelectKBest(score_func=f_classif, k=genomic_k)
     elif selector_code == "rf_importance_clf":
-        return {"type": "fast_fs", "method": "rf_importance", "n_feats": n_feats, "is_regression": False}
+        # Use genomic-optimized RandomForest selector
+        rf = RandomForestClassifier(
+            n_estimators=1000, max_depth=None, min_samples_split=2,
+            min_samples_leaf=1, random_state=42, n_jobs=-1, class_weight='balanced'
+        )
+        return SelectFromModel(rf, max_features=effective_n_feats, threshold="0.001*mean")
     elif selector_code == "elastic_net_clf":
-        return {"type": "fast_fs", "method": "elastic_net", "n_feats": n_feats, "is_regression": False}
+        # Use genomic-optimized LogisticRegression with minimal regularization
+        lr = LogisticRegression(
+            C=100.0, max_iter=5000, random_state=42, solver='liblinear', class_weight='balanced'
+        )
+        return SelectFromModel(lr, max_features=effective_n_feats, threshold="0.001*mean")
     elif selector_code == "chi2_fast":
-        return {"type": "fast_fs", "method": "chi2", "n_feats": n_feats, "is_regression": False}
+        # Use genomic-optimized Chi2 selector
+        genomic_k = min(effective_n_feats, 10000)
+        return SelectKBest(score_func=chi2, k=genomic_k)
     elif selector_code == "combined_fast_clf":
-        return {"type": "fast_fs", "method": "combined_fast", "n_feats": n_feats, "is_regression": False}
-    # Original methods
-    elif selector_code == "mrmr_reg":
-        return SelectKBest(mutual_info_regression, k=n_feats)
+        # Use F-test as the combined fast method
+        genomic_k = min(effective_n_feats, 10000)
+        return SelectKBest(score_func=f_classif, k=genomic_k)
+    
+    # Legacy selector codes - map to standard sklearn selectors with genomic optimization
     elif selector_code == "lasso":
-        # Create a standalone Lasso model that we will fit manually
-        # instead of letting SelectFromModel try to fit it
-        return {"type": "lasso", "n_feats": n_feats}
-    elif selector_code == "enet":
-        # Create a standalone ElasticNet model that we will fit manually
-        # instead of letting SelectFromModel try to fit it
-        return {"type": "enet", "n_feats": n_feats}
+        return SelectFromModel(
+            Lasso(alpha=0.0001, max_iter=5000, random_state=42),  # Much lower alpha for genomic data
+            max_features=effective_n_feats, threshold="0.001*mean"  # Very low threshold
+        )
     elif selector_code == "freg":
-        return SelectKBest(f_regression, k=n_feats)
-    elif selector_code == "boruta_reg":
-        # Instead of using BorutaPy directly, use the dictionary approach
-        # with a simpler implementation that uses boruta_selector
-        return {"type": "boruta_reg", "n_feats": n_feats}
+        # Use genomic-optimized F-test with larger k
+        genomic_k = min(effective_n_feats, 10000)
+        return SelectKBest(score_func=f_regression, k=genomic_k)
     elif selector_code == "rf_reg":
-        # Random Forest Feature Importance for regression
-        return {"type": "rf_reg", "n_feats": n_feats}
-    elif selector_code == "mrmr_clf" or selector_code.upper() == "MRMR":
-        return SelectKBest(mutual_info_classif, k=n_feats)
-    elif selector_code == "fclassifFS" or selector_code == "fclassif":
-        return SelectKBest(f_classif, k=n_feats)
-    elif selector_code == "logistic_l1" or selector_code == "LogisticL1":
-        # Similarly for logistic regression
-        return {"type": "logistic_l1", "n_feats": n_feats}
-    elif selector_code == "chi2_selection" or selector_code == "Chi2FS":
-        return SelectKBest(chi2, k=n_feats)
-    elif selector_code == "boruta_clf" or selector_code == "Boruta":
-        # Similarly for Boruta classification
-        return {"type": "boruta_clf", "n_feats": n_feats}
+        rf = RandomForestRegressor(
+            n_estimators=1000, max_depth=None, min_samples_leaf=1,  # Genomic optimization
+            random_state=42, n_jobs=-1, oob_score=False
+        )
+        return SelectFromModel(rf, max_features=effective_n_feats, threshold="0.001*mean")
+    elif selector_code == "fclassif":
+        # Use genomic-optimized F-test with larger k
+        genomic_k = min(effective_n_feats, 10000)
+        return SelectKBest(score_func=f_classif, k=genomic_k)
+    elif selector_code == "logistic_l1":
+        logistic = LogisticRegression(
+            penalty='l1', solver='liblinear', C=100.0,  # Much higher C for genomic data
+            max_iter=5000, random_state=42, class_weight='balanced'
+        )
+        return SelectFromModel(logistic, max_features=effective_n_feats, threshold="0.001*mean")
+    elif selector_code == "xgb_clf":
+        # Fallback to RandomForest with genomic optimization
+        rf = RandomForestClassifier(
+            n_estimators=1000, max_depth=None, min_samples_leaf=1,  # Genomic optimization
+            random_state=42, n_jobs=-1, class_weight='balanced', oob_score=False
+        )
+        return SelectFromModel(rf, max_features=effective_n_feats, threshold="0.001*mean")
+    
     else:
-        # Improved fallback logic to distinguish between regression and classification
-        if ("reg" in selector_code.lower() or 
-            "regression" in selector_code.lower() or
-            selector_code.startswith("f_reg") or
-            "freg" in selector_code.lower()):
-            logger.warning(f"Unknown regression selector code: {selector_code}, using mutual_info_regression as fallback")
-            return SelectKBest(mutual_info_regression, k=n_feats)
-        elif (selector_code.startswith("f_") or 
-              "classif" in selector_code.lower() or
-              "clf" in selector_code.lower() or
-              "classification" in selector_code.lower()):
-            logger.warning(f"Unknown classification selector code: {selector_code}, using f_classif as fallback")
-            return SelectKBest(f_classif, k=n_feats)
-        else:
-            # If we can't determine the type, default to classification
-            logger.warning(f"Unknown selector code: {selector_code}, defaulting to mutual_info_classif")
-            return SelectKBest(mutual_info_classif, k=n_feats)
+        # Default fallback to mutual information
+        logger.warning(f"Unknown selector code: {selector_code}, using mutual_info_regression")
+        return SelectKBest(score_func=mutual_info_regression, k=effective_n_feats)
 
 def get_regression_models() -> Dict[str, Any]:
-    """Get dictionary of regression models."""
-    return {
+    """Get dictionary of regression models with tuned ensembles."""
+    models = {
         "LinearRegression": LinearRegression(),
-        "RandomForestRegressor": RandomForestRegressor(n_estimators=100, random_state=42),
+        "RandomForestRegressor": RandomForestRegressor(
+            n_estimators=500,  # Increased from 100 to 500
+            max_depth=None,    # Changed from limited depth to None
+            min_samples_leaf=2, # Changed from 5 to 2
+            random_state=42
+        ),
         "ElasticNet": ElasticNet(**MODEL_OPTIMIZATIONS["ElasticNet"])
     }
+    
+    # Add XGBoost if available
+    if XGBOOST_AVAILABLE:
+        models["XGBRegressor"] = xgb.XGBRegressor(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=1.0,
+            reg_lambda=1.0,
+            random_state=42,
+            verbosity=0
+        )
+    
+    # Add LightGBM if available
+    if LIGHTGBM_AVAILABLE:
+        models["LGBMRegressor"] = lgb.LGBMRegressor(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=1.0,
+            reg_lambda=1.0,
+            random_state=42,
+            verbosity=-1
+        )
+    
+    # Add GradientBoostingRegressor as suggested
+    models["GradientBoostingRegressor"] = GradientBoostingRegressor(
+        n_estimators=200,
+        max_depth=6,
+        learning_rate=0.1,
+        subsample=0.8,
+        random_state=42
+    )
+    
+    # Add improved regression models for negative R² issues
+    if XGBOOST_AVAILABLE:
+        models["ImprovedXGBRegressor"] = xgb.XGBRegressor(
+            n_estimators=800,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=1.0,
+            random_state=42,
+            verbosity=0
+        )
+    
+    if LIGHTGBM_AVAILABLE:
+        models["ImprovedLightGBMRegressor"] = lgb.LGBMRegressor(
+            n_estimators=800,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=1.0,
+            objective="regression",  # Can be changed to "quantile" for robust loss
+            random_state=42,
+            verbosity=-1
+        )
+    
+    # Add robust gradient boosting with Huber loss
+    models["RobustGradientBoosting"] = GradientBoostingRegressor(
+        n_estimators=700,
+        max_depth=3,
+        learning_rate=0.03,
+        subsample=0.8,
+        loss="huber",  # Robust loss function for outliers
+        alpha=0.9,     # Huber loss parameter
+        random_state=42
+    )
+    
+    return models
 
 def get_classification_models() -> Dict[str, Any]:
-    """Get dictionary of classification models."""
-    return {
+    """Get dictionary of classification models with tuned ensembles."""
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.svm import LinearSVC
+    
+    models = {
         "LogisticRegression": LogisticRegression(
             random_state=42,
             penalty='l2',
-            solver='liblinear'
+            solver='liblinear',
+            class_weight='balanced',  # Added balanced class weights
+            max_iter=500,  # Increased max_iter
+            C=1.0  # Will be tuned via hyperparameter search
         ),
         "RandomForestClassifier": RandomForestClassifier(
-            n_estimators=100,
+            n_estimators=500,  # Increased from 100 to 500
+            max_depth=None,    # Changed from limited depth to None
+            min_samples_leaf=2, # Changed from default to 2
+            class_weight='balanced',
             random_state=42
         ),
         "SVC": SVC(
             probability=True,
-            random_state=42
+            random_state=42,
+            class_weight='balanced'
         )
     }
+    
+    # Add calibrated Linear SVC as suggested
+    linear_svc = LinearSVC(
+        random_state=42,
+        class_weight='balanced',
+        max_iter=2000
+    )
+    models["CalibratedLinearSVC"] = CalibratedClassifierCV(
+        linear_svc, 
+        method='sigmoid',
+        cv=3
+    )
+    
+    # Add XGBoost if available
+    if XGBOOST_AVAILABLE:
+        models["XGBClassifier"] = xgb.XGBClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=1.0,
+            reg_lambda=1.0,
+            random_state=42,
+            verbosity=0,
+            eval_metric='logloss'
+        )
+    
+    # Add LightGBM if available
+    if LIGHTGBM_AVAILABLE:
+        models["LGBMClassifier"] = lgb.LGBMClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=1.0,
+            reg_lambda=1.0,
+            random_state=42,
+            verbosity=-1
+        )
+    
+    # Add GradientBoostingClassifier as suggested
+    models["GradientBoostingClassifier"] = GradientBoostingClassifier(
+        n_estimators=200,
+        max_depth=6,
+        learning_rate=0.1,
+        subsample=0.8,
+        random_state=42
+    )
+    
+    # Add balanced models for class imbalance handling
+    if IMBALANCED_LEARN_AVAILABLE:
+        models["BalancedRandomForest"] = BalancedRandomForestClassifier(
+            n_estimators=500,
+            max_depth=None,
+            sampling_strategy='auto',
+            replacement=False,
+            bootstrap=True,
+            oob_score=True,
+            random_state=42
+        )
+    
+    if XGBOOST_AVAILABLE:
+        models["BalancedXGBoost"] = xgb.XGBClassifier(
+            n_estimators=400,
+            max_depth=4,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            eval_metric='logloss',
+            scale_pos_weight=None,  # Let sampler handle balance
+            reg_alpha=1.0,
+            reg_lambda=1.0,
+            random_state=42,
+            verbosity=0
+        )
+    
+    if LIGHTGBM_AVAILABLE:
+        models["BalancedLightGBM"] = lgb.LGBMClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_alpha=1.0,
+            reg_lambda=1.0,
+            is_unbalance=True,  # LightGBM's built-in class weight handling
+            random_state=42,
+            verbosity=-1
+        )
+    
+    return models
 
-def get_model_object(model_name: str, random_state: Optional[int] = None, enable_early_stopping: bool = None):
+def get_model_object(model_name: str, random_state: Optional[int] = None, enable_early_stopping: bool = None, dataset: str = None):
     """
     Create a model object with optimized parameters and early stopping support.
     
@@ -1208,15 +2509,6 @@ def get_model_object(model_name: str, random_state: Optional[int] = None, enable
         model_params = MODEL_OPTIMIZATIONS.get("LogisticRegression", {}).copy()
         if random_state is not None:
             model_params["random_state"] = random_state
-        
-        # Use the standard LogisticRegression with improved parameters for numerical stability
-        model_params.update({
-            "solver": "lbfgs",  # More stable solver
-            "C": 10.0,  # Stronger regularization
-            "max_iter": 2000,  # More iterations for convergence
-            "class_weight": "balanced",
-            "random_state": random_state
-        })
         base_model = LogisticRegression(**model_params)
     
     elif model_name == "SVR":
@@ -1236,14 +2528,102 @@ def get_model_object(model_name: str, random_state: Optional[int] = None, enable
         if "probability" not in model_params:
             model_params["probability"] = True
         base_model = SVC(**model_params)
+    
+    elif model_name == "BalancedRandomForest":
+        if not IMBALANCED_LEARN_AVAILABLE:
+            logger.warning("imbalanced-learn not available, falling back to RandomForestClassifier with class_weight='balanced'")
+            model_params = MODEL_OPTIMIZATIONS.get("RandomForestClassifier", {}).copy()
+            model_params["class_weight"] = "balanced"
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            base_model = RandomForestClassifier(**model_params)
+        else:
+            model_params = MODEL_OPTIMIZATIONS.get("BalancedRandomForest", {}).copy()
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            base_model = BalancedRandomForestClassifier(**model_params)
+    
+    elif model_name == "BalancedXGBoost":
+        if not XGBOOST_AVAILABLE:
+            logger.warning("XGBoost not available, falling back to GradientBoostingClassifier")
+            model_params = MODEL_OPTIMIZATIONS.get("GradientBoosting", {}).copy()
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            base_model = GradientBoostingClassifier(**model_params)
+        else:
+            model_params = MODEL_OPTIMIZATIONS.get("BalancedXGBoost", {}).copy()
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            # Remove eval_metric from params as it's handled differently in XGBClassifier
+            eval_metric = model_params.pop("eval_metric", "logloss")
+            base_model = xgb.XGBClassifier(eval_metric=eval_metric, **model_params)
+    
+    elif model_name == "BalancedLightGBM":
+        if not LIGHTGBM_AVAILABLE:
+            logger.warning("LightGBM not available, falling back to GradientBoostingClassifier")
+            model_params = MODEL_OPTIMIZATIONS.get("GradientBoosting", {}).copy()
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            base_model = GradientBoostingClassifier(**model_params)
+        else:
+            model_params = MODEL_OPTIMIZATIONS.get("BalancedLightGBM", {}).copy()
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            base_model = lgb.LGBMClassifier(**model_params)
+    
+    elif model_name == "ImprovedXGBRegressor":
+        if not XGBOOST_AVAILABLE:
+            logger.warning("XGBoost not available, falling back to GradientBoostingRegressor")
+            model_params = MODEL_OPTIMIZATIONS.get("RobustGradientBoosting", {}).copy()
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            base_model = GradientBoostingRegressor(**model_params)
+        else:
+            model_params = MODEL_OPTIMIZATIONS.get("ImprovedXGBRegressor", {}).copy()
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            base_model = xgb.XGBRegressor(**model_params)
+    
+    elif model_name == "ImprovedLightGBMRegressor":
+        if not LIGHTGBM_AVAILABLE:
+            logger.warning("LightGBM not available, falling back to GradientBoostingRegressor")
+            model_params = MODEL_OPTIMIZATIONS.get("RobustGradientBoosting", {}).copy()
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            base_model = GradientBoostingRegressor(**model_params)
+        else:
+            model_params = MODEL_OPTIMIZATIONS.get("ImprovedLightGBMRegressor", {}).copy()
+            if random_state is not None:
+                model_params["random_state"] = random_state
+            base_model = lgb.LGBMRegressor(**model_params)
+    
+    elif model_name == "RobustGradientBoosting":
+        model_params = MODEL_OPTIMIZATIONS.get("RobustGradientBoosting", {}).copy()
+        if random_state is not None:
+            model_params["random_state"] = random_state
+        base_model = GradientBoostingRegressor(**model_params)
+    
     else:
         raise ValueError(f"Unknown model: {model_name}")
     
     # For models that support early stopping, wrap them
     if enable_early_stopping and model_name in ["RandomForestRegressor", "RandomForestClassifier"]:
-        # Get early stopping parameters without the 'enabled' key
-        early_stopping_params = {k: v for k, v in EARLY_STOPPING_CONFIG.items() if k != 'enabled'}
+        # Get early stopping parameters without the 'enabled' key and invalid parameters
+        early_stopping_params = {k: v for k, v in EARLY_STOPPING_CONFIG.items() 
+                                if k not in ['enabled', 'adaptive_patience', 'max_patience']}
         base_model = EarlyStoppingWrapper(base_model, **early_stopping_params)
+    
+    # Apply target transformation for regression models if dataset is in registry
+    if dataset in TARGET_TRANSFORMS and model_name in ["LinearRegression", "Lasso", "ElasticNet", "RandomForestRegressor", "SVR", "ImprovedXGBRegressor", "ImprovedLightGBMRegressor", "RobustGradientBoosting"]:
+        from sklearn.compose import TransformedTargetRegressor
+        name, fwd, inv = TARGET_TRANSFORMS[dataset]
+        logger.info(f"Applying {name} target transformation for dataset {dataset}")
+        base_model = TransformedTargetRegressor(
+            regressor=base_model,
+            func=fwd,
+            inverse_func=inv,
+            check_inverse=False
+        )
     
     return base_model
 
@@ -1484,10 +2864,10 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
                 # Map selector type to method name
                 method_mapping = {
                     'variance_f_test_clf': 'variance_f_test',
-                    'rf_importance_clf': 'rf_importance', 
-                    'elastic_net_clf': 'elastic_net',
+                    'rf_importance_clf': 'genomic_ensemble',  # Use ensemble for RF importance
+                    'elastic_net_clf': 'genomic_ensemble',    # Use ensemble for elastic net (includes regularization)
                     'chi2_fast': 'chi2',
-                    'combined_fast_clf': 'combined_fast'
+                    'combined_fast_clf': 'genomic_ensemble'   # Use ensemble for combined methods
                 }
                 
                 method = method_mapping[selector_type]
@@ -2177,6 +3557,28 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, for
                 kernel='rbf',
                 random_state=42
             )
+        elif isinstance(extractor, SparsePLS):
+            try:
+                new_extractor = SparsePLS(
+                    n_components=effective_n_components,
+                    alpha=extractor.alpha,
+                    max_iter=extractor.max_iter,
+                    tol=extractor.tol,
+                    scale=extractor.scale
+                )
+                if y_safe is None:
+                    logger.warning(f"SparsePLS requires y values for fit_transform. Skipping extraction for {modality_name} in fold {fold_idx}.")
+                    return None, None
+                X_transformed = new_extractor.fit_transform(X_safe, y_safe)
+                logger.debug(f"SparsePLS extraction successful for {modality_name} in fold {fold_idx}: {X_transformed.shape} from {X_safe.shape}")
+                X_transformed = np.nan_to_num(X_transformed, nan=0.0)
+                
+                result = (new_extractor, X_transformed)
+                _extractor_cache['ext_reg'].put(key, result, item_size=X_transformed.nbytes)
+                return result
+            except Exception as e:
+                logger.warning(f"SparsePLS configuration failed for {modality_name}, falling back to PCA. Error: {str(e)}")
+                new_extractor = PCA(n_components=effective_n_components, random_state=42)
         else:
             # Default to PCA as a safe fallback
             logger.warning(f"Unknown extractor type: {type(extractor)} for {modality_name}, falling back to PCA")
@@ -2189,6 +3591,28 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, for
                 logger.error(f"Zero-size array detected just before fitting for {modality_name} in fold {fold_idx}: shape {X_safe.shape}")
                 return None, None
             
+            # CRITICAL: Final NaN check and cleaning before extractor training
+            if np.isnan(X_safe).any():
+                nan_count = np.isnan(X_safe).sum()
+                logger.warning(f"CRITICAL: {nan_count} NaN values detected in X_safe before {type(new_extractor).__name__} training for {modality_name} fold {fold_idx}")
+                logger.warning("This will cause extractor training to fail - cleaning now")
+                X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
+                logger.info(f"Cleaned {nan_count} NaN values before extractor training")
+            
+            if y_safe is not None and np.isnan(y_safe).any():
+                y_nan_count = np.isnan(y_safe).sum()
+                logger.warning(f"CRITICAL: {y_nan_count} NaN values detected in y_safe before {type(new_extractor).__name__} training for {modality_name} fold {fold_idx}")
+                y_median = np.nanmedian(y_safe) if not np.isnan(y_safe).all() else 0.0
+                y_safe = np.nan_to_num(y_safe, nan=y_median, posinf=y_median, neginf=y_median)
+                logger.info(f"Cleaned {y_nan_count} NaN values in target before extractor training")
+            
+            # Additional validation for infinite values
+            if np.isinf(X_safe).any():
+                inf_count = np.isinf(X_safe).sum()
+                logger.warning(f"CRITICAL: {inf_count} infinite values detected in X_safe before {type(new_extractor).__name__} training for {modality_name} fold {fold_idx}")
+                X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
+                logger.info(f"Cleaned {inf_count} infinite values before extractor training")
+            
             # Handle different extractor types that require y parameter
             if isinstance(new_extractor, LDA):
                 # LDA requires y parameter for fit_transform
@@ -2196,6 +3620,13 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, for
             else:
                 # Most other extractors don't use y in fit_transform
                 X_transformed = new_extractor.fit_transform(X_safe)
+            
+            # CRITICAL: Check if the extractor produced NaN values
+            if np.isnan(X_transformed).any():
+                nan_output_count = np.isnan(X_transformed).sum()
+                logger.error(f"CRITICAL: {type(new_extractor).__name__} produced {nan_output_count} NaN values for {modality_name} fold {fold_idx}")
+                logger.error("This indicates the extractor failed during training - will clean and continue")
+                X_transformed = np.nan_to_num(X_transformed, nan=0.0, posinf=0.0, neginf=0.0)
             
             logger.info(f"Extraction successful for {modality_name} in fold {fold_idx}: {X_transformed.shape} from {X_safe.shape}")
         except Exception as e:
@@ -2441,6 +3872,49 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
             except Exception as e:
                 logger.warning(f"KernelPCA configuration failed for {modality_name}, falling back to PCA: {str(e)}")
                 new_extractor = PCA(n_components=effective_n_components, random_state=42)
+        elif isinstance(extractor, PLSDiscriminantAnalysis):
+            try:
+                new_extractor = PLSDiscriminantAnalysis(
+                    n_components=effective_n_components,
+                    max_iter=extractor.max_iter,
+                    tol=extractor.tol,
+                    scale=extractor.scale
+                )
+                if y_safe is None:
+                    logger.warning(f"PLS-DA requires y values for fit_transform. Skipping extraction for {modality_name} in fold {fold_idx}.")
+                    return None, None
+                X_transformed = new_extractor.fit_transform(X_safe, y_safe)
+                logger.info(f"PLS-DA extraction successful for {modality_name} in fold {fold_idx}: {X_transformed.shape} from {X_safe.shape}")
+                X_transformed = np.nan_to_num(X_transformed, nan=0.0)
+                
+                result = (new_extractor, X_transformed)
+                _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes)
+                return result
+            except Exception as e:
+                logger.warning(f"PLS-DA configuration failed for {modality_name}, falling back to PCA. Error: {str(e)}")
+                new_extractor = PCA(n_components=effective_n_components, random_state=42)
+        elif isinstance(extractor, SparsePLS):
+            try:
+                new_extractor = SparsePLS(
+                    n_components=effective_n_components,
+                    alpha=extractor.alpha,
+                    max_iter=extractor.max_iter,
+                    tol=extractor.tol,
+                    scale=extractor.scale
+                )
+                if y_safe is None:
+                    logger.warning(f"SparsePLS requires y values for fit_transform. Skipping extraction for {modality_name} in fold {fold_idx}.")
+                    return None, None
+                X_transformed = new_extractor.fit_transform(X_safe, y_safe)
+                logger.info(f"SparsePLS extraction successful for {modality_name} in fold {fold_idx}: {X_transformed.shape} from {X_safe.shape}")
+                X_transformed = np.nan_to_num(X_transformed, nan=0.0)
+                
+                result = (new_extractor, X_transformed)
+                _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes)
+                return result
+            except Exception as e:
+                logger.warning(f"SparsePLS configuration failed for {modality_name}, falling back to PCA. Error: {str(e)}")
+                new_extractor = PCA(n_components=effective_n_components, random_state=42)
         elif extractor.__class__.__name__ == 'PLSRegression':
             try:
                 # Use the already imported PLSRegression from the top of the file
@@ -2470,6 +3944,28 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
                 logger.error(f"Zero-size array detected just before fitting for {modality_name} in fold {fold_idx}: shape {X_safe.shape}")
                 return None, None
             
+            # CRITICAL: Final NaN check and cleaning before extractor training
+            if np.isnan(X_safe).any():
+                nan_count = np.isnan(X_safe).sum()
+                logger.warning(f"CRITICAL: {nan_count} NaN values detected in X_safe before {type(new_extractor).__name__} training for {modality_name} fold {fold_idx}")
+                logger.warning("This will cause extractor training to fail - cleaning now")
+                X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
+                logger.info(f"Cleaned {nan_count} NaN values before extractor training")
+            
+            if y_safe is not None and np.isnan(y_safe).any():
+                y_nan_count = np.isnan(y_safe).sum()
+                logger.warning(f"CRITICAL: {y_nan_count} NaN values detected in y_safe before {type(new_extractor).__name__} training for {modality_name} fold {fold_idx}")
+                y_median = np.nanmedian(y_safe) if not np.isnan(y_safe).all() else 0.0
+                y_safe = np.nan_to_num(y_safe, nan=y_median, posinf=y_median, neginf=y_median)
+                logger.info(f"Cleaned {y_nan_count} NaN values in target before extractor training")
+            
+            # Additional validation for infinite values
+            if np.isinf(X_safe).any():
+                inf_count = np.isinf(X_safe).sum()
+                logger.warning(f"CRITICAL: {inf_count} infinite values detected in X_safe before {type(new_extractor).__name__} training for {modality_name} fold {fold_idx}")
+                X_safe = np.nan_to_num(X_safe, nan=0.0, posinf=0.0, neginf=0.0)
+                logger.info(f"Cleaned {inf_count} infinite values before extractor training")
+            
             # Handle different extractor types that require y parameter
             if isinstance(new_extractor, LDA):
                 # LDA requires y parameter for fit_transform
@@ -2477,6 +3973,13 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
             else:
                 # Most other extractors don't use y in fit_transform
                 X_transformed = new_extractor.fit_transform(X_safe)
+            
+            # CRITICAL: Check if the extractor produced NaN values
+            if np.isnan(X_transformed).any():
+                nan_output_count = np.isnan(X_transformed).sum()
+                logger.error(f"CRITICAL: {type(new_extractor).__name__} produced {nan_output_count} NaN values for {modality_name} fold {fold_idx}")
+                logger.error("This indicates the extractor failed during training - will clean and continue")
+                X_transformed = np.nan_to_num(X_transformed, nan=0.0, posinf=0.0, neginf=0.0)
             
             logger.info(f"Extraction successful for {modality_name} in fold {fold_idx}: {X_transformed.shape} from {X_safe.shape}")
         except Exception as e:
@@ -2995,3 +4498,508 @@ def validate_and_fix_shape_mismatch(X, y, name="dataset", fold_idx=None, allow_t
             except:
                 pass
         return None, None
+
+"""
+Model definitions and configurations for multi-modal machine learning pipeline.
+Optimized for genomic data with minimal regularization and high capacity.
+"""
+
+import numpy as np
+import warnings
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.linear_model import LinearRegression, LogisticRegression, ElasticNet, Lasso
+from sklearn.svm import SVR, SVC
+from sklearn.feature_selection import SelectKBest, SelectFromModel, RFE
+from sklearn.feature_selection import f_regression, f_classif, mutual_info_regression, mutual_info_classif
+from sklearn.preprocessing import StandardScaler
+import logging
+
+# Import configurations
+try:
+    from config import (
+        RANDOM_FOREST_CONFIG, ELASTIC_NET_CONFIG, LASSO_CONFIG, 
+        SVM_CONFIG, LOGISTIC_REGRESSION_CONFIG, EARLY_STOPPING_CONFIG
+    )
+except ImportError:
+    # Fallback configurations for genomic data
+    RANDOM_FOREST_CONFIG = {
+        'n_estimators': 1000, 'max_depth': None, 'min_samples_split': 2,
+        'min_samples_leaf': 1, 'max_features': 'sqrt', 'random_state': 42, 'n_jobs': -1
+    }
+    ELASTIC_NET_CONFIG = {
+        'alpha': 0.001, 'l1_ratio': 0.1, 'max_iter': 5000, 'random_state': 42
+    }
+    LASSO_CONFIG = {
+        'alpha': 0.0001, 'max_iter': 5000, 'random_state': 42
+    }
+    SVM_CONFIG = {
+        'C': 100.0, 'epsilon': 0.001, 'kernel': 'rbf', 'gamma': 'scale', 'max_iter': 10000
+    }
+    LOGISTIC_REGRESSION_CONFIG = {
+        'C': 100.0, 'max_iter': 5000, 'random_state': 42, 'solver': 'liblinear'
+    }
+
+logger = logging.getLogger(__name__)
+
+def get_regression_models():
+    """
+    Get regression models optimized for genomic data.
+    
+    Returns
+    -------
+    dict
+        Dictionary of model name to model instance
+    """
+    models = {
+        "LinearRegression": LinearRegression(n_jobs=-1),
+        
+        "RandomForestRegressor": RandomForestRegressor(**RANDOM_FOREST_CONFIG),
+        
+        "ElasticNet": ElasticNet(**ELASTIC_NET_CONFIG),
+        
+        "Lasso": Lasso(**LASSO_CONFIG),
+        
+        "SVR": SVR(**SVM_CONFIG)
+    }
+    
+    logger.debug(f"Created {len(models)} regression models with genomic optimization")
+    return models
+
+def get_classification_models():
+    """
+    Get classification models optimized for genomic data.
+    
+    Returns
+    -------
+    dict
+        Dictionary of model name to model instance
+    """
+    models = {
+        "LogisticRegression": LogisticRegression(**LOGISTIC_REGRESSION_CONFIG),
+        
+        "RandomForestClassifier": RandomForestClassifier(
+            n_estimators=RANDOM_FOREST_CONFIG['n_estimators'],
+            max_depth=RANDOM_FOREST_CONFIG['max_depth'],
+            min_samples_split=RANDOM_FOREST_CONFIG['min_samples_split'],
+            min_samples_leaf=RANDOM_FOREST_CONFIG['min_samples_leaf'],
+            max_features=RANDOM_FOREST_CONFIG['max_features'],
+            bootstrap=RANDOM_FOREST_CONFIG['bootstrap'],
+            random_state=RANDOM_FOREST_CONFIG['random_state'],
+            n_jobs=RANDOM_FOREST_CONFIG['n_jobs']
+        ),
+        
+        "SVC": SVC(
+            C=SVM_CONFIG['C'],
+            kernel=SVM_CONFIG['kernel'],
+            gamma=SVM_CONFIG['gamma'],
+            max_iter=SVM_CONFIG['max_iter'],
+            random_state=42
+        )
+    }
+    
+    logger.debug(f"Created {len(models)} classification models with genomic optimization")
+    return models
+
+
+
+def validate_model_performance(y_true, y_pred, is_regression=True, model_name="Unknown"):
+    """
+    Validate model performance against genomic data targets.
+    
+    Parameters
+    ----------
+    y_true : array-like
+        True values
+    y_pred : array-like
+        Predicted values
+    is_regression : bool
+        Whether this is regression
+    model_name : str
+        Name of the model for logging
+        
+    Returns
+    -------
+    dict
+        Performance metrics and validation results
+    """
+    from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+    from sklearn.metrics import accuracy_score, roc_auc_score, matthews_corrcoef, f1_score
+    
+    try:
+        if is_regression:
+            r2 = r2_score(y_true, y_pred)
+            rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+            mae = mean_absolute_error(y_true, y_pred)
+            
+            # Check against targets
+            from config import PERFORMANCE_TARGETS
+            targets = PERFORMANCE_TARGETS['regression']
+            
+            validation = {
+                'r2_target_met': r2 >= targets['r2_min'],
+                'performance_adequate': r2 >= 0.3,  # Minimum acceptable
+                'metrics': {'r2': r2, 'rmse': rmse, 'mae': mae}
+            }
+            
+            if r2 < 0.1:
+                logger.warning(f"{model_name}: Very poor R² = {r2:.4f}")
+            elif r2 >= targets['r2_min']:
+                logger.info(f"{model_name}: Target R² achieved = {r2:.4f}")
+                
+        else:
+            accuracy = accuracy_score(y_true, y_pred)
+            mcc = matthews_corrcoef(y_true, y_pred)
+            f1 = f1_score(y_true, y_pred, average='weighted')
+            
+            # Try to compute AUC if possible
+            try:
+                if len(np.unique(y_true)) == 2:  # Binary classification
+                    auc = roc_auc_score(y_true, y_pred)
+                else:
+                    auc = roc_auc_score(y_true, y_pred, multi_class='ovr', average='weighted')
+            except:
+                auc = 0.5
+            
+            # Check against targets
+            from config import PERFORMANCE_TARGETS
+            targets = PERFORMANCE_TARGETS['classification']
+            
+            validation = {
+                'accuracy_target_met': accuracy >= targets['accuracy_min'],
+                'mcc_target_met': mcc >= targets['mcc_min'],
+                'performance_adequate': accuracy >= 0.6 and mcc >= 0.3,
+                'metrics': {'accuracy': accuracy, 'mcc': mcc, 'f1': f1, 'auc': auc}
+            }
+            
+            if mcc < 0.1:
+                logger.warning(f"{model_name}: Very poor MCC = {mcc:.4f}")
+            elif mcc >= targets['mcc_min']:
+                logger.info(f"{model_name}: Target MCC achieved = {mcc:.4f}")
+        
+        return validation
+        
+    except Exception as e:
+        logger.error(f"Error validating performance for {model_name}: {e}")
+        return {'performance_adequate': False, 'metrics': {}}
+
+# Additional utility functions for genomic data
+
+def get_adaptive_regularization(n_features, n_samples):
+    """
+    Get adaptive regularization parameters based on data dimensions.
+    
+    Parameters
+    ----------
+    n_features : int
+        Number of features
+    n_samples : int
+        Number of samples
+        
+    Returns
+    -------
+    dict
+        Adaptive regularization parameters
+    """
+    # For genomic data: less regularization when we have more features
+    feature_ratio = n_features / n_samples
+    
+    if feature_ratio > 10:  # High-dimensional case
+        alpha_elastic = 0.0001
+        alpha_lasso = 0.00001
+        C_logistic = 1000.0
+        C_svm = 100.0
+    elif feature_ratio > 5:  # Medium-dimensional
+        alpha_elastic = 0.001
+        alpha_lasso = 0.0001
+        C_logistic = 100.0
+        C_svm = 10.0
+    else:  # Lower-dimensional
+        alpha_elastic = 0.01
+        alpha_lasso = 0.001
+        C_logistic = 10.0
+        C_svm = 1.0
+    
+    return {
+        'elastic_alpha': alpha_elastic,
+        'lasso_alpha': alpha_lasso,
+        'logistic_C': C_logistic,
+        'svm_C': C_svm
+    }
+
+def get_genomic_optimized_models(n_features, n_samples, is_regression=True):
+    """
+    Get models optimized for specific genomic data dimensions.
+    
+    Parameters
+    ----------
+    n_features : int
+        Number of features
+    n_samples : int
+        Number of samples
+    is_regression : bool
+        Whether this is regression
+        
+    Returns
+    -------
+    dict
+        Optimized models for the data dimensions
+    """
+    adaptive_params = get_adaptive_regularization(n_features, n_samples)
+    
+    if is_regression:
+        models = {
+            "LinearRegression": LinearRegression(n_jobs=-1),
+            
+            "RandomForestRegressor": RandomForestRegressor(
+                n_estimators=min(1000, max(100, n_samples * 2)),
+                max_depth=None,
+                min_samples_split=max(2, n_samples // 50),
+                min_samples_leaf=1,
+                max_features='sqrt',
+                random_state=42,
+                n_jobs=-1
+            ),
+            
+            "ElasticNet": ElasticNet(
+                alpha=adaptive_params['elastic_alpha'],
+                l1_ratio=0.1,
+                max_iter=5000,
+                random_state=42
+            ),
+            
+            "Lasso": Lasso(
+                alpha=adaptive_params['lasso_alpha'],
+                max_iter=5000,
+                random_state=42
+            ),
+            
+            "SVR": SVR(
+                C=adaptive_params['svm_C'],
+                epsilon=0.001,
+                kernel='rbf',
+                gamma='scale'
+            )
+        }
+    else:
+        models = {
+            "LogisticRegression": LogisticRegression(
+                C=adaptive_params['logistic_C'],
+                max_iter=5000,
+                random_state=42,
+                solver='liblinear'
+            ),
+            
+            "RandomForestClassifier": RandomForestClassifier(
+                n_estimators=min(1000, max(100, n_samples * 2)),
+                max_depth=None,
+                min_samples_split=max(2, n_samples // 50),
+                min_samples_leaf=1,
+                max_features='sqrt',
+                random_state=42,
+                n_jobs=-1
+            ),
+            
+            "SVC": SVC(
+                C=adaptive_params['svm_C'],
+                kernel='rbf',
+                gamma='scale',
+                random_state=42
+            )
+        }
+    
+    logger.info(f"Created adaptive models for {n_features} features, {n_samples} samples")
+    return models
+
+def optimize_model_hyperparameters(model_name: str, X_train, y_train, X_val, y_val, 
+                                  is_regression=True, n_trials=30, random_state=42):
+    """
+    Optimize model hyperparameters using Bayesian optimization.
+    
+    Parameters
+    ----------
+    model_name : str
+        Name of the model to optimize
+    X_train, y_train : array-like
+        Training data
+    X_val, y_val : array-like
+        Validation data for optimization
+    is_regression : bool
+        Whether this is a regression task
+    n_trials : int
+        Number of optimization trials
+    random_state : int
+        Random state for reproducibility
+        
+    Returns
+    -------
+    object
+        Optimized model
+    """
+    if not SKOPT_AVAILABLE:
+        logger.warning("scikit-optimize not available, returning default model")
+        return get_model_object(model_name, random_state)
+    
+    # Define search spaces for different models
+    search_spaces = {
+        "XGBRegressor": [
+            Integer(50, 500, name='n_estimators'),
+            Integer(3, 10, name='max_depth'),
+            Real(0.01, 0.3, name='learning_rate'),
+            Real(0.6, 1.0, name='subsample'),
+            Real(0.6, 1.0, name='colsample_bytree'),
+            Real(0.0, 2.0, name='reg_alpha'),
+            Real(0.0, 2.0, name='reg_lambda')
+        ],
+        "XGBClassifier": [
+            Integer(50, 500, name='n_estimators'),
+            Integer(3, 10, name='max_depth'),
+            Real(0.01, 0.3, name='learning_rate'),
+            Real(0.6, 1.0, name='subsample'),
+            Real(0.6, 1.0, name='colsample_bytree'),
+            Real(0.0, 2.0, name='reg_alpha'),
+            Real(0.0, 2.0, name='reg_lambda')
+        ],
+        "LGBMRegressor": [
+            Integer(50, 500, name='n_estimators'),
+            Integer(3, 10, name='max_depth'),
+            Real(0.01, 0.3, name='learning_rate'),
+            Real(0.6, 1.0, name='subsample'),
+            Real(0.6, 1.0, name='colsample_bytree'),
+            Real(0.0, 2.0, name='reg_alpha'),
+            Real(0.0, 2.0, name='reg_lambda')
+        ],
+        "LGBMClassifier": [
+            Integer(50, 500, name='n_estimators'),
+            Integer(3, 10, name='max_depth'),
+            Real(0.01, 0.3, name='learning_rate'),
+            Real(0.6, 1.0, name='subsample'),
+            Real(0.6, 1.0, name='colsample_bytree'),
+            Real(0.0, 2.0, name='reg_alpha'),
+            Real(0.0, 2.0, name='reg_lambda')
+        ],
+        "RandomForestRegressor": [
+            Integer(100, 1000, name='n_estimators'),
+            Integer(5, 50, name='max_depth'),
+            Integer(1, 10, name='min_samples_leaf'),
+            Integer(2, 20, name='min_samples_split')
+        ],
+        "RandomForestClassifier": [
+            Integer(100, 1000, name='n_estimators'),
+            Integer(5, 50, name='max_depth'),
+            Integer(1, 10, name='min_samples_leaf'),
+            Integer(2, 20, name='min_samples_split')
+        ],
+        "LogisticRegression": [
+            Real(0.01, 10.0, name='C', prior='log-uniform'),
+            Categorical(['l1', 'l2'], name='penalty')
+        ],
+        "ElasticNet": [
+            Real(0.001, 10.0, name='alpha', prior='log-uniform'),
+            Real(0.1, 0.9, name='l1_ratio')
+        ],
+        "GradientBoostingRegressor": [
+            Integer(50, 500, name='n_estimators'),
+            Integer(3, 10, name='max_depth'),
+            Real(0.01, 0.3, name='learning_rate'),
+            Real(0.6, 1.0, name='subsample')
+        ],
+        "GradientBoostingClassifier": [
+            Integer(50, 500, name='n_estimators'),
+            Integer(3, 10, name='max_depth'),
+            Real(0.01, 0.3, name='learning_rate'),
+            Real(0.6, 1.0, name='subsample')
+        ]
+    }
+    
+    if model_name not in search_spaces:
+        logger.warning(f"No hyperparameter search space defined for {model_name}, using default")
+        return get_model_object(model_name, random_state)
+    
+    search_space = search_spaces[model_name]
+    
+    @use_named_args(search_space)
+    def objective(**params):
+        """Objective function for hyperparameter optimization."""
+        try:
+            # Create model with current parameters
+            if model_name == "XGBRegressor" and XGBOOST_AVAILABLE:
+                model = xgb.XGBRegressor(random_state=random_state, verbosity=0, **params)
+            elif model_name == "XGBClassifier" and XGBOOST_AVAILABLE:
+                model = xgb.XGBClassifier(random_state=random_state, verbosity=0, 
+                                        eval_metric='logloss', **params)
+            elif model_name == "LGBMRegressor" and LIGHTGBM_AVAILABLE:
+                model = lgb.LGBMRegressor(random_state=random_state, verbosity=-1, **params)
+            elif model_name == "LGBMClassifier" and LIGHTGBM_AVAILABLE:
+                model = lgb.LGBMClassifier(random_state=random_state, verbosity=-1, **params)
+            elif model_name == "RandomForestRegressor":
+                model = RandomForestRegressor(random_state=random_state, **params)
+            elif model_name == "RandomForestClassifier":
+                model = RandomForestClassifier(random_state=random_state, 
+                                             class_weight='balanced', **params)
+            elif model_name == "LogisticRegression":
+                model = LogisticRegression(random_state=random_state, solver='liblinear',
+                                         class_weight='balanced', max_iter=500, **params)
+            elif model_name == "ElasticNet":
+                model = ElasticNet(random_state=random_state, max_iter=5000, **params)
+            elif model_name == "GradientBoostingRegressor":
+                model = GradientBoostingRegressor(random_state=random_state, **params)
+            elif model_name == "GradientBoostingClassifier":
+                model = GradientBoostingClassifier(random_state=random_state, **params)
+            else:
+                return 1.0  # Return poor score for unsupported models
+            
+            # Fit and evaluate
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_val)
+            
+            if is_regression:
+                # For regression, minimize negative R²
+                score = -r2_score(y_val, y_pred)
+            else:
+                # For classification, minimize negative accuracy
+                score = -accuracy_score(y_val, y_pred)
+            
+            return score
+            
+        except Exception as e:
+            logger.warning(f"Error in hyperparameter optimization for {model_name}: {str(e)}")
+            return 1.0  # Return poor score on error
+    
+    # Run optimization
+    try:
+        logger.info(f"Starting hyperparameter optimization for {model_name} with {n_trials} trials")
+        result = gp_minimize(objective, search_space, n_calls=n_trials, 
+                           random_state=random_state, n_initial_points=10)
+        
+        # Get best parameters
+        best_params = dict(zip([dim.name for dim in search_space], result.x))
+        logger.info(f"Best parameters for {model_name}: {best_params}")
+        
+        # Create optimized model
+        if model_name == "XGBRegressor" and XGBOOST_AVAILABLE:
+            return xgb.XGBRegressor(random_state=random_state, verbosity=0, **best_params)
+        elif model_name == "XGBClassifier" and XGBOOST_AVAILABLE:
+            return xgb.XGBClassifier(random_state=random_state, verbosity=0, 
+                                   eval_metric='logloss', **best_params)
+        elif model_name == "LGBMRegressor" and LIGHTGBM_AVAILABLE:
+            return lgb.LGBMRegressor(random_state=random_state, verbosity=-1, **best_params)
+        elif model_name == "LGBMClassifier" and LIGHTGBM_AVAILABLE:
+            return lgb.LGBMClassifier(random_state=random_state, verbosity=-1, **best_params)
+        elif model_name == "RandomForestRegressor":
+            return RandomForestRegressor(random_state=random_state, **best_params)
+        elif model_name == "RandomForestClassifier":
+            return RandomForestClassifier(random_state=random_state, 
+                                        class_weight='balanced', **best_params)
+        elif model_name == "LogisticRegression":
+            return LogisticRegression(random_state=random_state, solver='liblinear',
+                                    class_weight='balanced', max_iter=500, **best_params)
+        elif model_name == "ElasticNet":
+            return ElasticNet(random_state=random_state, max_iter=5000, **best_params)
+        elif model_name == "GradientBoostingRegressor":
+            return GradientBoostingRegressor(random_state=random_state, **best_params)
+        elif model_name == "GradientBoostingClassifier":
+            return GradientBoostingClassifier(random_state=random_state, **best_params)
+        
+    except Exception as e:
+        logger.error(f"Hyperparameter optimization failed for {model_name}: {str(e)}")
+        return get_model_object(model_name, random_state)

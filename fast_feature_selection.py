@@ -1,70 +1,74 @@
 """
-Fast Feature Selection Algorithms for High-Dimensional Genomic Data
+Fast feature selection algorithms optimized for genomic data.
 
-This module provides efficient alternatives to MRMR for feature selection
-in cancer genomics datasets with thousands of features and limited samples.
-Optimized for TCGA multi-omics data characteristics.
+This module provides genomic-optimized feature selection that:
+1. Uses much larger feature sets (hundreds to thousands)
+2. Employs ensemble methods for robustness
+3. Minimizes aggressive filtering that loses biological signal
+4. Implements biological relevance scoring
 """
 
 import numpy as np
 import pandas as pd
+import warnings
+from typing import Union, List, Tuple, Optional, Dict
+import logging
 from sklearn.feature_selection import (
-    SelectKBest, f_regression, f_classif, chi2, 
-    VarianceThreshold, RFE, SelectFromModel
+    SelectKBest, SelectFromModel, RFE, VarianceThreshold,
+    f_regression, f_classif, mutual_info_regression, mutual_info_classif, chi2
 )
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.linear_model import ElasticNet, LogisticRegression, Lasso
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.linear_model import ElasticNet, Lasso, LogisticRegression, LassoCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score
 from scipy.stats import pearsonr, spearmanr
-import logging
-from typing import Union, Tuple, Optional, List
-import warnings
+from scipy import stats
 
 logger = logging.getLogger(__name__)
 
-class FastFeatureSelector:
+class GenomicFeatureSelector:
     """
-    Fast feature selection algorithms optimized for high-dimensional genomic data.
+    Genomic-optimized feature selection with ensemble methods and biological relevance.
     
-    Provides multiple algorithms as alternatives to MRMR with significantly
-    faster computation times while maintaining good performance on cancer genomics data.
+    This selector is designed specifically for genomic data where:
+    - We need hundreds to thousands of features
+    - Biological signal is often weak and distributed
+    - Traditional aggressive filtering loses important information
     """
     
-    def __init__(self, method: str = "variance_f_test", n_features: int = 100, 
+    def __init__(self, method: str = "genomic_ensemble", n_features: int = 512, 
                  random_state: int = 42, **kwargs):
         """
-        Initialize the fast feature selector.
+        Initialize the genomic feature selector.
         
         Parameters
         ----------
         method : str
-            Feature selection method to use. Options:
-            - 'variance_f_test': Variance threshold + F-test (recommended)
-            - 'rf_importance': Random Forest feature importance
-            - 'elastic_net': Elastic Net regularization
-            - 'rfe_linear': Recursive Feature Elimination with linear model
-            - 'correlation': Correlation-based selection (regression only)
-            - 'chi2': Chi-square test (classification only)
-            - 'lasso': LASSO regularization
-            - 'combined_fast': Multi-step fast selection
+            Feature selection method:
+            - 'genomic_ensemble': Multi-method ensemble (recommended)
+            - 'biological_relevance': Biology-informed selection
+            - 'permissive_univariate': Very permissive statistical selection
+            - 'stability_selection': Stability-based selection
+            - 'variance_f_test': Variance + F-test (fast)
         n_features : int
-            Number of features to select
+            Number of features to select (default: 512 for genomic data)
         random_state : int
             Random state for reproducibility
         **kwargs : dict
-            Additional parameters for specific methods
+            Additional parameters
         """
         self.method = method
-        self.n_features = n_features
+        self.n_features = max(n_features, 50)  # Minimum 50 features for genomic data
         self.random_state = random_state
         self.kwargs = kwargs
         self.selector_ = None
         self.selected_features_ = None
         self.feature_scores_ = None
+        self.ensemble_scores_ = None
         
-    def fit(self, X: np.ndarray, y: np.ndarray, is_regression: bool = True) -> 'FastFeatureSelector':
+    def fit(self, X: np.ndarray, y: np.ndarray, is_regression: bool = True) -> 'GenomicFeatureSelector':
         """
-        Fit the feature selector to the data.
+        Fit the genomic feature selector.
         
         Parameters
         ----------
@@ -77,7 +81,7 @@ class FastFeatureSelector:
             
         Returns
         -------
-        self : FastFeatureSelector
+        self : GenomicFeatureSelector
             Fitted selector
         """
         X = np.asarray(X)
@@ -87,359 +91,222 @@ class FastFeatureSelector:
         if X.shape[0] != len(y):
             raise ValueError("X and y must have the same number of samples")
         
-        # Cap n_features to available features
-        self.n_features = min(self.n_features, X.shape[1])
+        # Cap n_features to available features but be very permissive
+        self.n_features = min(self.n_features, int(X.shape[1] * 0.95))  # Use up to 95% of features
         
-        # Select method based on task type and method name
-        if self.method == "variance_f_test":
+        logger.info(f"GenomicFS: Selecting {self.n_features} from {X.shape[1]} features using {self.method}")
+        
+        # Select method
+        if self.method == "genomic_ensemble":
+            self._fit_genomic_ensemble(X, y, is_regression)
+        elif self.method == "biological_relevance":
+            self._fit_biological_relevance(X, y, is_regression)
+        elif self.method == "permissive_univariate":
+            self._fit_permissive_univariate(X, y, is_regression)
+        elif self.method == "stability_selection":
+            self._fit_stability_selection(X, y, is_regression)
+        elif self.method == "variance_f_test":
             self._fit_variance_f_test(X, y, is_regression)
-        elif self.method == "rf_importance":
-            self._fit_rf_importance(X, y, is_regression)
-        elif self.method == "elastic_net":
-            self._fit_elastic_net(X, y, is_regression)
-        elif self.method == "rfe_linear":
-            self._fit_rfe_linear(X, y, is_regression)
-        elif self.method == "correlation" and is_regression:
-            self._fit_correlation(X, y)
-        elif self.method == "chi2" and not is_regression:
-            self._fit_chi2(X, y)
-        elif self.method == "lasso":
-            self._fit_lasso(X, y, is_regression)
-        elif self.method == "combined_fast":
-            self._fit_combined_fast(X, y, is_regression)
+        elif self.method == "chi2":
+            self._fit_chi2(X, y, is_regression)
         else:
-            # Fallback to appropriate univariate method
-            if is_regression:
-                self._fit_variance_f_test(X, y, is_regression)
-            else:
-                self._fit_variance_f_test(X, y, is_regression)
+            # Fallback to genomic ensemble
+            logger.warning(f"Unknown method {self.method}, using genomic_ensemble")
+            self._fit_genomic_ensemble(X, y, is_regression)
                 
+        logger.info(f"GenomicFS: Selected {len(self.selected_features_)} features")
         return self
     
-    def transform(self, X: np.ndarray) -> np.ndarray:
+    def _fit_genomic_ensemble(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
         """
-        Transform the data using selected features.
+        Ensemble method combining multiple genomic-appropriate selectors.
+        """
+        logger.debug("GenomicFS: Using ensemble method for genomic data")
         
-        Parameters
-        ----------
-        X : np.ndarray
-            Feature matrix to transform
-            
-        Returns
-        -------
-        np.ndarray
-            Transformed feature matrix with selected features only
-        """
-        if self.selected_features_ is None:
-            raise ValueError("Selector must be fitted before transform")
-            
-        X = np.asarray(X)
-        return X[:, self.selected_features_]
-    
-    def fit_transform(self, X: np.ndarray, y: np.ndarray, is_regression: bool = True) -> np.ndarray:
-        """
-        Fit the selector and transform the data in one step.
+        methods = []
         
-        Parameters
-        ----------
-        X : np.ndarray
-            Feature matrix
-        y : np.ndarray
-            Target vector
-        is_regression : bool
-            Whether this is a regression task
-            
-        Returns
-        -------
-        np.ndarray
-            Transformed feature matrix
-        """
-        return self.fit(X, y, is_regression).transform(X)
-    
-    def get_selected_features(self) -> np.ndarray:
-        """Get indices of selected features."""
-        if self.selected_features_ is None:
-            raise ValueError("Selector must be fitted first")
-        return self.selected_features_
-    
-    def get_feature_scores(self) -> Optional[np.ndarray]:
-        """Get feature importance scores if available."""
-        return self.feature_scores_
-    
-    def _fit_variance_f_test(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
-        """Variance threshold followed by F-test (recommended for speed + performance)."""
-        logger.debug(f"FastFS: Using variance + F-test selection for {X.shape[1]} features")
-        
-        # Get configuration
+        # Method 1: Very permissive univariate selection (top 80% of features)
         try:
-            from config import FAST_FEATURE_SELECTION_CONFIG
-            variance_threshold = self.kwargs.get('variance_threshold', 
-                                               FAST_FEATURE_SELECTION_CONFIG.get('variance_threshold', 0.01))
-        except ImportError:
-            variance_threshold = self.kwargs.get('variance_threshold', 0.01)
+            n_univariate = min(int(X.shape[1] * 0.8), self.n_features * 3)
+            if is_regression:
+                selector = SelectKBest(f_regression, k=n_univariate)
+            else:
+                selector = SelectKBest(f_classif, k=n_univariate)
+            
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+                selector.fit(X, y)
+            
+            univariate_scores = np.zeros(X.shape[1])
+            selected_indices = selector.get_support(indices=True)
+            # Ensure we only use scores for the selected features
+            if len(selected_indices) == len(selector.scores_):
+                univariate_scores[selected_indices] = selector.scores_
+            else:
+                # Handle mismatch by using only the available scores
+                min_len = min(len(selected_indices), len(selector.scores_))
+                univariate_scores[selected_indices[:min_len]] = selector.scores_[:min_len]
+            methods.append(('univariate', univariate_scores))
+            
+        except Exception as e:
+            logger.warning(f"Univariate selection failed: {e}")
         
-        # Step 1: Remove low-variance features (very fast)
-        var_selector = VarianceThreshold(threshold=variance_threshold)
+        # Method 2: Mutual information (captures non-linear relationships)
+        try:
+            if is_regression:
+                mi_scores = mutual_info_regression(X, y, random_state=self.random_state)
+            else:
+                mi_scores = mutual_info_classif(X, y, random_state=self.random_state)
+            methods.append(('mutual_info', mi_scores))
+            
+        except Exception as e:
+            logger.warning(f"Mutual information failed: {e}")
+        
+        # Method 3: Random Forest importance (captures feature interactions)
+        try:
+            if is_regression:
+                rf = RandomForestRegressor(
+                    n_estimators=100, max_depth=10, min_samples_split=5,
+                    random_state=self.random_state, n_jobs=-1
+                )
+            else:
+                rf = RandomForestClassifier(
+                    n_estimators=100, max_depth=10, min_samples_split=5,
+                    random_state=self.random_state, n_jobs=-1
+                )
+            
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+                rf.fit(X, y)
+            
+            rf_scores = rf.feature_importances_
+            methods.append(('random_forest', rf_scores))
+            
+        except Exception as e:
+            logger.warning(f"Random Forest importance failed: {e}")
+        
+        # Method 4: Minimal regularization (very permissive)
+        try:
+            if is_regression:
+                model = ElasticNet(alpha=0.00001, l1_ratio=0.1, max_iter=1000, random_state=self.random_state)
+            else:
+                model = LogisticRegression(
+                    C=10000.0, penalty='l1', solver='liblinear', 
+                    max_iter=1000, random_state=self.random_state
+                )
+            
+            # Scale features for regularization
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+            
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+                model.fit(X_scaled, y)
+            
+            if hasattr(model, 'coef_'):
+                if model.coef_.ndim > 1:
+                    reg_scores = np.abs(model.coef_).max(axis=0)
+                else:
+                    reg_scores = np.abs(model.coef_)
+            else:
+                reg_scores = np.abs(model.feature_importances_)
+            
+            methods.append(('regularization', reg_scores))
+            
+        except Exception as e:
+            logger.warning(f"Regularization method failed: {e}")
+        
+        # Method 5: Correlation-based (for regression)
+        if is_regression:
+            try:
+                correlations = np.zeros(X.shape[1])
+                for i in range(X.shape[1]):
+                    try:
+                        corr, _ = spearmanr(X[:, i], y)
+                        correlations[i] = abs(corr) if not np.isnan(corr) else 0
+                    except:
+                        correlations[i] = 0
+                
+                methods.append(('correlation', correlations))
+                
+            except Exception as e:
+                logger.warning(f"Correlation method failed: {e}")
+        
+        # Combine methods using rank aggregation
+        if not methods:
+            logger.error("All feature selection methods failed, using variance fallback")
+            self._fit_variance_fallback(X)
+            return
+        
+        # Rank aggregation with genomic-appropriate weighting
+        combined_scores = self._combine_genomic_scores(methods, X.shape[1])
+        
+        # Select top features
+        top_indices = np.argsort(combined_scores)[-self.n_features:]
+        
+        self.selected_features_ = top_indices
+        self.feature_scores_ = combined_scores[top_indices]
+        self.ensemble_scores_ = {name: scores for name, scores in methods}
+        
+        logger.info(f"GenomicFS: Ensemble used {len(methods)} methods")
+    
+    def _fit_biological_relevance(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
+        """
+        Biology-informed feature selection considering genomic characteristics.
+        """
+        logger.debug("GenomicFS: Using biological relevance scoring")
+        
+        # Start with statistical significance
+        if is_regression:
+            selector = SelectKBest(f_regression, k=min(self.n_features * 5, X.shape[1]))
+        else:
+            selector = SelectKBest(f_classif, k=min(self.n_features * 5, X.shape[1]))
+        
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore')
+            selector.fit(X, y)
+        
+        base_scores = selector.scores_
+        
+        # Add biological relevance factors
+        bio_scores = np.copy(base_scores)
+        
+        # Factor 1: Variance stability (prefer features with consistent variance)
+        variances = np.var(X, axis=0)
+        variance_stability = 1.0 / (1.0 + np.abs(variances - np.median(variances)))
+        bio_scores *= (1.0 + 0.2 * variance_stability)
+        
+        # Factor 2: Non-zero expression (prefer features with more non-zero values)
+        non_zero_ratio = np.mean(X != 0, axis=0)
+        bio_scores *= (1.0 + 0.3 * non_zero_ratio)
+        
+        # Factor 3: Dynamic range (prefer features with good dynamic range)
+        ranges = np.ptp(X, axis=0)  # peak-to-peak
+        normalized_ranges = ranges / (np.max(ranges) + 1e-10)
+        bio_scores *= (1.0 + 0.2 * normalized_ranges)
+        
+        # Select top features
+        top_indices = np.argsort(bio_scores)[-self.n_features:]
+        
+        self.selected_features_ = top_indices
+        self.feature_scores_ = bio_scores[top_indices]
+        
+        logger.info("GenomicFS: Applied biological relevance scoring")
+    
+    def _fit_permissive_univariate(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
+        """
+        Very permissive univariate selection for genomic data.
+        """
+        logger.debug("GenomicFS: Using permissive univariate selection")
+        
+        # Use very low variance threshold
+        var_threshold = self.kwargs.get('variance_threshold', 1e-6)
+        var_selector = VarianceThreshold(threshold=var_threshold)
         
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore')
             X_var = var_selector.fit_transform(X)
         
-        var_features = np.where(var_selector.get_support())[0]
-        logger.debug(f"FastFS: Variance filter kept {X_var.shape[1]}/{X.shape[1]} features")
-        
-        # Step 2: F-test on remaining features
-        if X_var.shape[1] <= self.n_features:
-            # If we have fewer features than requested, use all
-            self.selected_features_ = var_features
-            self.feature_scores_ = np.ones(len(var_features))
-        else:
-            # Select top features using F-test
-            if is_regression:
-                f_selector = SelectKBest(f_regression, k=self.n_features)
-            else:
-                f_selector = SelectKBest(f_classif, k=self.n_features)
-            
-            with warnings.catch_warnings():
-                warnings.filterwarnings('ignore')
-                f_selector.fit(X_var, y)
-            
-            # Map back to original feature indices
-            f_features = np.where(f_selector.get_support())[0]
-            self.selected_features_ = var_features[f_features]
-            self.feature_scores_ = f_selector.scores_[f_features]
-        
-        logger.debug(f"FastFS: Selected {len(self.selected_features_)} features using variance + F-test")
-    
-    def _fit_rf_importance(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
-        """Random Forest feature importance selection."""
-        logger.debug(f"FastFS: Using Random Forest importance for {X.shape[1]} features")
-        
-        # Get configuration
-        try:
-            from config import FAST_FEATURE_SELECTION_CONFIG
-            n_estimators = self.kwargs.get('n_estimators', 
-                                         FAST_FEATURE_SELECTION_CONFIG.get('rf_n_estimators', 50))
-            max_depth = self.kwargs.get('max_depth', 
-                                      FAST_FEATURE_SELECTION_CONFIG.get('rf_max_depth', 10))
-        except ImportError:
-            n_estimators = self.kwargs.get('n_estimators', 50)
-            max_depth = self.kwargs.get('max_depth', 10)
-        
-        if is_regression:
-            rf = RandomForestRegressor(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                random_state=self.random_state,
-                n_jobs=-1
-            )
-        else:
-            rf = RandomForestClassifier(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                random_state=self.random_state,
-                n_jobs=-1
-            )
-        
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore')
-            rf.fit(X, y)
-        
-        # Get feature importances and select top features
-        importances = rf.feature_importances_
-        top_indices = np.argsort(importances)[-self.n_features:]
-        
-        self.selected_features_ = top_indices
-        self.feature_scores_ = importances[top_indices]
-        
-        logger.debug(f"FastFS: Selected {len(self.selected_features_)} features using RF importance")
-    
-    def _fit_elastic_net(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
-        """Elastic Net regularization for feature selection."""
-        logger.debug(f"FastFS: Using Elastic Net for {X.shape[1]} features")
-        
-        # Scale features for regularization
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        
-        # Set regularization parameters
-        alpha = self.kwargs.get('alpha', 0.01)
-        l1_ratio = self.kwargs.get('l1_ratio', 0.5)
-        
-        if is_regression:
-            model = ElasticNet(
-                alpha=alpha,
-                l1_ratio=l1_ratio,
-                random_state=self.random_state,
-                max_iter=1000
-            )
-        else:
-            model = LogisticRegression(
-                penalty='elasticnet',
-                C=1/alpha,  # sklearn uses C = 1/alpha
-                l1_ratio=l1_ratio,
-                random_state=self.random_state,
-                solver='saga',
-                max_iter=1000
-            )
-        
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore')
-            model.fit(X_scaled, y)
-        
-        # Get non-zero coefficients
-        if hasattr(model, 'coef_'):
-            if model.coef_.ndim > 1:
-                coef = np.abs(model.coef_).max(axis=0)  # Multi-class case
-            else:
-                coef = np.abs(model.coef_)
-        else:
-            coef = np.abs(model.feature_importances_)
-        
-        # Select top features with non-zero coefficients
-        non_zero_mask = coef > 1e-10
-        if np.sum(non_zero_mask) >= self.n_features:
-            # Select top n_features from non-zero coefficients
-            non_zero_indices = np.where(non_zero_mask)[0]
-            non_zero_coef = coef[non_zero_mask]
-            top_indices = non_zero_indices[np.argsort(non_zero_coef)[-self.n_features:]]
-        else:
-            # If fewer non-zero features, select top overall
-            top_indices = np.argsort(coef)[-self.n_features:]
-        
-        self.selected_features_ = top_indices
-        self.feature_scores_ = coef[top_indices]
-        
-        logger.debug(f"FastFS: Selected {len(self.selected_features_)} features using Elastic Net")
-    
-    def _fit_rfe_linear(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
-        """Recursive Feature Elimination with linear model."""
-        logger.debug(f"FastFS: Using RFE with linear model for {X.shape[1]} features")
-        
-        # Use simple linear models for speed
-        if is_regression:
-            from sklearn.linear_model import LinearRegression
-            estimator = LinearRegression()
-        else:
-            estimator = LogisticRegression(
-                random_state=self.random_state,
-                solver='liblinear',
-                max_iter=1000
-            )
-        
-        # Use step size for faster elimination
-        step = max(1, (X.shape[1] - self.n_features) // 10)
-        
-        rfe = RFE(
-            estimator=estimator,
-            n_features_to_select=self.n_features,
-            step=step
-        )
-        
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore')
-            rfe.fit(X, y)
-        
-        self.selected_features_ = np.where(rfe.support_)[0]
-        self.feature_scores_ = rfe.ranking_[self.selected_features_]
-        
-        logger.debug(f"FastFS: Selected {len(self.selected_features_)} features using RFE")
-    
-    def _fit_correlation(self, X: np.ndarray, y: np.ndarray):
-        """Correlation-based selection for regression."""
-        logger.debug(f"FastFS: Using correlation selection for {X.shape[1]} features")
-        
-        correlation_method = self.kwargs.get('correlation_method', 'pearson')
-        
-        correlations = np.zeros(X.shape[1])
-        
-        for i in range(X.shape[1]):
-            try:
-                if correlation_method == 'pearson':
-                    corr, _ = pearsonr(X[:, i], y)
-                else:  # spearman
-                    corr, _ = spearmanr(X[:, i], y)
-                correlations[i] = abs(corr) if not np.isnan(corr) else 0
-            except:
-                correlations[i] = 0
-        
-        # Select top correlated features
-        top_indices = np.argsort(correlations)[-self.n_features:]
-        
-        self.selected_features_ = top_indices
-        self.feature_scores_ = correlations[top_indices]
-        
-        logger.debug(f"FastFS: Selected {len(self.selected_features_)} features using correlation")
-    
-    def _fit_chi2(self, X: np.ndarray, y: np.ndarray):
-        """Chi-square test for classification."""
-        logger.debug(f"FastFS: Using Chi-square test for {X.shape[1]} features")
-        
-        # Ensure non-negative features for chi2
-        X_pos = X.copy()
-        X_pos = X_pos - X_pos.min(axis=0) + 1e-10
-        
-        chi2_selector = SelectKBest(chi2, k=self.n_features)
-        
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore')
-            chi2_selector.fit(X_pos, y)
-        
-        self.selected_features_ = np.where(chi2_selector.get_support())[0]
-        self.feature_scores_ = chi2_selector.scores_[self.selected_features_]
-        
-        logger.debug(f"FastFS: Selected {len(self.selected_features_)} features using Chi-square")
-    
-    def _fit_lasso(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
-        """LASSO regularization for feature selection."""
-        logger.debug(f"FastFS: Using LASSO for {X.shape[1]} features")
-        
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        
-        alpha = self.kwargs.get('alpha', 0.01)
-        
-        if is_regression:
-            model = Lasso(alpha=alpha, random_state=self.random_state, max_iter=1000)
-        else:
-            model = LogisticRegression(
-                penalty='l1',
-                C=1/alpha,
-                random_state=self.random_state,
-                solver='liblinear',
-                max_iter=1000
-            )
-        
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore')
-            model.fit(X_scaled, y)
-        
-        # Get non-zero coefficients
-        if hasattr(model, 'coef_'):
-            if model.coef_.ndim > 1:
-                coef = np.abs(model.coef_).max(axis=0)
-            else:
-                coef = np.abs(model.coef_)
-        else:
-            coef = np.abs(model.feature_importances_)
-        
-        # Select features with largest absolute coefficients
-        top_indices = np.argsort(coef)[-self.n_features:]
-        
-        self.selected_features_ = top_indices
-        self.feature_scores_ = coef[top_indices]
-        
-        logger.debug(f"FastFS: Selected {len(self.selected_features_)} features using LASSO")
-    
-    def _fit_combined_fast(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
-        """Multi-step fast selection combining multiple methods."""
-        logger.debug(f"FastFS: Using combined fast selection for {X.shape[1]} features")
-        
-        # Step 1: Variance threshold (remove constant/low-variance features)
-        var_threshold = self.kwargs.get('variance_threshold', 0.01)
-        var_selector = VarianceThreshold(threshold=var_threshold)
-        X_var = var_selector.fit_transform(X)
         var_features = np.where(var_selector.get_support())[0]
         
         if X_var.shape[1] <= self.n_features:
@@ -447,93 +314,335 @@ class FastFeatureSelector:
             self.feature_scores_ = np.ones(len(var_features))
             return
         
-        # Step 2: Fast univariate selection to reduce to ~3x target features
-        intermediate_features = min(self.n_features * 3, X_var.shape[1])
-        
+        # Very permissive statistical selection
         if is_regression:
-            univariate_selector = SelectKBest(f_regression, k=intermediate_features)
+            selector = SelectKBest(f_regression, k=self.n_features)
         else:
-            univariate_selector = SelectKBest(f_classif, k=intermediate_features)
+            selector = SelectKBest(f_classif, k=self.n_features)
         
-        X_uni = univariate_selector.fit_transform(X_var, y)
-        uni_features = np.where(univariate_selector.get_support())[0]
-        
-        # Step 3: Random Forest importance on reduced set
-        if is_regression:
-            rf = RandomForestRegressor(
-                n_estimators=30,
-                max_depth=8,
-                random_state=self.random_state,
-                n_jobs=-1
-            )
-        else:
-            rf = RandomForestClassifier(
-                n_estimators=30,
-                max_depth=8,
-                random_state=self.random_state,
-                n_jobs=-1
-            )
-        
-        rf.fit(X_uni, y)
-        importances = rf.feature_importances_
-        
-        # Select final features
-        final_indices = np.argsort(importances)[-self.n_features:]
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore')
+            selector.fit(X_var, y)
         
         # Map back to original indices
-        self.selected_features_ = var_features[uni_features[final_indices]]
-        self.feature_scores_ = importances[final_indices]
+        selected_var_indices = np.where(selector.get_support())[0]
+        self.selected_features_ = var_features[selected_var_indices]
+        self.feature_scores_ = selector.scores_
         
-        logger.debug(f"FastFS: Selected {len(self.selected_features_)} features using combined method")
-
-
-def get_fast_selector_recommendations(n_samples: int, n_features: int, 
-                                    is_regression: bool) -> List[str]:
-    """
-    Get recommended fast feature selection methods based on data characteristics.
+        logger.info("GenomicFS: Applied permissive univariate selection")
     
-    Parameters
-    ----------
-    n_samples : int
-        Number of samples
-    n_features : int
-        Number of features
-    is_regression : bool
-        Whether this is a regression task
+    def _fit_stability_selection(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
+        """
+        Stability selection for robust feature selection.
+        """
+        logger.debug("GenomicFS: Using stability selection")
         
-    Returns
-    -------
-    List[str]
-        Recommended methods in order of preference
-    """
-    recommendations = []
+        n_bootstrap = self.kwargs.get('n_bootstrap', 50)
+        selection_threshold = self.kwargs.get('selection_threshold', 0.3)  # Very permissive
+        
+        n_samples, n_features_total = X.shape
+        selection_counts = np.zeros(n_features_total)
+        
+        # Bootstrap sampling with feature selection
+        for i in range(n_bootstrap):
+            # Bootstrap sample
+            indices = np.random.choice(n_samples, size=n_samples, replace=True)
+            X_boot = X[indices]
+            y_boot = y[indices]
+            
+            # Feature selection on bootstrap sample
+            try:
+                if is_regression:
+                    selector = SelectKBest(f_regression, k=min(self.n_features * 2, n_features_total))
+                else:
+                    selector = SelectKBest(f_classif, k=min(self.n_features * 2, n_features_total))
+                
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore')
+                    selector.fit(X_boot, y_boot)
+                
+                selected = selector.get_support(indices=True)
+                selection_counts[selected] += 1
+                
+            except Exception as e:
+                logger.warning(f"Bootstrap iteration {i} failed: {e}")
+                continue
+        
+        # Select features that appear frequently
+        selection_frequency = selection_counts / n_bootstrap
+        stable_features = np.where(selection_frequency >= selection_threshold)[0]
+        
+        if len(stable_features) >= self.n_features:
+            # Select top features by frequency
+            top_indices = stable_features[np.argsort(selection_frequency[stable_features])[-self.n_features:]]
+        else:
+            # If not enough stable features, add more based on frequency
+            all_indices = np.argsort(selection_frequency)[-self.n_features:]
+            top_indices = all_indices
+        
+        self.selected_features_ = top_indices
+        self.feature_scores_ = selection_frequency[top_indices]
+        
+        logger.info(f"GenomicFS: Stability selection with {len(stable_features)} stable features")
     
-    # For very high-dimensional data (typical in genomics)
-    if n_features > 10000:
-        recommendations.extend(['variance_f_test', 'combined_fast', 'rf_importance'])
-    elif n_features > 1000:
-        recommendations.extend(['variance_f_test', 'rf_importance', 'elastic_net'])
-    else:
-        recommendations.extend(['rf_importance', 'elastic_net', 'rfe_linear'])
+    def _fit_variance_f_test(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
+        """
+        Fast variance + F-test selection with genomic optimization.
+        """
+        logger.debug("GenomicFS: Using variance + F-test selection")
+        
+        # Very permissive variance threshold
+        variance_threshold = self.kwargs.get('variance_threshold', 1e-6)
+        var_selector = VarianceThreshold(threshold=variance_threshold)
+        
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore')
+            X_var = var_selector.fit_transform(X)
+        
+        var_features = np.where(var_selector.get_support())[0]
+        
+        if X_var.shape[1] <= self.n_features:
+            self.selected_features_ = var_features
+            self.feature_scores_ = np.ones(len(var_features))
+            return
+        
+        # F-test selection
+        if is_regression:
+            f_selector = SelectKBest(f_regression, k=self.n_features)
+        else:
+            f_selector = SelectKBest(f_classif, k=self.n_features)
+        
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore')
+            f_selector.fit(X_var, y)
+        
+        # Map back to original indices
+        f_features = np.where(f_selector.get_support())[0]
+        self.selected_features_ = var_features[f_features]
+        self.feature_scores_ = f_selector.scores_
+        
+        logger.info("GenomicFS: Applied variance + F-test selection")
     
-    # Add task-specific methods
-    if is_regression:
-        recommendations.append('correlation')
-    else:
-        recommendations.append('chi2')
+    def _fit_chi2(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
+        """
+        Chi-squared feature selection for classification tasks.
+        """
+        logger.debug("GenomicFS: Using Chi-squared selection")
+        
+        if is_regression:
+            # Chi2 is not applicable for regression, fall back to F-test
+            logger.warning("Chi2 not applicable for regression, using F-test instead")
+            self._fit_variance_f_test(X, y, is_regression)
+            return
+        
+        # Ensure non-negative values for chi2 (required by chi2 test)
+        X_nonneg = X.copy()
+        
+        # Handle negative values by shifting to non-negative range
+        min_vals = np.min(X_nonneg, axis=0)
+        negative_features = min_vals < 0
+        if np.any(negative_features):
+            logger.debug(f"GenomicFS: Shifting {np.sum(negative_features)} features to non-negative range for chi2")
+            X_nonneg[:, negative_features] -= min_vals[negative_features]
+        
+        # Apply variance threshold first to remove constant features
+        variance_threshold = self.kwargs.get('variance_threshold', 1e-6)
+        var_selector = VarianceThreshold(threshold=variance_threshold)
+        
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore')
+            X_var = var_selector.fit_transform(X_nonneg)
+        
+        var_features = np.where(var_selector.get_support())[0]
+        
+        if X_var.shape[1] <= self.n_features:
+            self.selected_features_ = var_features
+            self.feature_scores_ = np.ones(len(var_features))
+            logger.info(f"GenomicFS: Chi2 selected {len(var_features)} features (all after variance filtering)")
+            return
+        
+        # Apply chi2 selection
+        try:
+            from sklearn.feature_selection import SelectKBest, chi2
+            
+            chi2_selector = SelectKBest(chi2, k=self.n_features)
+            
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+                chi2_selector.fit(X_var, y)
+            
+            # Map back to original indices
+            chi2_features = np.where(chi2_selector.get_support())[0]
+            self.selected_features_ = var_features[chi2_features]
+            self.feature_scores_ = chi2_selector.scores_
+            
+            logger.info(f"GenomicFS: Chi2 selected {len(self.selected_features_)} features")
+            
+        except Exception as e:
+            logger.warning(f"Chi2 selection failed: {e}, falling back to F-test")
+            # Fallback to F-test if chi2 fails
+            self._fit_variance_f_test(X, y, is_regression)
     
-    # Always include LASSO as an option
-    recommendations.append('lasso')
+    def _combine_genomic_scores(self, methods: List[Tuple[str, np.ndarray]], n_features: int) -> np.ndarray:
+        """
+        Combine scores from multiple methods using genomic-appropriate weighting.
+        """
+        if not methods:
+            return np.zeros(n_features)
+        
+        # Normalize all scores to [0, 1]
+        normalized_scores = []
+        weights = []
+        
+        for method_name, scores in methods:
+            # Handle NaN and infinite values
+            scores = np.nan_to_num(scores, nan=0.0, posinf=1.0, neginf=0.0)
+            
+            # Normalize to [0, 1]
+            if np.max(scores) > np.min(scores):
+                norm_scores = (scores - np.min(scores)) / (np.max(scores) - np.min(scores))
+            else:
+                norm_scores = np.ones_like(scores) * 0.5
+            
+            normalized_scores.append(norm_scores)
+            
+            # Assign weights based on method reliability for genomic data
+            if method_name == 'univariate':
+                weights.append(0.3)  # High weight for statistical significance
+            elif method_name == 'mutual_info':
+                weights.append(0.25)  # Good for non-linear relationships
+            elif method_name == 'random_forest':
+                weights.append(0.2)  # Good for interactions
+            elif method_name == 'regularization':
+                weights.append(0.15)  # Lower weight due to potential over-regularization
+            elif method_name == 'correlation':
+                weights.append(0.1)  # Lowest weight for simple correlation
+            else:
+                weights.append(0.1)  # Default weight
+        
+        # Normalize weights
+        weights = np.array(weights)
+        weights = weights / np.sum(weights)
+        
+        # Combine scores
+        combined = np.zeros(n_features)
+        for i, (norm_scores, weight) in enumerate(zip(normalized_scores, weights)):
+            combined += weight * norm_scores
+        
+        return combined
     
-    return recommendations[:5]  # Return top 5 recommendations
+    def _fit_variance_fallback(self, X: np.ndarray):
+        """
+        Fallback method using only variance.
+        """
+        logger.warning("GenomicFS: Using variance fallback method")
+        
+        variances = np.var(X, axis=0)
+        top_indices = np.argsort(variances)[-self.n_features:]
+        
+        self.selected_features_ = top_indices
+        self.feature_scores_ = variances[top_indices]
+    
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        """
+        Transform data using selected features.
+        
+        Parameters
+        ----------
+        X : np.ndarray
+            Input data
+            
+        Returns
+        -------
+        np.ndarray
+            Transformed data with selected features
+        """
+        if self.selected_features_ is None:
+            raise ValueError("Selector has not been fitted yet")
+        
+        return X[:, self.selected_features_]
+    
+    def fit_transform(self, X: np.ndarray, y: np.ndarray, is_regression: bool = True) -> np.ndarray:
+        """
+        Fit selector and transform data.
+        
+        Parameters
+        ----------
+        X : np.ndarray
+            Input data
+        y : np.ndarray
+            Target values
+        is_regression : bool
+            Whether this is regression
+            
+        Returns
+        -------
+        np.ndarray
+            Transformed data with selected features
+        """
+        return self.fit(X, y, is_regression).transform(X)
+    
+    def get_selected_features(self) -> np.ndarray:
+        """
+        Get indices of selected features.
+        
+        Returns
+        -------
+        np.ndarray
+            Indices of selected features
+        """
+        if self.selected_features_ is None:
+            raise ValueError("Selector has not been fitted yet")
+        
+        return self.selected_features_
+    
+    def get_feature_scores(self) -> np.ndarray:
+        """
+        Get scores of selected features.
+        
+        Returns
+        -------
+        np.ndarray
+            Scores of selected features
+        """
+        if self.feature_scores_ is None:
+            raise ValueError("Selector has not been fitted yet")
+        
+        return self.feature_scores_
+    
+    def get_support(self, indices: bool = False) -> np.ndarray:
+        """
+        Get support mask or indices.
+        
+        Parameters
+        ----------
+        indices : bool
+            Whether to return indices instead of mask
+            
+        Returns
+        -------
+        np.ndarray
+            Support mask or indices
+        """
+        if self.selected_features_ is None:
+            raise ValueError("Selector has not been fitted yet")
+        
+        if indices:
+            return self.selected_features_
+        else:
+            # Create boolean mask (assuming we know the total number of features)
+            # This is a limitation - we need to store the original feature count
+            mask = np.zeros(np.max(self.selected_features_) + 1, dtype=bool)
+            mask[self.selected_features_] = True
+            return mask
 
+# Convenience functions for backward compatibility
 
-# Convenience functions for integration with existing code
 def fast_feature_selection_regression(X: np.ndarray, y: np.ndarray, 
-                                    n_features: int = 100, 
-                                    method: str = "variance_f_test") -> np.ndarray:
+                                    n_features: int = 512, 
+                                    method: str = "genomic_ensemble") -> np.ndarray:
     """
-    Fast feature selection for regression tasks.
+    Fast feature selection for regression tasks optimized for genomic data.
     
     Parameters
     ----------
@@ -542,7 +651,7 @@ def fast_feature_selection_regression(X: np.ndarray, y: np.ndarray,
     y : np.ndarray
         Target vector
     n_features : int
-        Number of features to select
+        Number of features to select (default: 512 for genomic data)
     method : str
         Selection method
         
@@ -551,16 +660,15 @@ def fast_feature_selection_regression(X: np.ndarray, y: np.ndarray,
     np.ndarray
         Indices of selected features
     """
-    selector = FastFeatureSelector(method=method, n_features=n_features)
+    selector = GenomicFeatureSelector(method=method, n_features=n_features)
     selector.fit(X, y, is_regression=True)
     return selector.get_selected_features()
 
-
 def fast_feature_selection_classification(X: np.ndarray, y: np.ndarray, 
-                                        n_features: int = 100, 
-                                        method: str = "variance_f_test") -> np.ndarray:
+                                        n_features: int = 512, 
+                                        method: str = "genomic_ensemble") -> np.ndarray:
     """
-    Fast feature selection for classification tasks.
+    Fast feature selection for classification tasks optimized for genomic data.
     
     Parameters
     ----------
@@ -569,7 +677,7 @@ def fast_feature_selection_classification(X: np.ndarray, y: np.ndarray,
     y : np.ndarray
         Target vector
     n_features : int
-        Number of features to select
+        Number of features to select (default: 512 for genomic data)
     method : str
         Selection method
         
@@ -578,6 +686,9 @@ def fast_feature_selection_classification(X: np.ndarray, y: np.ndarray,
     np.ndarray
         Indices of selected features
     """
-    selector = FastFeatureSelector(method=method, n_features=n_features)
+    selector = GenomicFeatureSelector(method=method, n_features=n_features)
     selector.fit(X, y, is_regression=False)
     return selector.get_selected_features()
+
+# Legacy compatibility
+FastFeatureSelector = GenomicFeatureSelector

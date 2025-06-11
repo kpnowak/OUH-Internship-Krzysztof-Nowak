@@ -1937,11 +1937,12 @@ def _run_pipeline(
                     try:
                         # Determine which integration techniques to use
                         if missing_percentage == 0.0:
-                            # For 0% missing, use all 4 integration techniques including weighted_concat
-                            integration_techniques = ["weighted_concat", "average", "sum", "early_fusion_pca"]
+                            # For 0% missing, use weighted_concat and early_fusion_pca (average and sum are DISABLED)
+                            integration_techniques = ["weighted_concat", "early_fusion_pca"]
                         else:
                             # For other missing percentages, use techniques that handle missing data (exclude weighted_concat)
-                            integration_techniques = ["average", "sum", "early_fusion_pca"]
+                            # Note: average and sum are DISABLED due to implementation issues
+                            integration_techniques = ["early_fusion_pca"]
                         
                         # Process each integration technique
                         for integration_technique in integration_techniques:

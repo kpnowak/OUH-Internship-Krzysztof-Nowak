@@ -30,10 +30,19 @@ def fast_mutual_info_batch(X, y, is_regression=False, n_neighbors=3):
     numpy.ndarray
         Mutual information scores for each feature
     """
+    # Critical fix: ensure n_neighbors doesn't exceed available samples
+    n_samples = X.shape[0]
+    safe_neighbors = min(n_neighbors, max(1, n_samples - 1))
+    
+    # Additional safety for very small datasets
+    if n_samples < 3:
+        logger.warning(f"Very small dataset ({n_samples} samples) for mutual info, using n_neighbors=1")
+        safe_neighbors = 1
+    
     if is_regression:
-        return mutual_info_regression(X, y, n_neighbors=n_neighbors, random_state=42)
+        return mutual_info_regression(X, y, n_neighbors=safe_neighbors, random_state=42)
     else:
-        return mutual_info_classif(X, y, n_neighbors=n_neighbors, random_state=42)
+        return mutual_info_classif(X, y, n_neighbors=safe_neighbors, random_state=42)
 
 def correlation_based_redundancy(X, selected_indices, candidate_indices):
     """

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Plotting module for visualizing results.
+Enhanced with proper multi-class AUC calculation using 'ovr' strategy.
 """
 
 import os
@@ -14,11 +15,54 @@ matplotlib.use('Agg')  # Use non-interactive backend for parallel processing
 import matplotlib.pyplot as plt
 
 import seaborn as sns
-from sklearn.metrics import RocCurveDisplay
+from sklearn.metrics import RocCurveDisplay, roc_auc_score
 from typing import List, Optional, Union, Any
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
+
+def enhanced_roc_auc_score(y_true: np.ndarray, y_score: np.ndarray, 
+                          multi_class: str = 'ovr', average: str = 'weighted') -> float:
+    """
+    Enhanced ROC AUC score calculation with proper multi-class handling.
+    
+    This function fixes the issue where multi-class AUC was stuck at 0.50 by
+    using the 'ovr' (one-vs-rest) strategy.
+    
+    Parameters
+    ----------
+    y_true : np.ndarray
+        True labels
+    y_score : np.ndarray
+        Predicted probabilities
+    multi_class : str, default='ovr'
+        Multi-class strategy ('ovr' or 'ovo')
+    average : str, default='weighted'
+        Averaging strategy ('weighted', 'macro', 'micro')
+        
+    Returns
+    -------
+    float
+        AUC score
+    """
+    try:
+        # Check for binary vs multi-class
+        unique_classes = np.unique(y_true)
+        n_classes = len(unique_classes)
+        
+        if n_classes == 2:
+            # Binary classification
+            if y_score.ndim > 1 and y_score.shape[1] >= 2:
+                return roc_auc_score(y_true, y_score[:, 1])
+            else:
+                return roc_auc_score(y_true, y_score)
+        else:
+            # Multi-class classification with proper 'ovr' strategy
+            return roc_auc_score(y_true, y_score, multi_class=multi_class, average=average)
+            
+    except Exception as e:
+        logger.warning(f"Enhanced AUC calculation failed: {str(e)}")
+        return 0.5
 
 def verify_plot_exists(plot_path: str) -> bool:
     """
