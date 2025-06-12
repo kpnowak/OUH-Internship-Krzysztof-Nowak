@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 import warnings
 from pathlib import Path
+
+# Suppress sklearn deprecation warning about force_all_finite -> ensure_all_finite
+warnings.filterwarnings("ignore", message=".*force_all_finite.*was renamed to.*ensure_all_finite.*", category=FutureWarning)
 from typing import Optional, List, Dict, Union, Tuple, Any
 import logging
 import re
@@ -672,7 +675,7 @@ def load_modality(base_path: Union[str, Path],
                  use_cache: bool = True) -> Optional[pd.DataFrame]:
     """
     Load a single modality file with comprehensive optimizations.
-    Enhanced with malformed file detection, memory optimization, genomic preprocessing, and caching.
+    OPTIMIZED VERSION - Reduced unnecessary file repair attempts for better performance.
     
     Parameters
     ----------
@@ -715,84 +718,59 @@ def load_modality(base_path: Union[str, Path],
             logger.info(f"Using cached data for {modality_name}: {cached_data.shape}")
             return cached_data.copy()
     
-    # Try chunked loading for large files first
-    df = load_modality_chunked(valid_path, modality_name, chunk_size)
+    # OPTIMIZED: Try standard loading first with common delimiters
+    df = None
+    encodings_to_try = ['utf-8', 'latin1']  # Reduced encoding attempts
+    delimiters_to_try = [',', '\t']  # Most common delimiters first
     
-    # If chunked loading didn't work or wasn't needed, try normal loading
-    if df is None:
-        encodings_to_try = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
-        malformed_detected = False
+    for delimiter in delimiters_to_try:
+        for encoding in encodings_to_try:
+            try:
+                df = pd.read_csv(valid_path, sep=delimiter, index_col=0, encoding=encoding, low_memory=False)
+                if not df.empty and df.shape[1] > 5:  # Reasonable number of samples
+                    logger.debug(f"Successfully loaded {modality_name} with delimiter='{delimiter}', encoding='{encoding}'")
+                    break
+            except Exception as e:
+                logger.debug(f"Failed with delimiter='{delimiter}', encoding='{encoding}': {str(e)}")
+                continue
         
-        for delimiter in [',', '\t', ' ', ';']:
-            for encoding in encodings_to_try:
-                try:
-                    # Try reading first line to detect malformed headers
-                    with open(valid_path, 'r', encoding=encoding) as f:
-                        first_line = f.readline().strip()
-                    
-                    # Check for malformed header pattern (like in AML data)
-                    if first_line.count('"TCGA') > 5:  # Multiple quoted TCGA IDs in one line
-                        logger.info(f"Detected malformed header in {modality_name}, attempting repair")
-                        malformed_detected = True
-                        break
-                    
-                    # Try normal loading
-                    df = pd.read_csv(valid_path, sep=delimiter, index_col=0, encoding=encoding, low_memory=False)
-                    if not df.empty:
-                        logger.debug(f"Successfully loaded {modality_name} with delimiter='{delimiter}', encoding='{encoding}'")
-                        
-                        # Additional check for malformed structure
-                        if df.shape[1] == 1 and len(parse_malformed_header(df.columns[0])) > 5:
-                            logger.info(f"Detected malformed structure in {modality_name}, attempting repair")
-                            malformed_detected = True
-                            df = None
-                        else:
-                            break
-                            
-                except pd.errors.EmptyDataError:
-                    continue
-                except Exception as e:
-                    logger.debug(f"Failed with delimiter='{delimiter}', encoding='{encoding}': {str(e)}")
-                    continue
-            
-            if df is not None and not df.empty:
-                break
-            elif malformed_detected:
-                break
-        
-        # If normal loading failed or malformed file detected, try to repair
-        if df is None or malformed_detected:
-            logger.info(f"Attempting to repair malformed {modality_name} file")
+        if df is not None and not df.empty:
+            break
+    
+    # OPTIMIZED: Only attempt repair if standard loading completely failed
+    if df is None or df.empty:
+        logger.info(f"Standard loading failed for {modality_name}, attempting repair")
+        df = fix_malformed_data_file(valid_path, modality_name)
+    
+    # OPTIMIZED: Quick malformed structure check only if needed
+    elif df.shape[1] == 1:
+        # Check if the single column contains multiple sample IDs (malformed)
+        if len(parse_malformed_header(df.columns[0])) > 5:
+            logger.info(f"Detected malformed structure in {modality_name}, attempting repair")
             df = fix_malformed_data_file(valid_path, modality_name)
     
     if df is None or df.empty:
         logger.warning(f"Warning: Could not load modality {modality_name}")
         return None
     
-    # Data quality validation
-    is_valid, issues = validate_data_quality(df, modality_name)
-    if not is_valid:
-        logger.warning(f"Data quality issues in {modality_name}: {issues}")
+    # OPTIMIZED: Simplified data quality validation
+    if df.isnull().all().all():
+        logger.warning(f"Data quality issue in {modality_name}: All values are null")
+        return None
     
     logger.info(f"Loaded {modality_name} data: shape={df.shape}")
     
     # Ensure correct orientation (features in rows, samples in columns)
     sample_pattern = ['TCGA', 'sample', 'SAMPLE_', 'patient', 'PATIENT']
     
-    # Check if samples are in rows (need to transpose)
-    if any(x in str(df.index[0]) for x in sample_pattern):
-        logger.debug(f"Transposing {modality_name}: samples detected in rows")
-        df = df.T
-    
-    # More thorough orientation check
+    # OPTIMIZED: Quick orientation check
     tcga_in_columns = sum(1 for col in df.columns if isinstance(col, str) 
                          and any(pattern in col for pattern in sample_pattern))
     
     if tcga_in_columns < 5:
-        tcga_in_rows = sum(1 for idx in df.index if isinstance(idx, str) 
-                          and any(pattern in idx for pattern in sample_pattern))
-        if tcga_in_rows > 5:
-            logger.debug(f"Transposing {modality_name}: {tcga_in_rows} sample IDs detected in rows")
+        # Check if samples are in rows (need to transpose)
+        if any(x in str(df.index[0]) for x in sample_pattern):
+            logger.debug(f"Transposing {modality_name}: samples detected in rows")
             df = df.T
     
     # Ensure index/column names are strings
@@ -806,7 +784,7 @@ def load_modality(base_path: Union[str, Path],
         df = df.rename(columns=id_mapping)
         logger.info(f"Standardized {len(id_mapping)} sample IDs in {modality_name}")
     
-    # Handle duplicate indices and columns
+    # OPTIMIZED: Handle duplicates only if they exist
     if df.index.duplicated().any():
         logger.warning(f"Found duplicate feature names in {modality_name}, making them unique")
         df.index = pd.Index([f"{idx}_{i}" if i > 0 else idx 
@@ -1526,9 +1504,15 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
     logger.info(f"Outcome data shape: {y_series.shape}")
     logger.info(f"Outcome value counts: {y_series.value_counts().to_dict()}")
     
-    # Remove samples with missing outcomes
-    valid_outcome_mask = y_series.notna()
-    y_series = y_series[valid_outcome_mask]
+    # FIX A: Drop rows with missing targets BEFORE any split
+    # This ensures every sample in X has a target, preventing alignment issues
+    if outcome_col is not None:
+        mask = ~clinical_df[outcome_col].isna() & np.isfinite(clinical_df[outcome_col].fillna(0))
+        # Apply mask to both outcome and clinical data to maintain alignment
+        y_series = clinical_df.loc[mask, outcome_col]
+        clinical_df = clinical_df.loc[mask]
+        logger.info(f"Applied missing target filter: {len(y_series)} samples remain with valid targets")
+    
     clinical_samples = set(y_series.index)
     logger.info(f"Samples with valid outcomes: {len(clinical_samples)}")
     
@@ -1897,6 +1881,31 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
             median_value = y_filtered[np.isfinite(y_filtered)].median()
             y_filtered = y_filtered.replace([np.inf, -np.inf], median_value)
         
+        # Dataset-specific validation for regression targets
+        if task_type == 'regression':
+            if ds_name.lower() == 'aml' and 'blast' in outcome_col.lower():
+                # AML blast percentage should be 0-100%
+                min_val = y_filtered.min()
+                max_val = y_filtered.max()
+                if min_val < 0:
+                    logger.error(f"CRITICAL: AML blast % contains negative values (min={min_val:.3f})")
+                    logger.error("This indicates you've selected the wrong column (possibly z-score normalized version)")
+                    logger.error(f"Expected column: 'lab_procedure_bone_marrow_blast_cell_outcome_percent_value'")
+                    logger.error(f"Current column: '{outcome_col}'")
+                    raise ValueError(f"AML blast % should be non-negative, got min={min_val:.3f}")
+                if max_val > 100:
+                    logger.warning(f"AML blast % exceeds 100% (max={max_val:.3f}), this may indicate data issues")
+                logger.info(f"AML blast % validation passed: range [{min_val:.1f}, {max_val:.1f}]%")
+            
+            elif ds_name.lower() == 'sarcoma' and 'length' in outcome_col.lower():
+                # Sarcoma tumor length should be positive
+                min_val = y_filtered.min()
+                if min_val < 0:
+                    logger.error(f"CRITICAL: Sarcoma tumor length contains negative values (min={min_val:.3f})")
+                    logger.error("This indicates you've selected the wrong column (possibly z-score normalized version)")
+                    raise ValueError(f"Sarcoma tumor length should be non-negative, got min={min_val:.3f}")
+                logger.info(f"Sarcoma tumor length validation passed: range [{min_val:.1f}, {y_filtered.max():.1f}] cm")
+        
         logger.info(f"Final outcome data validation: {len(y_filtered)} samples, all numeric and finite")
         
         # Now calculate statistics on the clean numeric data
@@ -1956,6 +1965,45 @@ def save_results(results_df: pd.DataFrame, output_dir: Union[str, Path], filenam
         header=not file_exists,
         index=False
     ) 
+
+def load_multimodal_data(dataset_name: str, task_type: str) -> Tuple[Optional[Dict[str, np.ndarray]], Optional[np.ndarray]]:
+    """
+    Load multimodal data for a given dataset and task type.
+    
+    Args:
+        dataset_name: Name of the dataset
+        task_type: 'classification' or 'regression'
+    
+    Returns:
+        Tuple of (data_dict, target_array) or (None, None) if loading fails
+    """
+    try:
+        # Get dataset configuration
+        config = DatasetConfig.get_config(dataset_name)
+        if not config:
+            logger.error(f"No configuration found for dataset: {dataset_name}")
+            return None, None
+        
+        # Load dataset using existing load_dataset function
+        modality_data, outcome_series, common_ids = load_dataset(
+            ds_name=dataset_name,
+            modalities=config['modalities'],
+            outcome_col=config['outcome_col'],
+            task_type=task_type
+        )
+        
+        # Convert to numpy arrays
+        data_dict = {}
+        for modality, df in modality_data.items():
+            data_dict[modality] = df.values.T  # Transpose to samples x features
+        
+        target = outcome_series.values
+        
+        return data_dict, target
+        
+    except Exception as e:
+        logger.error(f"Failed to load multimodal data for {dataset_name}: {str(e)}")
+        return None, None
 
 def load_and_preprocess_data(dataset_name: str, task_type: str, 
                            apply_advanced_filtering: bool = True,

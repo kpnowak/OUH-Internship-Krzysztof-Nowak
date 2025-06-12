@@ -24,6 +24,11 @@ psutil>=5.8.0
 # Feature selection algorithms
 boruta>=0.3.0
 
+# Optional advanced fusion dependencies
+# These are optional but recommended for advanced fusion strategies
+# snfpy>=0.2.2  # For Similarity Network Fusion (import as 'snf')
+# mklaren>=1.2  # For Multiple-Kernel Learning
+
 # Additional dependencies found in the codebase
 # Standard library modules are included with Python, but some packages might need explicit installation
 

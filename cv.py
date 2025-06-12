@@ -548,13 +548,27 @@ def process_cv_fold(
                 X_train, X_val, X_test = r[0], r[1], r[2]
                 if X_train is not None and X_val is not None:
                     if X_train.size > 0 and X_val.size > 0:
-                        # Verify dimensions match expected
-                        if X_train.shape[0] != expected_train_samples:
-                            logger.error(f"Modality {i} train samples mismatch: expected {expected_train_samples}, got {X_train.shape[0]}")
+                        # CRITICAL: Verify dimensions match expected - this is where alignment bugs are caught
+                        train_samples = X_train.shape[0]
+                        val_samples = X_val.shape[0]
+                        
+                        if train_samples != expected_train_samples:
+                            logger.error(f"CRITICAL: Modality {i} train samples mismatch: expected {expected_train_samples}, got {train_samples}")
+                            logger.error(f"This indicates _process_single_modality is not using the correct sample lists!")
                             continue
-                        if X_val.shape[0] != expected_val_samples:
-                            logger.error(f"Modality {i} val samples mismatch: expected {expected_val_samples}, got {X_val.shape[0]}")
+                        if val_samples != expected_val_samples:
+                            logger.error(f"CRITICAL: Modality {i} val samples mismatch: expected {expected_val_samples}, got {val_samples}")
+                            logger.error(f"This indicates _process_single_modality is not using the correct sample lists!")
                             continue
+                        
+                        # Additional validation: check for NaN or infinite values that could cause issues
+                        if np.isnan(X_train).all() or np.isnan(X_val).all():
+                            logger.error(f"Modality {i} contains all NaN values - skipping")
+                            continue
+                        if np.isinf(X_train).all() or np.isinf(X_val).all():
+                            logger.error(f"Modality {i} contains all infinite values - skipping")
+                            continue
+                            
                         valid_results.append((X_train, X_val, X_test))
                         logger.debug(f"Modality {i} validated: Train {X_train.shape}, Val {X_val.shape}")
                     else:
@@ -565,7 +579,14 @@ def process_cv_fold(
                 logger.warning(f"Modality {i} returned invalid result")
 
         if not valid_results:
-            logger.warning(f"No valid data found for any modality in fold {fold_idx}")
+            logger.error(f"CRITICAL: No valid data found for any modality in fold {fold_idx}")
+            logger.error(f"All {len(modality_results)} modalities failed validation - this indicates a serious alignment bug!")
+            logger.error(f"Expected samples: train={expected_train_samples}, val={expected_val_samples}")
+            for i, r in enumerate(modality_results):
+                if r is not None and len(r) >= 3:
+                    X_train, X_val, X_test = r[0], r[1], r[2]
+                    if X_train is not None and X_val is not None:
+                        logger.error(f"Modality {i}: Train={X_train.shape[0]}, Val={X_val.shape[0]}")
             return {}, {}
         
         # Create a new imputer instance for this fold
@@ -574,25 +595,47 @@ def process_cv_fold(
 
         # Merge modalities - all should have identical dimensions now
         try:
-            # Handle early_fusion_pca strategy specially to ensure consistent transformations
-            if integration_technique == "early_fusion_pca":
+            # Handle strategies that return tuples (fitted fusion objects) specially
+            if integration_technique in ["early_fusion_pca", "learnable_weighted", "mkl", "snf", "attention_weighted", "late_fusion_stacking"]:
                 # For training data: fit and get the fusion object
-                X_train_merged, fitted_fusion = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps)
+                train_result = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_train, is_regression=is_regression)
+                
+                # Handle tuple return values
+                if isinstance(train_result, tuple):
+                    X_train_merged, fitted_fusion = train_result
+                else:
+                    X_train_merged = train_result
+                    fitted_fusion = None
+                
                 # For validation data: use the fitted fusion object
-                X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps, fitted_fusion=fitted_fusion)
+                X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps, fitted_fusion=fitted_fusion, y=final_aligned_y_val, is_regression=is_regression)
+                
+                # Handle tuple return for validation (should just be array)
+                if isinstance(X_val_merged, tuple):
+                    X_val_merged = X_val_merged[0]  # Take just the array part
             else:
-                # For other strategies, use the original approach
-                X_train_merged = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps)
-                X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps)
+                # For simple strategies that don't return tuples
+                X_train_merged = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_train, is_regression=is_regression)
+                X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_val, is_regression=is_regression)
+                
+                # Handle unexpected tuple returns for simple strategies
+                if isinstance(X_train_merged, tuple):
+                    X_train_merged = X_train_merged[0]
+                if isinstance(X_val_merged, tuple):
+                    X_val_merged = X_val_merged[0]
             
-            # Final verification: merged arrays should match the target vectors exactly
+            # Handle potential sample truncation from merge_modalities
+            # If merge_modalities truncated samples due to mismatches, we need to update target vectors
+            # HARD ERROR instead of silent truncation to catch alignment bugs
             if X_train_merged.shape[0] != len(final_aligned_y_train):
-                logger.error(f"CRITICAL: Final train alignment failed: X={X_train_merged.shape[0]}, y={len(final_aligned_y_train)}")
-                return {}, {}
+                logger.error(f"CRITICAL: Training X/y length mismatch after merging: X={X_train_merged.shape[0]} vs y={len(final_aligned_y_train)}")
+                logger.error("This indicates a bug in the data alignment pipeline - investigate immediately!")
+                raise ValueError(f"Training X/y length mismatch: {X_train_merged.shape[0]} vs {len(final_aligned_y_train)}")
             
             if X_val_merged.shape[0] != len(final_aligned_y_val):
-                logger.error(f"CRITICAL: Final val alignment failed: X={X_val_merged.shape[0]}, y={len(final_aligned_y_val)}")
-                return {}, {}
+                logger.error(f"CRITICAL: Validation X/y length mismatch after merging: X={X_val_merged.shape[0]} vs y={len(final_aligned_y_val)}")
+                logger.error("This indicates a bug in the data alignment pipeline - investigate immediately!")
+                raise ValueError(f"Validation X/y length mismatch: {X_val_merged.shape[0]} vs {len(final_aligned_y_val)}")
             
             # Skip if no valid data after merging
             if X_train_merged.size == 0 or X_val_merged.size == 0:
@@ -695,19 +738,34 @@ def process_cv_fold(
             
         for model_name in models:
             try:
-                # Perform one final verification before training the model
-                # This is critical to ensure X and y have the same number of samples
-                from models import validate_and_fix_shape_mismatch
-                final_X_train, final_y_train = validate_and_fix_shape_mismatch(
+                # Apply robust data synchronization and NaN guarding before model training
+                from models import synchronize_X_y_data, guard_against_target_nans
+                
+                # Guard against NaN values in targets and synchronize data
+                final_X_train, final_y_train = guard_against_target_nans(
                     final_X_train, aligned_y_train, 
-                    name=f"training data for {model_name} (fold {fold_idx})", 
-                    fold_idx=fold_idx
+                    operation_name=f"training {model_name} (fold {fold_idx})"
                 )
-                final_X_val, final_y_val = validate_and_fix_shape_mismatch(
+                final_X_val, final_y_val = guard_against_target_nans(
                     final_X_val, aligned_y_val, 
-                    name=f"validation data for {model_name} (fold {fold_idx})", 
-                    fold_idx=fold_idx
+                    operation_name=f"validation {model_name} (fold {fold_idx})"
                 )
+                
+                # Synchronize X and y data to ensure perfect alignment
+                final_X_train, final_y_train = synchronize_X_y_data(
+                    final_X_train, final_y_train, 
+                    operation_name=f"training {model_name} (fold {fold_idx})"
+                )
+                final_X_val, final_y_val = synchronize_X_y_data(
+                    final_X_val, final_y_val, 
+                    operation_name=f"validation {model_name} (fold {fold_idx})"
+                )
+                
+                # Final hard check for alignment - this should never fail now
+                if len(final_X_train) != len(final_y_train):
+                    raise ValueError(f"Training X/y length mismatch after synchronization: {len(final_X_train)} vs {len(final_y_train)}")
+                if len(final_X_val) != len(final_y_val):
+                    raise ValueError(f"Validation X/y length mismatch after synchronization: {len(final_X_val)} vs {len(final_y_val)}")
                 
                 # Only proceed if we have valid data
                 if (final_X_train is None or final_y_train is None or 
@@ -946,6 +1004,23 @@ def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, 
         log_model_training_info(model_name, dataset_name, fold_idx, 0, 0, success=False, error_msg="Invalid input data")
         return None, {}
     
+    # FIX C: Final X/y alignment guard just before model training
+    # This stops the pipeline immediately if any future bug slips through
+    if hasattr(X_train, 'index') and hasattr(y_train, 'index'):
+        common_train = X_train.index.intersection(y_train.index)
+        X_train = X_train.loc[common_train]
+        y_train = y_train.loc[common_train]
+    if hasattr(X_val, 'index') and hasattr(y_val, 'index'):
+        common_val = X_val.index.intersection(y_val.index)
+        X_val = X_val.loc[common_val]
+        y_val = y_val.loc[common_val]
+    
+    # Final alignment check
+    if len(X_train) != len(y_train):
+        raise RuntimeError(f"X/y mismatch even after alignment: {len(X_train)} vs {len(y_train)}")
+    if len(X_val) != len(y_val):
+        raise RuntimeError(f"X_val/y_val mismatch even after alignment: {len(X_val)} vs {len(y_val)}")
+    
     # Basic sanity check without redundant alignment
     if X_train.shape[0] != len(y_train):
         logger.error(f"Data alignment error for {model_name} in fold {fold_idx}: X_train={X_train.shape[0]}, y_train={len(y_train)}")
@@ -1093,6 +1168,23 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         log_model_training_info(model_name, dataset_name, fold_idx, 0, 0, success=False, error_msg="Invalid input data")
         return None, {}, None, None
 
+    # FIX C: Final X/y alignment guard just before model training
+    # This stops the pipeline immediately if any future bug slips through
+    if hasattr(X_train, 'index') and hasattr(y_train, 'index'):
+        common_train = X_train.index.intersection(y_train.index)
+        X_train = X_train.loc[common_train]
+        y_train = y_train.loc[common_train]
+    if hasattr(X_val, 'index') and hasattr(y_val, 'index'):
+        common_val = X_val.index.intersection(y_val.index)
+        X_val = X_val.loc[common_val]
+        y_val = y_val.loc[common_val]
+    
+    # Final alignment check
+    if len(X_train) != len(y_train):
+        raise RuntimeError(f"X/y mismatch even after alignment: {len(X_train)} vs {len(y_train)}")
+    if len(X_val) != len(y_val):
+        raise RuntimeError(f"X_val/y_val mismatch even after alignment: {len(X_val)} vs {len(y_val)}")
+
     # Additional safety checks for classification
     n_train_samples = len(y_train)
     n_val_samples = len(y_val)
@@ -1182,10 +1274,10 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         if train_n_components is None:
             train_n_components = X_train.shape[1]
         
-        # Try to calculate ROC AUC if applicable (binary classification with proba method)
-        auc = 0.5
+        # Try to calculate ROC AUC if applicable
+        auc = 0.5  # Default for cases where AUC cannot be calculated
         try:
-            if hasattr(model, 'predict_proba') and len(np.unique(y_val)) == 2:
+            if hasattr(model, 'predict_proba'):
                 y_proba = model.predict_proba(X_val)
                 
                 # Validate probability predictions for NaN values
@@ -1193,18 +1285,39 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
                     logger.warning(f"Model {model_name} produced NaN probabilities in fold {fold_idx}, cannot calculate AUC")
                     auc = 0.5  # Default AUC for random classifier
                 else:
-                    # Check if predict_proba returns the expected shape
-                    if y_proba.shape[1] >= 2:
-                        y_score = y_proba[:, 1]
-                        auc = roc_auc_score(y_val, y_score)
+                    # Get number of unique classes in validation set
+                    n_classes = len(np.unique(y_val))
+                    
+                    if n_classes == 2:
+                        # Binary classification - use positive class probabilities
+                        if y_proba.shape[1] >= 2:
+                            y_score = y_proba[:, 1]  # Probability of positive class
+                            auc = roc_auc_score(y_val, y_score)
+                        else:
+                            logger.warning(f"predict_proba returned unexpected shape for binary classification: {y_proba.shape}")
+                            auc = 0.5
+                    elif n_classes > 2:
+                        # Multi-class classification - use weighted average
+                        try:
+                            auc = roc_auc_score(y_val, y_proba, multi_class='ovr', average='weighted')
+                        except ValueError as e:
+                            try:
+                                auc = roc_auc_score(y_val, y_proba, multi_class='ovr', average='macro')
+                            except ValueError:
+                                logger.warning(f"Could not calculate multi-class AUC for {n_classes} classes")
+                                auc = 0.5
                     else:
-                        logger.debug(f"predict_proba returned unexpected shape: {y_proba.shape}")
+                        # Single class - AUC is undefined
+                        logger.warning(f"Only {n_classes} unique class(es) in validation set, AUC undefined")
+                        auc = 0.5
+            else:
+                # Model doesn't support predict_proba
+                auc = 0.5
         except Exception as e:
             from config import WARNING_SUPPRESSION_CONFIG
             if not WARNING_SUPPRESSION_CONFIG.get("suppress_auc_warnings", False):
-                logger.warning(f"Could not calculate AUC: {str(e)}")
-            else:
-                logger.debug(f"Could not calculate AUC: {str(e)}")
+                logger.warning(f"Could not calculate AUC for {model_name}: {str(e)}")
+            auc = 0.5
         
         # Create plots if directory is provided
         plot_success_count = 0
@@ -1216,11 +1329,9 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
             if hasattr(model, 'classes_'):
                 # Use the classes that the model was actually trained on
                 class_labels = list(model.classes_)
-                logger.debug(f"Using model's classes for plots: {class_labels}")
             else:
                 # Fallback to unique classes from train+val data
                 class_labels = sorted(np.unique(np.concatenate([y_train, y_val])))
-                logger.debug(f"Using train+val unique classes for plots: {class_labels}")
             
             # Confusion matrix
             plot_total_count += 1
@@ -1321,9 +1432,7 @@ def check_and_filter_classes_in_fold(y_train, y_val, min_samples_per_class=2):
     unique_train, counts_train = np.unique(y_train, return_counts=True)
     unique_val, counts_val = np.unique(y_val, return_counts=True)
     
-    # Log detailed class distribution for debugging
-    logger.debug(f"Training set class distribution: {dict(zip(unique_train, counts_train))}")
-    logger.debug(f"Validation set class distribution: {dict(zip(unique_val, counts_val))}")
+    # Check class distribution (debug logging removed for performance)
     
     # Find classes that have sufficient samples in training set
     valid_train_classes = unique_train[counts_train >= min_samples_per_class]
@@ -1348,8 +1457,7 @@ def check_and_filter_classes_in_fold(y_train, y_val, min_samples_per_class=2):
     if len(valid_classes) < 2:
         logger.warning(f"Insufficient valid classes in fold: only {len(valid_classes)} classes meet requirements "
                       f"(>= 2 train samples, >= 1 val sample)")
-        logger.debug(f"Available classes: train={unique_train}, val={unique_val}, "
-                    f"valid_train_classes={valid_train_classes}, common={common_classes}")
+
         return None, None, None, None, None
     
     # Filter samples to only include valid classes
@@ -1376,8 +1484,7 @@ def check_and_filter_classes_in_fold(y_train, y_val, min_samples_per_class=2):
     y_train_relabeled = np.array([label_mapping[label] for label in y_train_filtered])
     y_val_relabeled = np.array([label_mapping[label] for label in y_val_filtered])
     
-    logger.debug(f"Successfully filtered fold: {len(valid_classes)} classes, "
-                f"{len(y_train_filtered)} train samples, {len(y_val_filtered)} val samples")
+
     
     return train_mask, val_mask, y_train_relabeled, y_val_relabeled, label_mapping
 
@@ -1935,14 +2042,40 @@ def _run_pipeline(
                 # Process each missing percentage
                 for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
                     try:
-                        # Determine which integration techniques to use
-                        if missing_percentage == 0.0:
-                            # For 0% missing, use weighted_concat and early_fusion_pca (average and sum are DISABLED)
-                            integration_techniques = ["weighted_concat", "early_fusion_pca"]
+                        # Check if fusion upgrades are enabled for intelligent strategy selection
+                        from config import FUSION_UPGRADES_CONFIG
+                        if FUSION_UPGRADES_CONFIG.get("enabled", False):
+                            # FUSION UPGRADES MODE: Use intelligent strategy selection
+                            from fusion import get_recommended_fusion_strategy
+                            recommended_strategy = get_recommended_fusion_strategy(
+                                missing_percentage * 100,  # Convert to percentage
+                                has_targets=True,
+                                n_modalities=len(data_modalities),
+                                task_type="regression" if is_regression else "classification"
+                            )
+                            integration_techniques = [recommended_strategy]
+                            logger.info(f"Fusion upgrades enabled: Using intelligent strategy '{recommended_strategy}' for {missing_percentage*100}% missing data")
                         else:
-                            # For other missing percentages, use techniques that handle missing data (exclude weighted_concat)
-                            # Note: average and sum are DISABLED due to implementation issues
-                            integration_techniques = ["early_fusion_pca"]
+                            # STANDARD MODE: Test all appropriate fusion techniques
+                            if missing_percentage == 0.0:
+                                # For 0% missing data, test ALL fusion techniques that work with clean data
+                                integration_techniques = [
+                                    "weighted_concat", 
+                                    "learnable_weighted", 
+                                    "mkl", 
+                                    "snf", 
+                                    "early_fusion_pca"
+                                ]
+                                logger.info(f"Standard mode: Testing {len(integration_techniques)} fusion techniques for 0% missing data")
+                            else:
+                                # For missing data (>0%), test only techniques that handle missing data
+                                # (exclude weighted_concat as it requires 0% missing data)
+                                integration_techniques = [
+                                    "mkl", 
+                                    "snf", 
+                                    "early_fusion_pca"
+                                ]
+                                logger.info(f"Standard mode: Testing {len(integration_techniques)} fusion techniques for {missing_percentage*100}% missing data")
                         
                         # Process each integration technique
                         for integration_technique in integration_techniques:

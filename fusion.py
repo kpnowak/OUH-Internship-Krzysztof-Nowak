@@ -4,6 +4,14 @@ Fusion module for multimodal data integration.
 Enhanced with learnable weights, Multiple-Kernel Learning (MKL), and Similarity Network Fusion (SNF).
 """
 
+# Import order protection: Import SNF before any oct2py-related modules
+# This prevents oct2py lazy import checks from interfering with SNF
+try:
+    import snf as _snf_test
+    _SNF_IMPORT_SUCCESS = True
+except ImportError:
+    _SNF_IMPORT_SUCCESS = False
+
 import numpy as np
 from typing import List, Optional, Union, Tuple, Dict
 import logging
@@ -11,24 +19,54 @@ from sklearn.metrics import r2_score, roc_auc_score
 from sklearn.model_selection import cross_val_score
 from sklearn.svm import SVR, SVC
 from sklearn.cluster import SpectralClustering
+from sklearn.impute import KNNImputer, SimpleImputer
+try:
+    from sklearn.experimental import enable_iterative_imputer
+    from sklearn.impute import IterativeImputer
+    ITERATIVE_IMPUTER_AVAILABLE = True
+except ImportError:
+    ITERATIVE_IMPUTER_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 # Try to import optional dependencies for advanced fusion methods
 try:
-    import snfpy
+    import snf as snfpy  # Import snf module but alias it as snfpy for code consistency
     SNF_AVAILABLE = True
+    logger.info("SNFpy (snf) library loaded successfully")
 except ImportError:
     SNF_AVAILABLE = False
+    logger.warning("SNFpy library not available, SNF fusion will not work")
     # SNF will use fallback implementation
 
 try:
-    from mklaren.kernel.kernel import exponential_kernel, linear_kernel
-    from mklaren.mkl.mklaren import Mklaren
-    MKL_AVAILABLE = True
-except ImportError:
+    # Suppress warnings from mklaren that might interfere with import detection
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore')  # Suppress all warnings during import
+        
+        # Import only the essential kernel functions first
+        from mklaren.kernel.kernel import exponential_kernel, linear_kernel
+        
+        # Try to import Mklaren - this might fail due to missing optional dependencies
+        try:
+            from mklaren.mkl.mklaren import Mklaren
+            # Test that we can actually create a Mklaren instance
+            test_mkl = Mklaren(rank=2, delta=1e-6, lbd=1e-6)
+            MKL_AVAILABLE = True
+            logger.info("Mklaren library loaded successfully with full functionality")
+        except Exception as mkl_error:
+            # If Mklaren class fails, we can still use kernel functions for basic MKL
+            logger.info(f"Mklaren kernels available but Mklaren class failed: {mkl_error}")
+            logger.info("Using fallback MKL implementation with kernel functions only")
+            MKL_AVAILABLE = True  # We can still do basic kernel operations
+            
+except ImportError as e:
     MKL_AVAILABLE = False
-    logger.warning("Mklaren not available. Multiple-Kernel Learning will not be available.")
+    logger.warning(f"Mklaren not available. Multiple-Kernel Learning will not be available. Import error: {e}")
+except Exception as e:
+    MKL_AVAILABLE = False
+    logger.warning(f"Mklaren import failed with unexpected error: {e}. Multiple-Kernel Learning will not be available.")
 
 class ModalityImputer:
     """
@@ -114,46 +152,20 @@ class ModalityImputer:
                 np.nan_to_num(self.means_, copy=False, nan=0.0)
                 
             elif self.chosen_strategy_ == 'knn':
-                from sklearn.impute import KNNImputer
-                # Critical fix: ensure n_neighbors is valid for the dataset size
-                max_neighbors = max(1, X.shape[0] - 1)  # At least 1, at most n_samples - 1
-                safe_neighbors = min(self.k_neighbors, max_neighbors)
-                
-                # Additional safety: if we have very few samples, fall back to mean imputation
-                if X.shape[0] < 3:  # Need at least 3 samples for meaningful KNN
-                    logger.warning(f"Too few samples ({X.shape[0]}) for KNN imputation, falling back to mean")
+                # Use safe number of neighbors
+                safe_neighbors = min(self.k_neighbors, X.shape[0] - 1, 5)
+                self.knn_imputer_ = KNNImputer(n_neighbors=safe_neighbors)
+                self.knn_imputer_.fit(X)
+            elif self.chosen_strategy_ == 'iterative':
+                if ITERATIVE_IMPUTER_AVAILABLE:
+                    self.iterative_imputer_ = IterativeImputer(random_state=42, max_iter=10)
+                    self.iterative_imputer_.fit(X)
+                else:
+                    logger.warning("IterativeImputer not available, falling back to mean imputation")
                     self.chosen_strategy_ = 'mean'
                     self.means_ = np.nanmean(X, axis=0, dtype=np.float32)
                     np.nan_to_num(self.means_, copy=False, nan=0.0)
-                else:
-                    logger.debug(f"KNN imputation: using {safe_neighbors} neighbors for {X.shape[0]} samples")
-                    self.knn_imputer_ = KNNImputer(
-                        n_neighbors=safe_neighbors,
-                        weights='uniform',
-                        metric='nan_euclidean'
-                    )
-                    self.knn_imputer_.fit(X)
-                
-            elif self.chosen_strategy_ == 'iterative':
-                from sklearn.impute import IterativeImputer
-                from sklearn.ensemble import ExtraTreesRegressor
-                
-                # Use ExtraTreesRegressor as the estimator for iterative imputation
-                estimator = ExtraTreesRegressor(
-                    n_estimators=10,  # Reduced for speed
-                    max_depth=5,      # Limit depth to prevent overfitting
-                    random_state=self.random_state,
-                    n_jobs=-1
-                )
-                
-                self.iterative_imputer_ = IterativeImputer(
-                    estimator=estimator,
-                    max_iter=10,      # Limit iterations for speed
-                    tol=1e-3,         # Convergence tolerance
-                    random_state=self.random_state
-                )
-                self.iterative_imputer_.fit(X)
-                
+        
         except Exception as e:
             logger.warning(f"Error fitting {self.chosen_strategy_} imputer: {str(e)}, falling back to mean imputation")
             # Fallback to mean imputation
@@ -222,9 +234,25 @@ class ModalityImputer:
                 return self.knn_imputer_.transform(X)
                 
             elif self.chosen_strategy_ == 'iterative':
-                if self.iterative_imputer_ is None:
-                    raise ValueError("Iterative imputer has not been fitted yet.")
-                return self.iterative_imputer_.transform(X)
+                if ITERATIVE_IMPUTER_AVAILABLE and self.iterative_imputer_ is not None:
+                    return self.iterative_imputer_.transform(X)
+                else:
+                    # Fallback to mean imputation if IterativeImputer is not available
+                    logger.warning("IterativeImputer not available, using mean imputation")
+                    if self.means_ is None:
+                        self.means_ = np.nanmean(X, axis=0, dtype=np.float32)
+                        np.nan_to_num(self.means_, copy=False, nan=0.0)
+                    
+                    X_imputed = X.copy().astype(np.float32, copy=False)
+                    nan_mask = np.isnan(X_imputed)
+                    nan_cols = np.where(nan_mask.any(axis=0))[0]
+                    
+                    for col in nan_cols:
+                        col_mask = nan_mask[:, col]
+                        if col_mask.any():
+                            X_imputed[col_mask, col] = self.means_[col]
+                    
+                    return X_imputed
                 
         except Exception as e:
             logger.warning(f"Error in {self.chosen_strategy_} imputation: {str(e)}, falling back to mean imputation")
@@ -396,7 +424,7 @@ class LateFusionFallback:
                 self.modality_models_[i] = model
                 self.modality_reliability_[i] = reliability
                 
-                logger.debug(f"Modality {name}: reliability = {reliability:.4f}")
+        
                 
             except Exception as e:
                 logger.warning(f"Failed to fit model for modality {name}: {str(e)}")
@@ -778,10 +806,12 @@ def merge_modalities(*arrays: np.ndarray,
     if len(set(row_counts)) > 1:
         min_rows = min(row_counts)
         max_rows = max(row_counts)
-        logger.warning(f"Arrays have different row counts: min={min_rows}, max={max_rows}. Truncating to {min_rows} rows.")
-        
-        # Truncate all arrays to have the same number of rows - view when possible
-        processed_arrays = [arr[:min_rows] for arr in processed_arrays]
+        logger.error(f"CRITICAL: Arrays have different row counts: min={min_rows}, max={max_rows}")
+        logger.error("This indicates a bug in the data alignment pipeline - all arrays should have identical row counts!")
+        logger.error("Row counts by array: " + str(row_counts))
+        # FIX C: Do NOT silently truncate - this causes X/y mismatches
+        # Instead, raise an error to catch alignment bugs immediately
+        raise ValueError(f"Array row count mismatch: {row_counts}. All arrays must have identical row counts for proper X/y alignment.")
     
     # Get final row count after truncation
     n_rows = processed_arrays[0].shape[0]
@@ -847,7 +877,7 @@ def merge_modalities(*arrays: np.ndarray,
                 else:
                     # For validation data: use pre-fitted learnable fusion
                     if fitted_fusion is None:
-                        logger.error("fitted_fusion is required for validation data with learnable_weighted strategy")
+                        logger.warning("fitted_fusion is required for validation data with learnable_weighted strategy, using fallback")
                         # Fallback to concatenation
                         merged = np.column_stack(processed_arrays)
                         logger.debug(f"Fallback concatenation applied, shape: {merged.shape}")
@@ -908,7 +938,7 @@ def merge_modalities(*arrays: np.ndarray,
                 else:
                     # For validation data: use pre-fitted attention fusion
                     if fitted_fusion is None:
-                        logger.error("fitted_fusion is required for validation data with attention_weighted strategy")
+                        logger.warning("fitted_fusion is required for validation data with attention_weighted strategy, using fallback")
                         merged = np.column_stack(processed_arrays)
                         logger.debug(f"Fallback concatenation applied, shape: {merged.shape}")
                     else:
@@ -978,7 +1008,7 @@ def merge_modalities(*arrays: np.ndarray,
                 else:
                     # For validation data: use pre-fitted stacking fusion
                     if fitted_fusion is None:
-                        logger.error("fitted_fusion is required for validation data with late_fusion_stacking strategy")
+                        logger.warning("fitted_fusion is required for validation data with late_fusion_stacking strategy, using fallback")
                         merged = np.column_stack(processed_arrays)
                         logger.debug(f"Fallback concatenation applied, shape: {merged.shape}")
                     else:
@@ -998,6 +1028,14 @@ def merge_modalities(*arrays: np.ndarray,
         
         elif strategy == "mkl":
             # Multiple-Kernel Learning fusion
+            if not MKL_AVAILABLE:
+                logger.error("Mklaren library not available, MKL fusion will not work")
+                merged = np.column_stack(processed_arrays)
+                if is_train:
+                    return merged, None  # Return tuple for consistency
+                else:
+                    return merged
+            
             if is_train:
                 # For training data: fit MKL and return both result and fitted object
                 try:
@@ -1034,10 +1072,11 @@ def merge_modalities(*arrays: np.ndarray,
                     logger.warning(f"MKL fusion failed: {str(e)}, using fallback")
                     merged = np.column_stack(processed_arrays)
                     logger.debug(f"Fallback concatenation applied after MKL failure")
+                    return merged, None  # Return tuple for consistency
             else:
                 # For validation data: use pre-fitted MKL
                 if fitted_fusion is None:
-                    logger.error("fitted_fusion is required for validation data with mkl strategy")
+                    logger.warning("fitted_fusion is required for validation data with mkl strategy, using fallback")
                     # Fallback to concatenation
                     merged = np.column_stack(processed_arrays)
                     logger.debug(f"Fallback concatenation applied, shape: {merged.shape}")
@@ -1052,6 +1091,14 @@ def merge_modalities(*arrays: np.ndarray,
         
         elif strategy == "snf":
             # Similarity Network Fusion
+            if not SNF_AVAILABLE:
+                logger.error("SNFpy library not available, SNF fusion will not work")
+                merged = np.column_stack(processed_arrays)
+                if is_train:
+                    return merged, None  # Return tuple for consistency
+                else:
+                    return merged
+            
             if is_train:
                 # For training data: fit SNF and return both result and fitted object
                 try:
@@ -1091,10 +1138,11 @@ def merge_modalities(*arrays: np.ndarray,
                     logger.warning(f"SNF fusion failed: {str(e)}, using fallback")
                     merged = np.column_stack(processed_arrays)
                     logger.debug(f"Fallback concatenation applied after SNF failure")
+                    return merged, None  # Return tuple for consistency
             else:
                 # For validation data: use pre-fitted SNF
                 if fitted_fusion is None:
-                    logger.error("fitted_fusion is required for validation data with snf strategy")
+                    logger.warning("fitted_fusion is required for validation data with snf strategy, using fallback")
                     # Fallback to concatenation
                     merged = np.column_stack(processed_arrays)
                     logger.debug(f"Fallback concatenation applied, shape: {merged.shape}")
@@ -1215,7 +1263,7 @@ def merge_modalities(*arrays: np.ndarray,
             else:
                 # For validation data: use pre-fitted EarlyFusionPCA
                 if fitted_fusion is None:
-                    logger.error("fitted_fusion is required for validation data with early_fusion_pca strategy")
+                    logger.warning("fitted_fusion is required for validation data with early_fusion_pca strategy, using fallback")
                     # Fallback to concatenation
                     merged = np.column_stack(processed_arrays)
                     logger.debug(f"Fallback concatenation applied, shape: {merged.shape}")
@@ -1282,22 +1330,40 @@ def merge_modalities(*arrays: np.ndarray,
         if not (strategy == "early_fusion_pca" and is_train):
             if merged.size == 0 or merged.shape[0] == 0:
                 logger.warning("Merged array has 0 rows")
-                return np.zeros((1, 1), dtype=np.float32)
+                if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "snf", "early_fusion_pca"]:
+                    return np.zeros((1, 1), dtype=np.float32), None
+                else:
+                    return np.zeros((1, 1), dtype=np.float32)
                 
             logger.debug(f"Merged array shape: {merged.shape} using strategy: {strategy}")
         
-        return merged
+        # Return appropriate format based on strategy and training mode
+        if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "snf", "early_fusion_pca"]:
+            # These strategies should have already returned (merged, fitted_fusion) tuples
+            # If we reach here, it means they fell back to simple concatenation
+            return merged, None
+        else:
+            return merged
         
     except Exception as e:
         logger.error(f"Error in merge_modalities with strategy {strategy}: {str(e)}")
-        # Return a safe fallback array
+        # Return a safe fallback array with correct format
         try:
             if processed_arrays:
-                return np.column_stack(processed_arrays)
+                fallback = np.column_stack(processed_arrays)
+            else:
+                fallback = np.zeros((1, 1), dtype=np.float32)
+            
+            # Return appropriate format based on strategy and training mode
+            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "snf", "early_fusion_pca"]:
+                return fallback, None
+            else:
+                return fallback
+        except:
+            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "snf", "early_fusion_pca"]:
+                return np.zeros((1, 1), dtype=np.float32), None
             else:
                 return np.zeros((1, 1), dtype=np.float32)
-        except:
-            return np.zeros((1, 1), dtype=np.float32)
 
 
 def detect_missing_modalities(modalities: List[np.ndarray], 
@@ -2893,7 +2959,7 @@ class MultipleKernelLearning:
         Returns
         -------
         List
-            List of kernel functions
+            List of kernel functions or kernel matrices
         """
         if not MKL_AVAILABLE:
             raise ImportError("Mklaren library not available for MKL")
@@ -2901,11 +2967,18 @@ class MultipleKernelLearning:
         kernels = []
         for i, modality in enumerate(modalities):
             if modality is not None and modality.size > 0:
-                # Create RBF kernel for this modality
-                def rbf_kernel_func(X1, X2, modality_data=modality):
-                    return exponential_kernel(X1, X2, sigma=self.gamma)
+                try:
+                    # Try to use mklaren's exponential_kernel if available
+                    def rbf_kernel_func(X1, X2, modality_data=modality):
+                        return exponential_kernel(X1, X2, sigma=self.gamma)
+                    kernels.append(rbf_kernel_func)
+                except NameError:
+                    # Fallback to sklearn's RBF kernel if mklaren kernels not available
+                    from sklearn.metrics.pairwise import rbf_kernel
+                    def sklearn_rbf_kernel(X1, X2, modality_data=modality):
+                        return rbf_kernel(X1, X2, gamma=self.gamma)
+                    kernels.append(sklearn_rbf_kernel)
                 
-                kernels.append(rbf_kernel_func)
                 logger.debug(f"Created RBF kernel for modality {i} with shape {modality.shape}")
         
         return kernels
@@ -2945,17 +3018,29 @@ class MultipleKernelLearning:
             # Concatenate modalities for MKL input
             X_combined = np.column_stack(valid_modalities)
             
-            # Initialize MKL model
-            self.mkl_model_ = Mklaren(
-                rank=min(self.n_components, X_combined.shape[0] - 1),
-                delta=1e-6,
-                lbd=1e-6
-            )
+            # Try to use full Mklaren implementation
+            try:
+                # Initialize MKL model
+                self.mkl_model_ = Mklaren(
+                    rank=min(self.n_components, X_combined.shape[0] - 1),
+                    delta=1e-6,
+                    lbd=1e-6
+                )
+                
+                # Fit MKL model
+                self.mkl_model_.fit(self.kernels_, y)
+                logger.info(f"MKL model fitted with {len(self.kernels_)} kernels using Mklaren")
+                
+            except NameError:
+                # Fallback: Use simple kernel averaging if Mklaren class not available
+                logger.info("Using fallback MKL implementation with kernel averaging")
+                self.mkl_model_ = None  # Will use fallback in transform
+                
+                # Store the combined data for fallback transform
+                self.X_train_ = X_combined
+                self.y_train_ = y
+                logger.info(f"Fallback MKL fitted with {len(self.kernels_)} kernels")
             
-            # Fit MKL model
-            self.mkl_model_.fit(self.kernels_, y)
-            
-            logger.info(f"MKL model fitted with {len(self.kernels_)} kernels")
             self.fitted_ = True
             
         except Exception as e:
@@ -2996,22 +3081,36 @@ class MultipleKernelLearning:
             if not valid_modalities:
                 return np.zeros((0, 0), dtype=np.float32)
             
-            # Get MKL representation
+            # Get combined representation
             X_combined = np.column_stack(valid_modalities)
             
-            # Transform using MKL model
-            mkl_features = self.mkl_model_.predict(self.kernels_)
-            
-            # Ensure proper shape and type
-            if mkl_features.ndim == 1:
-                mkl_features = mkl_features.reshape(-1, 1)
-            
-            logger.debug(f"MKL transform applied, output shape: {mkl_features.shape}")
-            return mkl_features.astype(np.float32)
+            if self.mkl_model_ is not None:
+                # Use full Mklaren implementation
+                mkl_features = self.mkl_model_.predict(self.kernels_)
+                
+                # Ensure proper shape and type
+                if mkl_features.ndim == 1:
+                    mkl_features = mkl_features.reshape(-1, 1)
+                
+                logger.debug(f"MKL transform applied using Mklaren, output shape: {mkl_features.shape}")
+                return mkl_features.astype(np.float32)
+            else:
+                # Use fallback implementation: weighted combination of kernel similarities
+                logger.debug("Using fallback MKL transform with kernel averaging")
+                
+                # Simple fallback: return the concatenated features with some basic processing
+                # In a more sophisticated implementation, you could compute kernel similarities
+                # and use them as features
+                from sklearn.preprocessing import StandardScaler
+                scaler = StandardScaler()
+                scaled_features = scaler.fit_transform(X_combined)
+                
+                logger.debug(f"Fallback MKL transform applied, output shape: {scaled_features.shape}")
+                return scaled_features.astype(np.float32)
             
         except Exception as e:
             logger.error(f"Error in MKL transform: {str(e)}")
-            # Fallback to concatenation
+            # Final fallback to concatenation
             valid_modalities = [m for m in modalities if m is not None and m.size > 0]
             if valid_modalities:
                 return np.column_stack(valid_modalities).astype(np.float32)
@@ -3074,6 +3173,7 @@ class SimilarityNetworkFusion:
         self.random_state = random_state
         self.fused_network_ = None
         self.spectral_features_ = None
+        self.training_modalities_ = None
         self.fitted_ = False
         
     def _build_similarity_networks(self, modalities: List[np.ndarray]) -> List[np.ndarray]:
@@ -3131,6 +3231,9 @@ class SimilarityNetworkFusion:
             logger.warning("No valid modalities for SNF")
             self.fitted_ = True
             return self
+        
+        # Store training modalities for later projection
+        self.training_modalities_ = [m.copy() for m in valid_modalities]
         
         if len(valid_modalities) < 2:
             logger.warning("SNF requires at least 2 modalities, using single modality")
@@ -3194,6 +3297,9 @@ class SimilarityNetworkFusion:
         """
         Transform modalities using fitted SNF model.
         
+        For new data (validation/test), we compute similarity to training data
+        and project onto the learned spectral space.
+        
         Parameters
         ----------
         modalities : List[np.ndarray]
@@ -3216,18 +3322,96 @@ class SimilarityNetworkFusion:
                 return np.zeros((0, 0), dtype=np.float32)
         
         try:
-            # For transform, we return the spectral features computed during fit
-            # In a more sophisticated implementation, you might want to project
-            # new data onto the learned spectral space
+            valid_modalities = [m for m in modalities if m is not None and m.size > 0]
+            if not valid_modalities:
+                return np.zeros((0, 0), dtype=np.float32)
             
-            logger.debug(f"SNF transform applied, output shape: {self.spectral_features_.shape}")
-            return self.spectral_features_.astype(np.float32)
+            n_input_samples = valid_modalities[0].shape[0]
+            
+            # Check if this is the same data used for training (fit_transform case)
+            if hasattr(self, 'training_modalities_') and self.training_modalities_ is not None:
+                # Compare shapes to see if this might be the same data
+                training_shapes = [m.shape for m in self.training_modalities_]
+                current_shapes = [m.shape for m in valid_modalities]
+                
+                if training_shapes == current_shapes:
+                    # Likely the same data, return the stored spectral features
+                    logger.debug(f"SNF transform: returning stored spectral features for training data")
+                    return self.spectral_features_.astype(np.float32)
+            
+            # For new data, we need to project onto the learned spectral space
+            # This is a simplified approach that works well in practice
+            
+            if self.use_spectral_clustering:
+                # For spectral clustering case, we use k-nearest neighbors to assign cluster membership
+                from sklearn.neighbors import NearestNeighbors
+                
+                # Concatenate training data for reference
+                if hasattr(self, 'training_modalities_') and self.training_modalities_ is not None:
+                    training_concat = np.column_stack(self.training_modalities_)
+                    new_data_concat = np.column_stack(valid_modalities)
+                    
+                    # Find nearest neighbors in training data
+                    n_neighbors = min(5, training_concat.shape[0])
+                    nbrs = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
+                    nbrs.fit(training_concat)
+                    
+                    # Get distances and indices to nearest training samples
+                    distances, indices = nbrs.kneighbors(new_data_concat)
+                    
+                    # Assign cluster membership based on nearest neighbors
+                    # Use weighted average of neighbor cluster assignments
+                    weights = 1.0 / (distances + 1e-8)  # Inverse distance weighting
+                    weights = weights / weights.sum(axis=1, keepdims=True)  # Normalize
+                    
+                    # Get cluster assignments for neighbors
+                    neighbor_clusters = np.argmax(self.spectral_features_[indices], axis=2)
+                    
+                    # Create new spectral features
+                    new_spectral_features = np.zeros((n_input_samples, self.n_clusters))
+                    for i in range(n_input_samples):
+                        for j, cluster in enumerate(neighbor_clusters[i]):
+                            new_spectral_features[i, cluster] += weights[i, j]
+                    
+                    logger.debug(f"SNF transform: projected {n_input_samples} samples using k-NN")
+                    return new_spectral_features.astype(np.float32)
+                else:
+                    # No training data stored, use uniform cluster assignment
+                    logger.warning("SNF transform: no training data available, using uniform cluster assignment")
+                    uniform_features = np.ones((n_input_samples, self.n_clusters)) / self.n_clusters
+                    return uniform_features.astype(np.float32)
+            else:
+                # For non-spectral case, we need to compute similarity to training data
+                # This is more complex, so we'll use a simplified approach
+                logger.warning(f"SNF transform: using simplified projection for {n_input_samples} samples")
+                
+                # Use PCA-like projection based on the fused network structure
+                if hasattr(self, 'training_modalities_') and self.training_modalities_ is not None:
+                    # Compute similarity between new data and training data
+                    from sklearn.metrics.pairwise import cosine_similarity
+                    
+                    training_concat = np.column_stack(self.training_modalities_)
+                    new_data_concat = np.column_stack(valid_modalities)
+                    
+                    # Compute similarity matrix
+                    similarity = cosine_similarity(new_data_concat, training_concat)
+                    
+                    # Project using the similarity and fused network
+                    projected_features = similarity @ self.spectral_features_
+                    
+                    logger.debug(f"SNF transform: projected {n_input_samples} samples using similarity")
+                    return projected_features.astype(np.float32)
+                else:
+                    # Fallback: return concatenated features
+                    logger.warning("SNF transform: no training reference, using concatenation")
+                    return np.column_stack(valid_modalities).astype(np.float32)
             
         except Exception as e:
             logger.error(f"Error in SNF transform: {str(e)}")
             # Fallback to concatenation
             valid_modalities = [m for m in modalities if m is not None and m.size > 0]
             if valid_modalities:
+                logger.warning("SNF transform: using concatenation fallback due to error")
                 return np.column_stack(valid_modalities).astype(np.float32)
             else:
                 return np.zeros((0, 0), dtype=np.float32)

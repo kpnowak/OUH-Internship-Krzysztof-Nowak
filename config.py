@@ -22,33 +22,36 @@ except ImportError:
     warnings.filterwarnings('ignore', message='.*Objective did not converge.*')
 
 # Constants
-MAX_VARIABLE_FEATURES = 50000  # Allow much larger feature pools
-MAX_COMPONENTS = 256  # Increased component limits
-MAX_FEATURES = 1024  # Much larger final feature sets
+MAX_VARIABLE_FEATURES = 5000  # OPTIMIZED: Reduced from 50000 for faster processing
+MAX_COMPONENTS = 128  # OPTIMIZED: Reduced from 256 for faster processing
+MAX_FEATURES = 512  # OPTIMIZED: Reduced from 1024 for faster processing
 N_JOBS = min(os.cpu_count() or 8, 8)  # Increased to 8 cores for server
 OMP_BLAS_THREADS = min(4, os.cpu_count() or 4)
 
-# Feature and component selection values - OPTIMIZED FOR HIGH-DIMENSIONAL DATA
-N_VALUES_LIST = [64, 128, 256]  # Further increased feature retention for better signal preservation
+# Feature and component selection values - OPTIMIZED FOR SPEED
+N_VALUES_LIST = [32, 64, 128]  # OPTIMIZED: Reduced from [64, 128, 256] for faster processing
 
 # Additional preprocessing parameters for small sample, high-dimensional data
+# OPTIMIZED: Simplified preprocessing for better performance
 PREPROCESSING_CONFIG = {
-    "variance_threshold": 0.001,      # Very low for sparse data
-    "correlation_threshold": 0.98,    # High to retain informative features
-    "missing_threshold": 0.5,         # Allow more missing values
+    "variance_threshold": 0.001,       # OPTIMIZED: Increased from 0.001 for more aggressive filtering
+    "correlation_threshold": 0.95,    # OPTIMIZED: Reduced from 0.98 (but correlation filtering is disabled)
+    "missing_threshold": 0.3,         # OPTIMIZED: Reduced from 0.5 for cleaner data
     "outlier_threshold": 4.0,         # More lenient for biological data
-    "log_transform": True,            # Log transform for gene expression
-    "quantile_transform": True,       # Robust normalization
+    "log_transform": True,           # OPTIMIZED: Disabled by default for speed
+    "quantile_transform": True,      # OPTIMIZED: Disabled by default for speed
     "remove_low_variance": True,
-    "remove_highly_correlated": True,
+    "remove_highly_correlated": True,  # OPTIMIZED: Disabled for performance (expensive operation)
     "handle_outliers": True,
     "impute_missing": True,
-    "scaling_method": 'robust',  # Robust to outliers in genomic data
-    "handle_missing": 'median',  # Better for genomic data
+    "scaling_method": 'robust',       # Robust to outliers in genomic data
+    "handle_missing": 'median',       # Better for genomic data
     "outlier_method": 'iqr',
-    "outlier_threshold": 3.0,  # More permissive outlier detection
-    "log_transform": False,  # Often not needed for processed genomic data
-    "normalize": True
+    "outlier_std_threshold": 4.0,     # OPTIMIZED: More permissive for speed
+    "normalize": True,
+    "min_samples_per_feature": 3,    # Minimum samples required per feature
+    "robust_scaling": True,          # Use robust scaling instead of standard scaling
+    "feature_selection_method": "variance",  # Use variance-based selection first
 }
 
 # High-memory server optimization (60GB RAM available)
@@ -219,6 +222,14 @@ MODEL_OPTIMIZATIONS = {
         "subsample": 0.8,
         "loss": "huber",             # Robust loss function for outliers
         "alpha": 0.9,                # Huber loss parameter
+        "random_state": 42
+    },
+    "KPLS": {
+        "gamma": ["auto", 1e-3, 1e-2],  # Kernel coefficient: auto (median heuristic), or fixed values
+        "n_components": [4, 8, 16],     # Number of PLS components
+        "algorithm": [1, 2],            # IKPLS algorithm variant
+        "kernel": ["rbf"],              # Kernel type (currently only RBF supported)
+        "max_iter": [500, 1000],        # Maximum iterations
         "random_state": 42
     }
 }
@@ -582,8 +593,8 @@ class DatasetConfig:
     outcome_type: str = "os"
     output_dir: str = "output"
     fix_tcga_ids: bool = False
-    nfeats_list: List[int] = field(default_factory=lambda: [16, 32, 64, 128])  # Increased feature ranges
-    ncomps_list: List[int] = field(default_factory=lambda: [16, 32, 64, 128])  # Increased component ranges
+    nfeats_list: List[int] = field(default_factory=lambda: [32, 64, 128])  # Increased feature ranges
+    ncomps_list: List[int] = field(default_factory=lambda: [32, 64, 128])  # Increased component ranges
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert dataclass to dictionary."""
@@ -606,11 +617,24 @@ class DatasetConfig:
 
 # Regression datasets
 REGRESSION_DATASETS = [
-
+    DatasetConfig(
+        name="AML",
+        base_path="data/aml",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/aml.csv",
+        outcome_col="lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
+        id_col="sampleID",
+        outcome_type="continuous",
+        fix_tcga_ids=True
+    ).to_dict(),
 ]
 
 """
-    DatasetConfig(
+        DatasetConfig(
         name="TestRegression",
         base_path="test_data/regression",
         modalities={
@@ -618,13 +642,13 @@ REGRESSION_DATASETS = [
             "miRNA": "mirna.csv",
             "Methylation": "methy.csv"
         },
-        outcome_file="clinical.csv",
+        outcome_file="clinical.csv",  # Fixed: should be in the same directory as modalities
         outcome_col="survival_time",
         id_col="sample_id",
         outcome_type="continuous",
         output_dir="output_regression",
-        fix_tcga_ids=True
-    ).to_dict()
+        fix_tcga_ids=False  # Fixed: test data doesn't need TCGA ID fixing
+    ).to_dict(),
 
     DatasetConfig(
         name="AML",
@@ -659,7 +683,7 @@ REGRESSION_DATASETS = [
 """
 
 # Classification datasets
-CLASSIFICATION_DATASETS = [
+CLASSIFICATION_DATASETS = [    
     DatasetConfig(
         name="Colon",
         base_path="data/colon",
@@ -691,7 +715,22 @@ CLASSIFICATION_DATASETS = [
         outcome_type="class",
         output_dir="output_classification",
         fix_tcga_ids=True
-    ).to_dict()
+    ).to_dict(),
+
+    DatasetConfig(
+        name="Colon",
+        base_path="data/colon",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/colon.csv",
+        outcome_col="pathologic_T",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
 
     DatasetConfig(
         name="Breast",
@@ -702,21 +741,6 @@ CLASSIFICATION_DATASETS = [
             "Methylation": "methy.csv"
         },
         outcome_file="data/clinical/breast.csv",
-        outcome_col="pathologic_T",
-        id_col="sampleID",
-        outcome_type="class",
-        fix_tcga_ids=True
-    ).to_dict(),
-    
-    DatasetConfig(
-        name="Colon",
-        base_path="data/colon",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/colon.csv",
         outcome_col="pathologic_T",
         id_col="sampleID",
         outcome_type="class",

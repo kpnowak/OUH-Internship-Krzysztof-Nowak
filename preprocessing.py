@@ -6,8 +6,13 @@ Preprocessing module for data preparation and cleaning functions.
 import numpy as np
 import pandas as pd
 import random
+import warnings
 from typing import Dict, List, Optional, Union, Any, Tuple
 import logging
+
+# Suppress sklearn deprecation warning about force_all_finite -> ensure_all_finite
+warnings.filterwarnings("ignore", message=".*force_all_finite.*was renamed to.*ensure_all_finite.*", category=FutureWarning)
+
 from sklearn.preprocessing import StandardScaler, RobustScaler, QuantileTransformer
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
@@ -556,6 +561,7 @@ def advanced_feature_filtering(df: pd.DataFrame,
                              config: Dict = None) -> pd.DataFrame:
     """
     Apply advanced feature filtering for high-dimensional, small-sample data.
+    OPTIMIZED VERSION - Removed expensive correlation filtering for speed.
     
     Parameters
     ----------
@@ -572,80 +578,88 @@ def advanced_feature_filtering(df: pd.DataFrame,
     if config is None:
         config = PREPROCESSING_CONFIG
     
-    logger.info(f"Starting advanced filtering with {df.shape[0]} features")
-    
     # 1. Remove features with too many missing values
-    missing_threshold = config.get("missing_threshold", 0.3)
-    missing_ratio = df.isnull().sum(axis=1) / df.shape[1]
-    features_to_keep = missing_ratio <= missing_threshold
-    df = df[features_to_keep]
-    logger.info(f"After missing value filter: {df.shape[0]} features")
+    missing_threshold = config.get("missing_threshold", 0.5)
+    if missing_threshold < 1.0:
+        missing_ratio = df.isnull().sum(axis=1) / df.shape[1]
+        df = df[missing_ratio <= missing_threshold]
     
-    # 2. Remove low-variance features more aggressively
+    # 2. Remove low-variance features (more aggressive for speed)
     variance_threshold = config.get("variance_threshold", 0.01)
-    feature_variances = df.var(axis=1, skipna=True)
-    high_variance_features = feature_variances > variance_threshold
-    df = df[high_variance_features]
-    logger.info(f"After variance filter: {df.shape[0]} features")
+    if variance_threshold > 0:
+        variances = df.var(axis=1, skipna=True)
+        df = df[variances > variance_threshold]
     
-    # 3. Remove highly correlated features
-    correlation_threshold = config.get("correlation_threshold", 0.95)
-    if df.shape[0] > 1:  # Only if we have more than 1 feature
+    # 3. Remove highly correlated features (RE-ENABLED with optimizations)
+    if config.get("remove_highly_correlated", False):
+        correlation_threshold = config.get("correlation_threshold", 0.95)
+        if df.shape[0] > 1:  # Only if we have more than 1 feature
+            try:
+                # OPTIMIZATION: Use sample of features if too many (>5000) for initial screening
+                if df.shape[0] > 5000:
+                    # Sample features for correlation analysis to speed up
+                    sample_size = min(2000, df.shape[0])
+                    sample_indices = np.random.choice(df.index, sample_size, replace=False)
+                    df_sample = df.loc[sample_indices]
+                    
+                    # Calculate correlation matrix on sample
+                    corr_matrix = df_sample.T.corr().abs()
+                    
+                    # Find highly correlated pairs in sample
+                    upper_tri = np.triu(np.ones_like(corr_matrix, dtype=bool), k=1)
+                    high_corr_pairs = np.where((corr_matrix > correlation_threshold) & upper_tri)
+                    
+                    # Get feature names to drop from sample
+                    to_drop_sample = set()
+                    for i, j in zip(high_corr_pairs[0], high_corr_pairs[1]):
+                        # Drop the feature with lower variance
+                        var_i = df_sample.iloc[i].var()
+                        var_j = df_sample.iloc[j].var()
+                        if var_i < var_j:
+                            to_drop_sample.add(df_sample.index[i])
+                        else:
+                            to_drop_sample.add(df_sample.index[j])
+                    
+                    # Apply filtering to full dataset
+                    df = df.drop(index=list(to_drop_sample), errors='ignore')
+                    
+                else:
+                    # Full correlation analysis for smaller datasets
+                    corr_matrix = df.T.corr().abs()
+                    upper_tri = np.triu(np.ones_like(corr_matrix, dtype=bool), k=1)
+                    high_corr_pairs = np.where((corr_matrix > correlation_threshold) & upper_tri)
+                    
+                    to_drop = set()
+                    for i, j in zip(high_corr_pairs[0], high_corr_pairs[1]):
+                        var_i = df.iloc[i].var()
+                        var_j = df.iloc[j].var()
+                        if var_i < var_j:
+                            to_drop.add(df.index[i])
+                        else:
+                            to_drop.add(df.index[j])
+                    
+                    df = df.drop(index=list(to_drop))
+                    
+            except Exception as e:
+                logger.warning(f"Correlation filtering failed: {str(e)}")
+    
+    # 4. Remove outlier features (simplified for speed)
+    outlier_threshold = config.get("outlier_threshold", 3.0)
+    if outlier_threshold > 0:
         try:
-            # Calculate correlation matrix
-            corr_matrix = df.T.corr().abs()  # Transpose to get feature correlations
+            # Simplified outlier detection using IQR method (faster than z-score)
+            Q1 = df.quantile(0.25, axis=1)
+            Q3 = df.quantile(0.75, axis=1)
+            IQR = Q3 - Q1
             
-            # Find pairs of highly correlated features
-            upper_triangle = corr_matrix.where(
-                np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
-            )
-            
-            # Find features to drop (keep the one with higher variance)
-            to_drop = []
-            for column in upper_triangle.columns:
-                high_corr_features = upper_triangle.index[
-                    upper_triangle[column] > correlation_threshold
-                ].tolist()
-                
-                if high_corr_features:
-                    # Among correlated features, keep the one with highest variance
-                    all_corr_features = high_corr_features + [column]
-                    variances = feature_variances[all_corr_features]
-                    features_to_drop = variances.index[variances != variances.max()].tolist()
-                    to_drop.extend(features_to_drop)
-            
-            # Remove duplicates and drop features
-            to_drop = list(set(to_drop))
-            df = df.drop(index=to_drop, errors='ignore')
-            logger.info(f"After correlation filter: {df.shape[0]} features")
+            # Features with extreme IQR are likely outliers
+            outlier_mask = (IQR > IQR.quantile(0.95)) | (IQR < IQR.quantile(0.05))
+            df = df[~outlier_mask]
             
         except Exception as e:
-            logger.warning(f"Correlation filtering failed: {str(e)}")
+            logger.warning(f"Outlier filtering failed: {str(e)}")
     
-    # 4. Remove outlier features (features with extreme values)
-    outlier_threshold = config.get("outlier_std_threshold", 3.0)
-    try:
-        # Calculate z-scores for each feature
-        feature_means = df.mean(axis=1, skipna=True)
-        feature_stds = df.std(axis=1, skipna=True)
-        
-        # Remove features where any sample has z-score > threshold
-        outlier_features = []
-        for idx in df.index:
-            feature_data = df.loc[idx].dropna()
-            if len(feature_data) > 0 and feature_stds[idx] > 0:
-                z_scores = np.abs((feature_data - feature_means[idx]) / feature_stds[idx])
-                if z_scores.max() > outlier_threshold:
-                    outlier_features.append(idx)
-        
-        df = df.drop(index=outlier_features, errors='ignore')
-        logger.info(f"After outlier filter: {df.shape[0]} features")
-        
-    except Exception as e:
-        logger.warning(f"Outlier filtering failed: {str(e)}")
-    
-    logger.info(f"Advanced filtering complete: {df.shape[0]} features remaining")
-    return df 
+    return df
 
 def log_transform_data(X, offset=1e-6):
     """

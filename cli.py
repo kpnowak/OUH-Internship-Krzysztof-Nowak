@@ -95,7 +95,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         # Extract the dataset name
         ds_name = ds_conf["name"]
         logger.info(f"\n>> Processing {ds_name} dataset...")
-        logger.debug(f"[DATASET_PREP] {ds_name} - Starting dataset preparation")
+
         
         # Load the dataset using the new optimized function
         ds_name = ds_conf["name"]
@@ -116,8 +116,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         outcome_col = ds_conf["outcome_col"]
         task_type = 'regression' if is_regression else 'classification'
         
-        logger.debug(f"[DATASET_PREP] {ds_name} - Loading modalities: {modality_short_names}")
-        logger.debug(f"[DATASET_PREP] {ds_name} - Outcome column: {outcome_col}, Task: {task_type}")
+
         
         # Call the new optimized load_dataset function
         modalities_data, y_aligned, common_ids = load_dataset(
@@ -186,7 +185,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
                 else:
                     logger.info(f"Successfully cleaned all NaN/infinite values in {ds_name} target")
                 
-                logger.debug(f"[DATASET_PREP] {ds_name} - Cleaned NaN/infinite values in target")
+    
         
         # Verify data integrity
         if len(common_ids) < 10:
