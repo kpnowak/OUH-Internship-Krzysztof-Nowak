@@ -24,12 +24,12 @@ These warnings were occurring repeatedly during ElasticNetFS feature selection, 
 # ElasticNetFS-specific issue:
 AML_target = [large_values]           # Large original AML values
 log1p_values = [moderate_values]      # log1p transformation
-selected_features → amplified_scaling # ElasticNetFS amplifies certain patterns
+selected_features -> amplified_scaling # ElasticNetFS amplifies certain patterns
 scaled_values = [600-800]             # Exceeds safe limit of 500
-expm1(600+) → RuntimeWarning         # Still causes overflow warnings
+expm1(600+) -> RuntimeWarning         # Still causes overflow warnings
 ```
 
-## 🔧 Solution Implemented
+##  Solution Implemented
 
 ### **More Conservative Clipping**
 - **Reduced safe limit** from 500 to **200** for all cases
@@ -121,7 +121,7 @@ The ElasticNetFS warning fix has been **completely successful**. The issue was c
 4. **Maintained Functionality**: ✅ All transformations work correctly
 
 **Complete Error Resolution Summary**:
-- ✅ **Pipeline Order**: Fixed (log1p → scaling)
+- ✅ **Pipeline Order**: Fixed (log1p -> scaling)
 - ✅ **Warning Reduction**: Fixed (global tracking)  
 - ✅ **Pickle Support**: Fixed (module-level classes)
 - ✅ **Overflow Protection**: Fixed (conservative clipping)

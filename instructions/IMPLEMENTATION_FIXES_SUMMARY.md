@@ -11,13 +11,13 @@ Successfully implemented all 7 steps to eliminate small classes problems and CV 
 **Implementation**:
 - Added _remap_labels(y, dataset) function in preprocessing.py
 - Merges ultra-rare classes (<3 samples) automatically
-- Special handling for Colon dataset: T1/T2→early, T3/T4→late
+- Special handling for Colon dataset: T1/T2->early, T3/T4->late
 - Integrated into data loading pipeline in data_io.py
 - Applied in CV pipeline in cv.py after train-test split
 
 **Test Results**: Working correctly
-- Ultra-rare classes merged: {0: 3, 1: 2, 2: 1, 3: 1} → {1: 4, 0: 3}
-- Colon special case: T1/T2/T3/T4 → early (8 samples)
+- Ultra-rare classes merged: {0: 3, 1: 2, 2: 1, 3: 1} -> {1: 4, 0: 3}
+- Colon special case: T1/T2/T3/T4 -> early (8 samples)
 
 ### Step 2: Dynamic Splitter
 **Location**: cv.py

@@ -14,9 +14,9 @@ import numpy as np
 # Local imports
 from config import (
     REGRESSION_DATASETS, CLASSIFICATION_DATASETS,
-    MAX_COMPONENTS, MAX_FEATURES, N_VALUES_LIST
+    MAX_COMPONENTS, MAX_FEATURES, N_VALUES_LIST, CV_CONFIG
 )
-from data_io import load_dataset
+from data_io import load_dataset, load_and_preprocess_data_enhanced
 from models import (
     get_regression_extractors, get_regression_selectors,
     get_classification_extractors, get_classification_selectors,
@@ -25,7 +25,7 @@ from models import (
 from cv import (
     run_extraction_pipeline, run_selection_pipeline
 )
-from utils import comprehensive_logger
+from utils import comprehensive_logger, merge_small_classes
 from mad_analysis import run_mad_analysis
 from logging_utils import (
     setup_logging_levels, log_pipeline_stage, log_mad_analysis_info,
@@ -118,15 +118,29 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         
 
         
-        # Call the new optimized load_dataset function
-        modalities_data, y_aligned, common_ids = load_dataset(
-            ds_name.lower(), 
-            modality_short_names, 
-            outcome_col, 
-            task_type,
-            parallel=True,
-            use_cache=True
-        )
+        # Call the enhanced preprocessing function that includes all 6 priority fixes
+        try:
+            modalities_data, y_aligned, common_ids = load_and_preprocess_data_enhanced(
+                ds_name.lower(), 
+                modality_short_names, 
+                outcome_col, 
+                task_type,
+                parallel=True,
+                use_cache=True
+            )
+            logger.info(f"Enhanced preprocessing completed successfully for {ds_name}")
+        except Exception as e:
+            logger.warning(f"Enhanced preprocessing failed for {ds_name}: {str(e)}")
+            logger.info(f"Falling back to standard preprocessing for {ds_name}")
+            # Fallback to standard preprocessing for backward compatibility
+            modalities_data, y_aligned, common_ids = load_dataset(
+                ds_name.lower(), 
+                modality_short_names, 
+                outcome_col, 
+                task_type,
+                parallel=True,
+                use_cache=True
+            )
         
         # Check if loading was successful
         if modalities_data is None or len(common_ids) == 0:
@@ -208,55 +222,50 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
             logger.debug(f"[DATASET_PREP] {ds_name} - {n_classes} classes, min samples per class: {min_samples}")
             
             # Check for problematic class distributions
-            classes_with_few_samples = unique[counts < 2]
-            if len(classes_with_few_samples) > 0:
-                logger.info(f"Dataset {ds_name} has classes with < 2 samples: {classes_with_few_samples}")
+            if min_samples < 2:
+                logger.info(f"Dataset {ds_name} has classes with < 2 samples")
                 logger.info(f"Original class distribution: {dict(zip(unique, counts))}")
-                logger.info(f"Filtering out these classes to ensure proper cross-validation")
-                logger.debug(f"[DATASET_PREP] {ds_name} - Filtering classes with insufficient samples")
                 
-                # Actually filter out classes with insufficient samples
-                valid_classes = unique[counts >= 2]
-                if len(valid_classes) < 2:
-                    logger.error(f"Dataset {ds_name} has insufficient valid classes for classification (< 2 classes with >= 2 samples)")
-                    logger.error(f"Cannot proceed with this dataset")
-                    log_dataset_preparation(ds_name, modalities, common_ids, y_aligned.shape, success=False)
-                    return None
-                
-                # Filter samples to only include valid classes
-                valid_mask = np.isin(y_aligned, valid_classes)
-                filtered_common_ids = [common_ids[i] for i in range(len(common_ids)) if valid_mask[i]]
-                filtered_y_aligned = y_aligned[valid_mask]
-                
-                # Filter modalities to match the filtered samples
-                filtered_modalities = {}
-                for mod_name, mod_df in modalities.items():
-                    # Keep only columns (samples) that correspond to filtered_common_ids
-                    available_cols = [col for col in filtered_common_ids if col in mod_df.columns]
-                    if len(available_cols) > 0:
-                        filtered_modalities[mod_name] = mod_df[available_cols]
-                    else:
-                        logger.warning(f"No samples remaining in modality {mod_name} after class filtering")
-                
-                # Update the dataset with filtered data
-                modalities = filtered_modalities
-                common_ids = filtered_common_ids
-                y_aligned = filtered_y_aligned
-                
-                # Relabel classes to be consecutive integers starting from 0
-                # Sort valid_classes to ensure consistent mapping
-                valid_classes_sorted = np.sort(valid_classes)
-                label_mapping = {old_label: new_label for new_label, old_label in enumerate(valid_classes_sorted)}
-                y_aligned = np.array([label_mapping[label] for label in y_aligned])
-                
-                logger.info(f"Filtered dataset from {len(y_aligned) + np.sum(~valid_mask)} to {len(y_aligned)} samples")
-                logger.info(f"Reduced from {n_classes} to {len(valid_classes)} classes")
-                logger.info(f"Class relabeling mapping: {label_mapping}")
-                logger.info(f"Final class distribution: {dict(zip(range(len(valid_classes_sorted)), np.bincount(y_aligned)))}")
-                logger.debug(f"[DATASET_PREP] {ds_name} - Class filtering completed")
-            else:
-                logger.info(f"All classes have sufficient samples (>= 2)")
-                logger.debug(f"[DATASET_PREP] {ds_name} - No class filtering needed")
+                if CV_CONFIG["merge_small_classes"]:
+                    logger.info(f"Merging small classes to ensure proper cross-validation")
+                    y_aligned, label_mapping = merge_small_classes(y_aligned, 2)
+                    
+                    # Log the new class distribution
+                    unique, counts = np.unique(y_aligned, return_counts=True)
+                    logger.info(f"After merging: {dict(zip(unique, counts))}")
+                    logger.info(f"Label mapping: {label_mapping}")
+                    
+                    # Check if we still have enough classes
+                    if len(unique) < 2:
+                        logger.error(f"Dataset {ds_name} has insufficient classes after merging (< 2 classes)")
+                        logger.error(f"Cannot proceed with this dataset")
+                        log_dataset_preparation(ds_name, modalities, common_ids, y_aligned.shape, success=False)
+                        return None
+                else:
+                    # If merging is disabled, filter out small classes
+                    valid_classes = unique[counts >= 2]
+                    if len(valid_classes) < 2:
+                        logger.error(f"Dataset {ds_name} has insufficient valid classes for classification (< 2 classes with >= 2 samples)")
+                        logger.error(f"Cannot proceed with this dataset")
+                        log_dataset_preparation(ds_name, modalities, common_ids, y_aligned.shape, success=False)
+                        return None
+                    
+                    # Filter samples to only include valid classes
+                    valid_mask = np.isin(y_aligned, valid_classes)
+                    filtered_common_ids = [common_ids[i] for i in range(len(common_ids)) if valid_mask[i]]
+                    filtered_y_aligned = y_aligned[valid_mask]
+                    
+                    # Filter modalities to match the filtered samples
+                    filtered_modalities = {}
+                    for mod_name, mod_data in modalities.items():
+                        filtered_modalities[mod_name] = mod_data[filtered_common_ids]
+                    
+                    # Update variables
+                    common_ids = filtered_common_ids
+                    y_aligned = filtered_y_aligned
+                    modalities = filtered_modalities
+                    
+                    logger.info(f"After filtering: {len(common_ids)} samples, {len(np.unique(y_aligned))} classes")
         
         # Final validation after any filtering
         if not is_regression:

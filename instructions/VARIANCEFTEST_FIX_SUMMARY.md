@@ -50,8 +50,8 @@ elif selector_code == "variance_f_test_reg":
 ### 3. Enhanced Legacy Selectors
 Updated all legacy selectors with genomic optimization:
 - Increased `k` values to `min(effective_n_feats, 10000)`
-- Reduced regularization (alpha: 0.001 → 0.0001, C: 1.0 → 100.0)
-- Increased model complexity (n_estimators: 200 → 1000, max_depth: 10 → None)
+- Reduced regularization (alpha: 0.001 -> 0.0001, C: 1.0 -> 100.0)
+- Increased model complexity (n_estimators: 200 -> 1000, max_depth: 10 -> None)
 - Changed thresholds from `-np.inf` to `"0.001*mean"`
 
 ## Genomic Optimizations Applied

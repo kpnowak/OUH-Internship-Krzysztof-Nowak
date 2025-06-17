@@ -119,7 +119,7 @@ def test_enhanced_imputation_strategies():
         
         # Verify no NaNs remain
         assert not np.isnan(imputed_data).any(), "Imputation should remove all NaNs"
-        print("  ✓ All NaNs successfully imputed")
+        print("   All NaNs successfully imputed")
 
 def test_late_fusion_fallback():
     """Test late-fusion fallback for missing entire modalities."""
@@ -180,7 +180,7 @@ def test_late_fusion_fallback():
         
         predictions = late_fusion.predict(test_modalities)
         print(f"Predictions shape: {predictions.shape}")
-        print("✓ Late-fusion fallback successful")
+        print(" Late-fusion fallback successful")
         
     except Exception as e:
         print(f"✗ Late-fusion fallback failed: {str(e)}")
@@ -261,7 +261,7 @@ def test_fusion_strategies_with_missing_data():
             if np.isnan(merged_data).any():
                 print(f"  ✗ Result contains {np.isnan(merged_data).sum()} NaNs")
             else:
-                print(f"  ✓ No NaNs in result")
+                print(f"   No NaNs in result")
                 
         except Exception as e:
             print(f"  ✗ Strategy failed: {str(e)}")
@@ -311,7 +311,7 @@ def test_weighted_concat_restriction():
             is_train=True
         )
         print(f"  Result shape: {result.shape}")
-        print("  ✓ weighted_concat works with 0% missing data")
+        print("   weighted_concat works with 0% missing data")
         
     except Exception as e:
         print(f"  ✗ weighted_concat failed unexpectedly: {str(e)}")

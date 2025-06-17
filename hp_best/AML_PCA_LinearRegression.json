@@ -1,0 +1,8 @@
+{
+  "best_params": {
+    "extractor__n_components": 2,
+    "model__copy_X": true,
+    "model__fit_intercept": true
+  },
+  "best_score": -0.05618051687876383
+}

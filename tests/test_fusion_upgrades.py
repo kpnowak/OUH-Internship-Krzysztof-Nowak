@@ -14,7 +14,7 @@ def test_configuration_loading():
     """Test configuration loading"""
     try:
         from config import FUSION_UPGRADES_CONFIG
-        logger.info("✓ FUSION_UPGRADES_CONFIG loaded successfully")
+        logger.info(" FUSION_UPGRADES_CONFIG loaded successfully")
         return True
     except Exception as e:
         logger.error(f"✗ Configuration loading failed: {e}")
@@ -35,7 +35,7 @@ def test_attention_fuser():
         fuser = AttentionFuser(hidden_dim=16, max_epochs=10)
         X_fused = fuser.fit_transform([X1, X2], y)
         
-        logger.info(f"✓ AttentionFuser successful: {X_fused.shape}")
+        logger.info(f" AttentionFuser successful: {X_fused.shape}")
         return True
     except Exception as e:
         logger.error(f"✗ AttentionFuser test failed: {e}")
@@ -57,7 +57,7 @@ def test_late_fusion_stacking():
         stacker.fit([X1, X2], y)
         predictions = stacker.predict([X1, X2])
         
-        logger.info(f"✓ LateFusionStacking successful: {predictions.shape}")
+        logger.info(f" LateFusionStacking successful: {predictions.shape}")
         return True
     except Exception as e:
         logger.error(f"✗ LateFusionStacking test failed: {e}")
@@ -84,7 +84,7 @@ def test_merge_modalities():
             fusion_params={"hidden_dim": 8, "max_epochs": 5}
         )
         
-        logger.info(f"✓ merge_modalities successful: {result.shape}")
+        logger.info(f" merge_modalities successful: {result.shape}")
         return True
     except Exception as e:
         logger.error(f"✗ merge_modalities test failed: {e}")

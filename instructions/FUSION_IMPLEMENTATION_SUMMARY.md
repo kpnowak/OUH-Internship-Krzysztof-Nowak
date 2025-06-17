@@ -113,7 +113,7 @@ val_result = merge_modalities(X1_val, X2_val, X3_val,
                              is_train=False)
 ```
 
-## 🔧 **CONFIGURATION OPTIONS**
+##  **CONFIGURATION OPTIONS**
 
 ### **Learnable Weighted Fusion**
 - `cv_folds`: Number of cross-validation folds (default: 3)

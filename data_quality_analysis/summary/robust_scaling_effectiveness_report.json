@@ -1,0 +1,84 @@
+{
+  "total_datasets_analyzed": 2,
+  "datasets_with_scaling_data": 0,
+  "scaling_effectiveness_summary": {
+    "fusion_weighted_concat": {
+      "samples_analyzed": 360,
+      "variance_metrics_available": [
+        "variance"
+      ],
+      "variance_stats": {
+        "mean": 2.0281982180199583,
+        "median": 0.20291659412930446,
+        "std": 5.626725720904276,
+        "min": 0.0375210641669065,
+        "max": 51.62470163105545
+      }
+    },
+    "fusion_learnable_weighted": {
+      "samples_analyzed": 360,
+      "variance_metrics_available": [
+        "variance"
+      ],
+      "variance_stats": {
+        "mean": 1.1675840995550881,
+        "median": 0.0569867616353294,
+        "std": 2.503041794944338,
+        "min": 0.0154512686984995,
+        "max": 15.957247636232912
+      }
+    },
+    "fusion_attention_weighted": {
+      "samples_analyzed": 360,
+      "variance_metrics_available": [
+        "variance"
+      ],
+      "variance_stats": {
+        "mean": 1.5195972735398307,
+        "median": 0.0612050879375166,
+        "std": 4.123293203920065,
+        "min": 0.0163165319417624,
+        "max": 38.03253040660405
+      }
+    },
+    "fusion_mkl": {
+      "samples_analyzed": 360,
+      "variance_metrics_available": [
+        "variance"
+      ],
+      "variance_stats": {
+        "mean": 3.2944359424810385,
+        "median": 0.2491407934946474,
+        "std": 6.581323254775719,
+        "min": 0.0389375226501089,
+        "max": 31.33344066904447
+      }
+    },
+    "fusion_snf": {
+      "samples_analyzed": 360,
+      "variance_metrics_available": [
+        "variance"
+      ],
+      "variance_stats": {
+        "mean": 0.47786454176168913,
+        "median": 0.007990219118593898,
+        "std": 1.6817222179272981,
+        "min": 9.868315163868205e-06,
+        "max": 10.56476211430444
+      }
+    },
+    "fusion_early_fusion_pca": {
+      "samples_analyzed": 360,
+      "variance_metrics_available": [
+        "variance"
+      ],
+      "variance_stats": {
+        "mean": 1.739446085267726,
+        "median": 0.972104205967085,
+        "std": 4.986035372048799,
+        "min": 0.0578560817462743,
+        "max": 43.877179377978536
+      }
+    }
+  }
+}

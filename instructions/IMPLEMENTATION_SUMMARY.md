@@ -93,7 +93,7 @@ Successfully implemented **8 fast feature selection alternatives** to replace MR
 - **Best Performance**: `lasso` (-0.004 R² vs -0.031 MRMR, +0.027 improvement)
 - **Best Balance**: `variance_f_test` (5321x faster, minimal performance loss)
 
-## 🔧 How to Use (Updated Pipeline)
+##  How to Use (Updated Pipeline)
 
 ### **Option 1: Use Updated Selector Dictionaries**
 The fast methods are already integrated. Your existing code will automatically use them:

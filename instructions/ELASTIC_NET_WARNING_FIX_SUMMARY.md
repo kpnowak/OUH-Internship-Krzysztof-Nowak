@@ -70,11 +70,11 @@ WARNING - Unknown method combined_fast, using genomic_ensemble
 
 ### After Fix
 ```
-✓ No elastic_net warnings detected!
-✓ No rf_importance warnings detected!
-✓ ElasticNetFS selector completed successfully
-✓ RFImportance selector completed successfully
-✓ Selected features shape: (50, 500)
+ No elastic_net warnings detected!
+ No rf_importance warnings detected!
+ ElasticNetFS selector completed successfully
+ RFImportance selector completed successfully
+ Selected features shape: (50, 500)
 ```
 
 ## Benefits of the Fix

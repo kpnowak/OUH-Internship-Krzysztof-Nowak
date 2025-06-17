@@ -31,7 +31,7 @@ def test_step_1_dynamic_label_remapping():
     print(f"Colon original: {y_colon.value_counts().to_dict()}")
     print(f"Colon remapped: {y_colon_remapped.value_counts().to_dict()}")
     
-    print("✓ Step 1 passed")
+    print(" Step 1 passed")
 
 def test_step_2_dynamic_splitter():
     """Test Step 2: Dynamic splitter"""
@@ -49,7 +49,7 @@ def test_step_2_dynamic_splitter():
     splitter_large = make_splitter(y_large, max_cv=5)
     print(f"Large classes splitter: {type(splitter_large).__name__}")
     
-    print("✓ Step 2 passed")
+    print(" Step 2 passed")
 
 def test_step_3_safe_sampler():
     """Test Step 3: Safe sampler"""
@@ -73,7 +73,7 @@ def test_step_3_safe_sampler():
         sampler_normal = safe_sampler(y_normal)
         print(f"Normal class sampler: {type(sampler_normal).__name__ if sampler_normal else 'None'}")
         
-        print("✓ Step 3 passed")
+        print(" Step 3 passed")
     except ImportError:
         print("⚠ Step 3 skipped (imbalanced-learn not available)")
 
@@ -91,8 +91,8 @@ def test_step_4_top_level_sampler():
     try:
         pickled_data = pickle.dumps(safe_smote)
         unpickled_smote = pickle.loads(pickled_data)
-        print(f"SafeSMOTE pickle test: ✓ (k_neighbors={unpickled_smote.k_neighbors})")
-        print("✓ Step 4 passed")
+        print(f"SafeSMOTE pickle test:  (k_neighbors={unpickled_smote.k_neighbors})")
+        print(" Step 4 passed")
     except Exception as e:
         print(f"✗ Step 4 failed: {e}")
 
@@ -103,7 +103,7 @@ def test_step_5_fold_guard():
     # This is tested indirectly through the CV pipeline
     # The fold guard is implemented in the main CV loop
     print("Fold guard is implemented in the main CV loop")
-    print("✓ Step 5 implemented")
+    print(" Step 5 implemented")
 
 def test_step_6_target_transform_registry():
     """Test Step 6: Target-transform registry"""
@@ -129,7 +129,7 @@ def test_step_6_target_transform_registry():
         model_normal = get_model_object("LinearRegression", dataset="Unknown")
         print(f"Normal model type: {type(model_normal).__name__}")
         
-        print("✓ Step 6 passed")
+        print(" Step 6 passed")
     except Exception as e:
         print(f"✗ Step 6 failed: {e}")
 
@@ -140,7 +140,7 @@ def test_step_7_global_evaluation_sanity():
     # This is tested indirectly through the training functions
     # The NaN checks are implemented in train_regression_model and train_classification_model
     print("Global evaluation sanity checks are implemented in training functions")
-    print("✓ Step 7 implemented")
+    print(" Step 7 implemented")
 
 def test_integration():
     """Test integration of all components"""
@@ -174,7 +174,7 @@ def test_integration():
         y_remapped = _remap_labels(y_series, "TestDataset")
         print(f"Integration test - Label remapping: {len(np.unique(y))} -> {len(np.unique(y_remapped))} classes")
         
-        print("✓ Integration test passed")
+        print(" Integration test passed")
         
     except Exception as e:
         print(f"✗ Integration test failed: {e}")

@@ -67,7 +67,7 @@ These warnings indicate our emergency fix is **working as designed** to prevent 
 - **RandomForest**: R² > 0.0 (from current -0.36)
 - **LinearRegression**: R² > -1.0 (from current -6.53)
 
-## **🔧 Technical Details**
+## ** Technical Details**
 
 ### **What the Warnings Mean**:
 ```bash

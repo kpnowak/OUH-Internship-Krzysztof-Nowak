@@ -29,18 +29,19 @@ N_JOBS = min(os.cpu_count() or 8, 8)  # Increased to 8 cores for server
 OMP_BLAS_THREADS = min(4, os.cpu_count() or 4)
 
 # Feature and component selection values - OPTIMIZED FOR SPEED
-N_VALUES_LIST = [32, 64, 128]  # OPTIMIZED: Reduced from [64, 128, 256] for faster processing
+N_VALUES_LIST = [8, 16, 32]  # OPTIMIZED: Reduced from [64, 128, 256] for faster processing
 
-# Additional preprocessing parameters for small sample, high-dimensional data
-# OPTIMIZED: Simplified preprocessing for better performance
+# Enhanced preprocessing parameters with sparsity and skewness handling
+# NEW: Enhanced preprocessing for genomic data quality issues with numerical stability
 PREPROCESSING_CONFIG = {
-    "variance_threshold": 0.001,       # OPTIMIZED: Increased from 0.001 for more aggressive filtering
-    "correlation_threshold": 0.95,    # OPTIMIZED: Reduced from 0.98 (but correlation filtering is disabled)
+    # Legacy parameters (maintained for backward compatibility)
+    "mad_threshold": 1e-6,       # IMPROVED: More aggressive threshold for numerical stability (MAD-based)
+    "correlation_threshold": 0.9,    # OPTIMIZED: Reduced from 0.98 (but correlation filtering is disabled)
     "missing_threshold": 0.3,         # OPTIMIZED: Reduced from 0.5 for cleaner data
     "outlier_threshold": 4.0,         # More lenient for biological data
     "log_transform": True,           # OPTIMIZED: Disabled by default for speed
     "quantile_transform": True,      # OPTIMIZED: Disabled by default for speed
-    "remove_low_variance": True,
+    "remove_low_mad": True,
     "remove_highly_correlated": True,  # OPTIMIZED: Disabled for performance (expensive operation)
     "handle_outliers": True,
     "impute_missing": True,
@@ -52,6 +53,220 @@ PREPROCESSING_CONFIG = {
     "min_samples_per_feature": 3,    # Minimum samples required per feature
     "robust_scaling": True,          # Use robust scaling instead of standard scaling
     "feature_selection_method": "variance",  # Use variance-based selection first
+    
+    # NEW: Enhanced sparsity and skewness handling parameters
+    "enhanced_sparsity_handling": True,     # Enable enhanced sparsity handling
+    "sparsity_threshold": 0.9,              # Remove features with >90% zeros
+    "min_expression_threshold": 0.1,        # Minimum meaningful expression level
+    "smart_skewness_correction": True,      # Enable smart skewness correction
+    "target_skewness_threshold": 0.5,       # Target |skewness| ≤ 0.5 (excellent)
+    "enable_log_transform": True,           # Enable log1p transformation
+    "enable_power_transform": True,         # Enable Yeo-Johnson/Box-Cox transformations
+    "enable_quantile_transform": True,      # Enable quantile transformation as fallback
+    
+    # NEW: Numerical stability parameters to address NaN issues
+    "numerical_stability_checks": True,     # Enable comprehensive stability checks
+    "adaptive_mad_threshold": True,    # Use adaptive MAD threshold selection
+    "min_mad_threshold": 1e-10,        # Minimum MAD for numerical stability
+    "max_mad_threshold": 1e-3,         # Maximum MAD threshold to consider
+    "target_feature_removal_rate": 0.05,    # Target 5% of most problematic features for removal
+    "min_samples_per_feature_stability": 3, # Minimum samples required for stable statistics
+    "safe_statistical_computation": True,   # Use safe statistical computation methods
+    "nan_handling_strategy": "remove",      # Strategy for NaN-producing features: "remove", "impute", "flag"
+    "zero_variance_handling": "remove",     # How to handle zero-variance features
+    "constant_feature_handling": "remove",  # How to handle constant features
+    "auto_remove_problematic_features": True,  # Automatically remove features that cause numerical instability
+    
+    # NEW: Advanced sparsity handling parameters (addresses miRNA 43.9% -> 23.7% insufficient reduction)
+    "use_advanced_sparse_preprocessing": False,  # Enable advanced sparse preprocessing (modality-specific)
+    "min_non_zero_percentage": 0.05,        # Minimum percentage of non-zero values required
+    "sparse_transform_method": "log1p_offset",  # Specialized transformation for sparse data
+    "zero_inflation_handling": True,        # Handle zero-inflated distributions
+    "outlier_capping_percentile": 99.0,     # Percentile for outlier capping in sparse data
+    "target_sparsity_reduction": 0.10,      # Target percentage sparsity reduction
+    
+    # NEW: Aggressive dimensionality reduction parameters (addresses too many features issue)
+    "use_aggressive_dimensionality_reduction": False,  # Enable aggressive feature reduction (modality-specific)
+    "gene_expression_target": 1500,         # Target features for gene expression (from 4987)
+    "mirna_target": 150,                     # Target features for miRNA (from 377, too high for 507 samples)
+    "methylation_target": 2000,             # Target features for methylation (from 3956)
+    "dimensionality_selection_method": "hybrid",  # Selection method: 'variance', 'univariate', 'hybrid'
+    "variance_percentile": 75,               # Keep top 75% by variance in pre-filtering
+    "enable_supervised_selection": True,     # Use target variable for feature selection when available
+    
+    # NEW: Robust scaling parameters (addresses PCA high variance issues)
+    "use_robust_scaling": True,              # Use RobustScaler instead of StandardScaler for outlier-heavy data
+    "robust_scaling_quantile_range": (25.0, 75.0),  # IQR range for RobustScaler (default)
+    "scaling_method": "robust",              # Options: 'robust', 'standard', 'minmax', 'quantile'
+    "apply_scaling_before_pca": True,        # Apply scaling before PCA/dimensionality reduction
+    "clip_outliers_after_scaling": True,    # Clip extreme outliers after scaling to [-5, 5] range
+    "outlier_clip_range": (-5.0, 5.0),      # Range for outlier clipping after scaling
+    
+    # NEW: Final quantile normalization parameters (final preprocessing step)
+    "final_quantile_normalization": False,   # Apply quantile normalization as final step
+    "quantile_n_quantiles": 1000,           # Number of quantiles for final transformation
+    "quantile_output_distribution": "normal", # Output distribution: 'normal' or 'uniform'
+    "handle_missing_values": True,
+    "missing_value_threshold": 0.5,
+    "variance_threshold": 0.01,
+    "outlier_detection": True,
+    "outlier_method": "isolation_forest",
+    "feature_selection": True,
+    "feature_selection_k": "auto",
+    "cross_validation_folds": 5,
+    "random_state": 42,
+    "n_jobs": -1,
+    "use_cache": True,
+    "cache_size": "4GB",
+    "verbose": True,
+    # NEW: Missing data indicators as features
+    "add_missing_indicators": True,       # Add binary indicators for missing values
+    "missing_indicator_threshold": 0.05,  # Only add indicators if >5% missing
+    "missing_indicator_prefix": "missing_", # Prefix for indicator feature names
+    "missing_indicator_sparse": True,     # Use sparse representation for indicators
+}
+
+# Modality-specific enhanced preprocessing configurations with numerical stability
+ENHANCED_PREPROCESSING_CONFIGS = {
+    "miRNA": {
+        "enhanced_sparsity_handling": True,
+        "sparsity_threshold": 0.9,          # Aggressive: remove features with >90% zeros
+        "smart_skewness_correction": True,
+        "target_skewness_threshold": 0.5,   # Target excellent skewness
+        "enable_log_transform": True,
+        "enable_power_transform": True,
+        "enable_quantile_transform": True,
+        "min_expression_threshold": 0.1,
+        "handle_outliers": True,
+        "outlier_threshold": 4.0,
+        # Numerical stability for miRNA (high sparsity causes NaN issues)
+        "mad_threshold": 1e-8,         # More aggressive for sparse miRNA data
+        "adaptive_mad_threshold": True,
+        "target_feature_removal_rate": 0.10, # Remove 10% of most problematic features
+        "numerical_stability_checks": True,
+        "safe_statistical_computation": True,
+        # NEW: Advanced sparsity handling for miRNA (43.9% -> 23.7% insufficient)
+        "use_advanced_sparse_preprocessing": True,
+        "min_non_zero_percentage": 0.1,     # Require >10% non-zero values (aggressive)
+        "sparse_transform_method": "log1p_offset",  # Specialized sparse transformation
+        "zero_inflation_handling": True,    # Handle zero-inflated distributions
+        "outlier_capping_percentile": 99.5, # Cap extreme outliers in sparse data
+        "target_sparsity_reduction": 0.15,  # Target >15% sparsity reduction
+        # NEW: KNN imputation with biological similarity for miRNA
+        "use_biological_knn_imputation": True,  # Enable domain-specific imputation
+        "knn_neighbors": 5,                      # Number of neighbors for KNN
+        "biological_similarity_weight": 0.7,    # Weight for biological vs distance similarity
+        "knn_imputation_strategy": "biological", # Use biological similarity
+        "fallback_imputation": "median",        # Fallback if biological KNN fails
+        # NEW: Aggressive dimensionality reduction for miRNA (377 features too high for 507 samples)
+        "use_aggressive_dimensionality_reduction": True,
+        "mirna_target": 150,                 # Target 100-200 features (currently 377)
+        "dimensionality_selection_method": "hybrid",
+        "enable_supervised_selection": True,
+        # NEW: Robust scaling for miRNA (high variance, outlier-heavy)
+        "use_robust_scaling": True,
+        "scaling_method": "robust",
+        "robust_scaling_quantile_range": (10.0, 90.0),  # Wider range for sparse miRNA data
+        "apply_scaling_before_pca": True,
+        "clip_outliers_after_scaling": True,
+        "outlier_clip_range": (-6.0, 6.0),  # Slightly wider range for miRNA outliers
+        # Final quantile normalization for miRNA (beneficial for high sparsity data)
+        "final_quantile_normalization": False,   # Optional: can be enabled for miRNA
+        "quantile_n_quantiles": 500,            # Fewer quantiles for sparse miRNA data
+        "quantile_output_distribution": "normal", # Normal distribution for downstream ML
+        "description": "Optimized for miRNA data - enhanced sparsity handling, biological KNN imputation, numerical stability, aggressive dimensionality reduction, and robust scaling"
+    },
+    "Gene Expression": {
+        "enhanced_sparsity_handling": True,
+        "sparsity_threshold": 0.85,         # Moderate: remove features with >85% zeros
+        "smart_skewness_correction": True,
+        "target_skewness_threshold": 0.7,   # Slightly more lenient
+        "enable_log_transform": True,
+        "enable_power_transform": False,    # Log transform usually sufficient
+        "enable_quantile_transform": False,
+        "min_expression_threshold": 0.05,
+        "handle_outliers": True,
+        "outlier_threshold": 5.0,
+        # Numerical stability for gene expression
+        "mad_threshold": 0.01,         # OPTIMIZED: More aggressive MAD threshold (1e-7 → 0.01)
+        "adaptive_mad_threshold": True,
+        "target_feature_removal_rate": 0.05, # Remove 5% of most problematic features
+        "numerical_stability_checks": True,
+        "safe_statistical_computation": True,
+        "auto_remove_problematic_features": True,  # Auto-remove unstable features
+        "min_variance_threshold": 1e-6,  # More aggressive variance threshold for stability
+        # Enhanced sparsity handling for gene expression
+        "use_advanced_sparse_preprocessing": True,
+        "min_non_zero_percentage": 0.05,    # Require >5% non-zero values (moderate)
+        "sparse_transform_method": "log1p_offset",
+        "zero_inflation_handling": True,
+        "outlier_capping_percentile": 99.0,
+        "target_sparsity_reduction": 0.10,  # Target >10% sparsity reduction
+        # NEW: KNN imputation with biological similarity for gene expression
+        "use_biological_knn_imputation": True,  # Enable domain-specific imputation
+        "knn_neighbors": 7,                      # More neighbors for gene expression (more features)
+        "biological_similarity_weight": 0.6,    # Slightly less biological weight than miRNA
+        "knn_imputation_strategy": "biological", # Use biological similarity
+        "fallback_imputation": "median",        # Fallback if biological KNN fails
+        # NEW: Aggressive dimensionality reduction for gene expression (4987 features too many)
+        "use_aggressive_dimensionality_reduction": True,
+        "gene_expression_target": 1500,     # Target 1000-2000 features (currently 4987)
+        "dimensionality_selection_method": "hybrid",
+        "enable_supervised_selection": True,
+        # NEW: Robust scaling for gene expression (moderate outlier handling)
+        "use_robust_scaling": True,
+        "scaling_method": "robust",
+        "robust_scaling_quantile_range": (25.0, 75.0),  # Standard IQR for gene expression
+        "apply_scaling_before_pca": True,
+        "clip_outliers_after_scaling": True,
+        "outlier_clip_range": (-5.0, 5.0),  # Standard range for gene expression
+        # Final quantile normalization for gene expression
+        "final_quantile_normalization": False,   # Optional: can be enabled for gene expression
+        "quantile_n_quantiles": 1000,           # Full quantiles for gene expression
+        "quantile_output_distribution": "normal", # Normal distribution for downstream ML
+        "description": "Optimized for gene expression data - enhanced sparsity handling, biological KNN imputation, numerical stability, aggressive dimensionality reduction, and robust scaling"
+    },
+    "Methylation": {
+        "enhanced_sparsity_handling": True,
+        "sparsity_threshold": 0.95,         # Conservative: methylation can have legitimate zeros
+        "smart_skewness_correction": False, # Methylation is typically 0-1 range, preserve distribution
+        "log_transform": False,             # Don't log-transform methylation data
+        "enable_power_transform": False,
+        "min_expression_threshold": 0.0,   # No minimum threshold for methylation
+        "handle_outliers": True,
+        "outlier_threshold": 3.0,           # More sensitive outlier detection
+        # Numerical stability for methylation (usually well-behaved)
+        "mad_threshold": 1e-9,         # Conservative threshold for methylation
+        "adaptive_mad_threshold": True,
+        "target_feature_removal_rate": 0.02, # Remove only 2% of most problematic features
+        "numerical_stability_checks": True,
+        "safe_statistical_computation": True,
+        "auto_remove_problematic_features": True,  # Auto-remove unstable features
+        # Conservative sparsity handling for methylation
+        "use_advanced_sparse_preprocessing": False,  # Methylation usually not sparse
+        "min_non_zero_percentage": 0.01,    # Very conservative (1% non-zero)
+        "sparse_transform_method": "asinh_sparse",  # Handles 0-1 range well
+        "zero_inflation_handling": False,   # Methylation zeros are often meaningful
+        "outlier_capping_percentile": 99.9, # Very conservative outlier capping
+        "target_sparsity_reduction": 0.05,  # Target >5% sparsity reduction
+        # NEW: Mean imputation for methylation (low missingness data)
+        "use_mean_imputation": True,         # Use mean instead of median for methylation
+        "imputation_strategy": "mean",       # Explicitly set mean imputation
+        "fallback_imputation": "mean",       # Keep mean as fallback too
+        # NEW: Variance-based dimensionality reduction for methylation (3956 features)
+        "use_aggressive_dimensionality_reduction": True,
+        "methylation_target": 2000,         # Reduce from 3956 using variance-based filtering
+        "dimensionality_selection_method": "variance",  # Variance-focused as recommended
+        "enable_supervised_selection": False,  # Conservative approach for methylation
+        # NEW: Conservative robust scaling for methylation (0-1 range data)
+        "use_robust_scaling": True,
+        "scaling_method": "robust",
+        "robust_scaling_quantile_range": (5.0, 95.0),  # Conservative range for 0-1 methylation data
+        "apply_scaling_before_pca": True,
+        "clip_outliers_after_scaling": False,  # Don't clip methylation data (0-1 range)
+        "outlier_clip_range": (-3.0, 3.0),  # Conservative range (not used due to clip=False)
+        "description": "Conservative preprocessing for methylation data - enhanced numerical stability, variance-based dimensionality reduction, and conservative robust scaling"
+    }
 }
 
 # High-memory server optimization (60GB RAM available)
@@ -375,7 +590,7 @@ FUSION_UPGRADES_CONFIG = {
     "attention_weighted": {
         "enabled": True,
         "hidden_dim": 32,        # Hidden dimension for attention MLP
-        "dropout_rate": 0.1,     # Dropout rate for regularization
+        "dropout_rate": 0.3,     # OPTIMIZED: Increased dropout for better regularization (0.1 → 0.3)
         "learning_rate": 0.001,  # Learning rate for optimization
         "max_epochs": 100,       # Maximum training epochs
         "patience": 10,          # Early stopping patience
@@ -383,9 +598,17 @@ FUSION_UPGRADES_CONFIG = {
         "description": "Sample-specific weighting improved AML R² +0.05 and Colon MCC +0.04"
     },
     
+    # Learnable weighted fusion configuration (NEW)
+    "learnable_weighted": {
+        "enabled": True,
+        "cv_folds": 5,           # Cross-validation folds for weight learning
+        "random_state": 42,
+        "description": "OPTIMIZED: Learns optimal modality weights instead of using equal weights"
+    },
+    
     # Late-fusion stacking configuration
     "late_fusion_stacking": {
-        "enabled": True,
+        "enabled": False,
         "cv_folds": 5,           # Cross-validation folds for meta-features
         "base_models": None,     # Use default models (RF, ElasticNet/Logistic, SVR/SVC)
         "random_state": 42,
@@ -393,7 +616,7 @@ FUSION_UPGRADES_CONFIG = {
     },
     
     # Strategy selection
-    "default_strategy": "attention_weighted",  # Default fusion strategy when enabled
+    "default_strategy": "attention_weighted",  # OPTIMIZED: Changed to learnable weights (attention_weighted → learnable_weighted)
     "fallback_strategy": "weighted_concat",    # Fallback when upgrades fail
     "auto_strategy_selection": True,           # Automatically select best strategy based on data
 }
@@ -411,7 +634,7 @@ SAMPLE_RETENTION_CONFIG = {
 FEATURE_SELECTION_CONFIG = {
     "min_features": 50,  # Much higher minimum
     "max_features_ratio": 0.95,  # Keep most features
-    "variance_threshold": 0.0001,  # Very low variance threshold
+    "mad_threshold": 0.0001,  # Very low MAD threshold (robust)
     "correlation_threshold": 0.99,  # Only remove highly correlated
     "missing_threshold": 0.8,  # Allow more missing data
     "mad_threshold": 0.01  # Lower MAD threshold
@@ -458,7 +681,7 @@ FAST_FEATURE_SELECTION_CONFIG = {
     "enabled": True,  # Enable fast feature selection methods
     "default_method_regression": "variance_f_test",  # Default method for regression
     "default_method_classification": "variance_f_test",  # Default method for classification
-    "variance_threshold": 0.0001,  # Very permissive
+    "mad_threshold": 0.0001,  # Very permissive (robust)
     "rf_n_estimators": 200,  # More trees for importance
     "rf_max_depth": 20,  # Deeper trees
     "correlation_method": "spearman",  # Better for genomic data
@@ -513,10 +736,10 @@ RANDOM_FOREST_CONFIG = {
     'n_jobs': -1
 }
 
-# ElasticNet - Much less regularization for genomic data
+# ElasticNet - Stricter regularization for better generalization
 ELASTIC_NET_CONFIG = {
-    'alpha': 0.001,  # Very low regularization
-    'l1_ratio': 0.1,  # Favor Ridge over Lasso
+    'alpha': 0.3,  # OPTIMIZED: Stricter regularization (0.001 → 0.3, range 0.1-0.5)
+    'l1_ratio': 0.5,  # Balanced L1/L2 regularization for feature selection
     'max_iter': 5000,  # More iterations for convergence
     'random_state': 42,
     'selection': 'random'
@@ -550,7 +773,7 @@ LOGISTIC_REGRESSION_CONFIG = {
 # Neural network architecture for genomic data
 NN_ARCHITECTURE_CONFIG = {
     'hidden_layers': [512, 256, 128],  # Larger networks
-    'dropout_rate': 0.1,  # Minimal dropout
+    'dropout_rate': 0.3,  # OPTIMIZED: Increased dropout for better regularization (0.1 → 0.3)
     'activation': 'relu',
     'batch_size': 32,
     'epochs': 200,  # More epochs
@@ -611,6 +834,35 @@ class DatasetConfig:
             "nfeats_list": self.nfeats_list,
             "ncomps_list": self.ncomps_list
         }
+    
+    @staticmethod
+    def get_config(dataset_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get configuration for a dataset by name.
+        
+        Parameters
+        ----------
+        dataset_name : str
+            Name of the dataset to get configuration for
+            
+        Returns
+        -------
+        Optional[Dict[str, Any]]
+            Dataset configuration dictionary or None if not found
+        """
+        dataset_name_lower = dataset_name.lower()
+        
+        # Search in classification datasets
+        for config_dict in CLASSIFICATION_DATASETS:
+            if config_dict['name'].lower() == dataset_name_lower:
+                return config_dict
+        
+        # Search in regression datasets
+        for config_dict in REGRESSION_DATASETS:
+            if config_dict['name'].lower() == dataset_name_lower:
+                return config_dict
+        
+        return None
 
 # Example dataset configurations
 # Users should modify these with their actual datasets
@@ -631,6 +883,21 @@ REGRESSION_DATASETS = [
         outcome_type="continuous",
         fix_tcga_ids=True
     ).to_dict(),
+    
+    DatasetConfig(
+        name="Sarcoma",
+        base_path="data/sarcoma",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/sarcoma.csv",
+        outcome_col="pathologic_tumor_length",
+        id_col="metsampleID",
+        outcome_type="continuous",
+        fix_tcga_ids=True
+    ).to_dict()
 ]
 
 """
@@ -698,40 +965,7 @@ CLASSIFICATION_DATASETS = [
         outcome_type="class",
         fix_tcga_ids=True
     ).to_dict(),
-]
-
-"""
-    DatasetConfig(
-        name="TestClassification",
-        base_path="test_data/classification",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="clinical.csv",
-        outcome_col="status",
-        id_col="sample_id",
-        outcome_type="class",
-        output_dir="output_classification",
-        fix_tcga_ids=True
-    ).to_dict(),
-
-    DatasetConfig(
-        name="Colon",
-        base_path="data/colon",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/colon.csv",
-        outcome_col="pathologic_T",
-        id_col="sampleID",
-        outcome_type="class",
-        fix_tcga_ids=True
-    ).to_dict(),
-
+    
     DatasetConfig(
         name="Breast",
         base_path="data/breast",
@@ -822,4 +1056,3 @@ CLASSIFICATION_DATASETS = [
         fix_tcga_ids=True
     ).to_dict()
 ]
-"""

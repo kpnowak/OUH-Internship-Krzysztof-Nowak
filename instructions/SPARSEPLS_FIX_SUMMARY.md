@@ -63,10 +63,10 @@ as it does not implement a 'get_params' method.
 
 ### After Fix
 ```
-✓ SparsePLS cloning successful!
-✓ PLSDiscriminantAnalysis cloning successful!
-✓ Cross-validation compatibility verified!
-✓ PLS-DA-128 model works correctly in CV folds!
+ SparsePLS cloning successful!
+ PLSDiscriminantAnalysis cloning successful!
+ Cross-validation compatibility verified!
+ PLS-DA-128 model works correctly in CV folds!
 ```
 
 **Comprehensive Test Results:**

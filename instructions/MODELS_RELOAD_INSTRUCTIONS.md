@@ -59,7 +59,7 @@ from sklearn.base import clone
 try:
     sparse_model = SparsePLS(n_components=128)
     cloned_sparse = clone(sparse_model)
-    print("✓ SparsePLS cloning works!")
+    print(" SparsePLS cloning works!")
 except Exception as e:
     print(f"✗ SparsePLS cloning failed: {e}")
 
@@ -67,7 +67,7 @@ except Exception as e:
 try:
     pls_da_model = PLSDiscriminantAnalysis(n_components=128)
     cloned_pls_da = clone(pls_da_model)
-    print("✓ PLSDiscriminantAnalysis cloning works!")
+    print(" PLSDiscriminantAnalysis cloning works!")
 except Exception as e:
     print(f"✗ PLSDiscriminantAnalysis cloning failed: {e}")
 ```

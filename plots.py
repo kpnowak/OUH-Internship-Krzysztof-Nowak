@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import RocCurveDisplay, roc_auc_score
 from typing import List, Optional, Union, Any
+from sklearn.preprocessing import label_binarize
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
@@ -24,32 +25,40 @@ logger = logging.getLogger(__name__)
 def enhanced_roc_auc_score(y_true: np.ndarray, y_score: np.ndarray, 
                           multi_class: str = 'ovr', average: str = 'weighted') -> float:
     """
-    Enhanced ROC AUC score calculation with proper multi-class handling.
-    
-    This function fixes the issue where multi-class AUC was stuck at 0.50 by
-    using the 'ovr' (one-vs-rest) strategy.
+    Enhanced ROC AUC score calculation with robust error handling.
     
     Parameters
     ----------
     y_true : np.ndarray
-        True labels
+        True class labels
     y_score : np.ndarray
-        Predicted probabilities
-    multi_class : str, default='ovr'
+        Predicted probabilities or decision scores
+    multi_class : str
         Multi-class strategy ('ovr' or 'ovo')
-    average : str, default='weighted'
+    average : str
         Averaging strategy ('weighted', 'macro', 'micro')
         
     Returns
     -------
     float
-        AUC score
+        ROC AUC score, returns 0.5 if calculation fails
     """
     try:
-        # Check for binary vs multi-class
+        # Input validation
+        if len(y_true) == 0 or len(y_score) == 0:
+            logger.warning("Empty input arrays for AUC calculation")
+            return 0.5
+            
+        # Handle NaN values
+        if np.isnan(y_score).any():
+            logger.warning("NaN values found in y_score, replacing with 0.5")
+            y_score = np.nan_to_num(y_score, nan=0.5)
+        
+        # Get unique classes from training data (y_true)
         unique_classes = np.unique(y_true)
         n_classes = len(unique_classes)
         
+        # Handle binary classification
         if n_classes == 2:
             # Binary classification
             if y_score.ndim > 1 and y_score.shape[1] >= 2:
@@ -58,7 +67,110 @@ def enhanced_roc_auc_score(y_true: np.ndarray, y_score: np.ndarray,
                 return roc_auc_score(y_true, y_score)
         else:
             # Multi-class classification with proper 'ovr' strategy
-            return roc_auc_score(y_true, y_score, multi_class=multi_class, average=average)
+            
+            # Handle shape mismatch between y_score and actual classes
+            if y_score.ndim == 1:
+                logger.warning("1D y_score for multi-class problem, converting to 2D")
+                # Convert to 2D array with single column
+                y_score = y_score.reshape(-1, 1)
+            
+            # Check for shape mismatch
+            if y_score.shape[1] != n_classes:
+                logger.warning(f"Shape mismatch: y_score has {y_score.shape[1]} classes but data has {n_classes} classes")
+                
+                # Strategy 1: If y_score has more classes than actual data, take only the relevant classes
+                if y_score.shape[1] > n_classes:
+                    # Find which columns correspond to the actual classes
+                    if np.max(unique_classes) < y_score.shape[1]:
+                        # Use class indices directly
+                        y_score = y_score[:, unique_classes]
+                    else:
+                        # Take the first n_classes columns
+                        y_score = y_score[:, :n_classes]
+                        
+                # Strategy 2: If y_score has fewer classes than actual data, pad with uniform probabilities
+                else:
+                    padded_score = np.zeros((y_score.shape[0], n_classes))
+                    # Copy existing probabilities
+                    padded_score[:, :y_score.shape[1]] = y_score
+                    # Fill remaining columns with uniform probability
+                    remaining_prob = (1.0 - y_score.sum(axis=1, keepdims=True)) / (n_classes - y_score.shape[1])
+                    remaining_prob = np.maximum(remaining_prob, 0.01)  # Ensure positive probabilities
+                    padded_score[:, y_score.shape[1]:] = remaining_prob
+                    y_score = padded_score
+            
+            # Ensure probabilities sum to 1 for each sample
+            row_sums = y_score.sum(axis=1)
+            if not np.allclose(row_sums, 1.0, atol=1e-5):
+                logger.debug("Probabilities do not sum to 1, normalizing...")
+                # Avoid division by zero
+                row_sums = np.maximum(row_sums, 1e-10)
+                y_score = y_score / row_sums.reshape(-1, 1)
+            
+            # Ensure all probabilities are positive (avoid log(0) issues)
+            y_score = np.maximum(y_score, 1e-10)
+            
+            # Convert labels to one-hot encoding for multi-class
+            try:
+                y_true_bin = label_binarize(y_true, classes=unique_classes)
+                
+                # Handle case where label_binarize returns 1D array for 2 classes
+                if y_true_bin.ndim == 1:
+                    y_true_bin = y_true_bin.reshape(-1, 1)
+                    
+            except Exception as e:
+                logger.warning(f"Failed to binarize labels: {str(e)}")
+                return 0.5
+            
+            # Calculate AUC for each class
+            auc_scores = []
+            class_weights = []
+            
+            for i in range(n_classes):
+                try:
+                    # Skip if no positive samples for this class
+                    if i >= y_true_bin.shape[1] or np.sum(y_true_bin[:, i]) == 0:
+                        logger.debug(f"No positive samples for class {unique_classes[i]}, skipping AUC calculation")
+                        continue
+                        
+                    # Skip if no negative samples for this class
+                    if np.sum(y_true_bin[:, i]) == len(y_true_bin[:, i]):
+                        logger.debug(f"No negative samples for class {unique_classes[i]}, skipping AUC calculation")
+                        continue
+                        
+                    # Calculate AUC for this class
+                    auc = roc_auc_score(y_true_bin[:, i], y_score[:, i])
+                    auc_scores.append(auc)
+                    # Calculate weight for this class (proportion of samples)
+                    class_weights.append(np.mean(y_true == unique_classes[i]))
+                    
+                except Exception as e:
+                    logger.debug(f"Failed to calculate AUC for class {unique_classes[i]}: {str(e)}")
+                    continue
+            
+            if not auc_scores:
+                logger.warning("Could not calculate AUC for any class, returning 0.5")
+                return 0.5
+            
+            # Apply averaging strategy
+            if average == 'weighted' and len(class_weights) == len(auc_scores):
+                # Ensure weights sum to 1
+                class_weights = np.array(class_weights)
+                class_weights = class_weights / class_weights.sum()
+                # Calculate weighted average
+                return np.average(auc_scores, weights=class_weights)
+            elif average == 'macro':
+                return np.mean(auc_scores)
+            elif average == 'micro':
+                # Micro-averaging combines all classes into one
+                try:
+                    return roc_auc_score(y_true_bin.ravel(), y_score.ravel())
+                except Exception as e:
+                    logger.warning(f"Micro-averaging failed: {str(e)}, using macro instead")
+                    return np.mean(auc_scores)
+            else:
+                logger.warning(f"Invalid averaging strategy: {average}, using macro")
+                return np.mean(auc_scores)
             
     except Exception as e:
         logger.warning(f"Enhanced AUC calculation failed: {str(e)}")
@@ -479,191 +591,95 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
         if isinstance(y_test[0], str):
             y_test = np.array([int(x) for x in y_test])
         
-        # Get the actual number of classes in the test set and model predictions
+        # Get the actual number of classes in the test set
         unique_test_classes = np.unique(y_test)
         n_test_classes = len(unique_test_classes)
-        n_expected_classes = len(class_labels)
         
         # Check if we have enough classes for ROC analysis
         if n_test_classes < 2:
             logger.warning(f"Test set only contains {n_test_classes} unique class(es) for {title}, cannot create ROC curve")
-            logger.debug(f"Unique classes in test set: {unique_test_classes}")
-            return False
-        
-        # Validate model predictions before proceeding
-        if not validate_model_predictions(model, X_test, y_test, title):
-            logger.error(f"Model validation failed for {title}, cannot create ROC curve")
             return False
             
-        # Get probability predictions for all classes
+        # Get probability predictions
         try:
             y_proba = model.predict_proba(X_test)
         except Exception as e:
             logger.error(f"Failed to get probability predictions for {title}: {str(e)}")
             return False
-        
-        # Check for NaN values in predicted probabilities
-        if np.isnan(y_proba).any():
-            logger.error(f"Error creating multi-class ROC curve for {title}: Input contains NaN.")
-            logger.debug(f"Multi-class ROC curve error details: ValueError('Input contains NaN.')")
-            logger.debug(f"NaN values found in predicted probabilities. Shape: {y_proba.shape}, NaN count: {np.isnan(y_proba).sum()}")
-            return False
-        
-        # Check for infinite values in predicted probabilities
-        if not np.isfinite(y_proba).all():
-            logger.error(f"Error creating multi-class ROC curve for {title}: Input contains infinite values.")
-            logger.debug(f"Infinite values found in predicted probabilities. Shape: {y_proba.shape}")
-            return False
-        
-        n_model_classes = y_proba.shape[1]
-        
-        # Handle shape mismatches more gracefully
-        if n_model_classes != n_expected_classes:
-            logger.warning(f"Mismatch between predicted probabilities shape ({y_proba.shape[0]}, {n_model_classes}) and class labels {n_expected_classes} for {title}")
-            logger.debug(f"Model predicts {n_model_classes} classes, but {n_expected_classes} class labels provided")
-            logger.debug(f"Test set contains {n_test_classes} unique classes: {unique_test_classes}")
-            logger.debug(f"Expected class labels: {class_labels}")
             
-            # Instead of failing, adapt to use only the classes the model can predict
-            # Get the classes that the model was actually trained on
-            model_classes = getattr(model, 'classes_', None)
-            if model_classes is not None:
-                logger.debug(f"Model was trained on classes: {model_classes}")
-                # Use the model's classes as the effective class labels
-                effective_class_labels = list(model_classes)
-                n_expected_classes = len(effective_class_labels)
-                logger.info(f"Adapting ROC curve to use model's {n_model_classes} classes instead of provided {len(class_labels)} class labels")
+        # Handle shape mismatch between predictions and actual classes
+        if y_proba.shape[1] != n_test_classes:
+            logger.warning(f"Shape mismatch: y_proba has {y_proba.shape[1]} classes but data has {n_test_classes} classes")
+            # If predictions have more classes than actual data, take only the first n_test_classes
+            if y_proba.shape[1] > n_test_classes:
+                y_proba = y_proba[:, :n_test_classes]
+            # If predictions have fewer classes, pad with zeros
             else:
-                # Fallback: use the first n_model_classes from class_labels
-                effective_class_labels = class_labels[:n_model_classes]
-                n_expected_classes = n_model_classes
-                logger.info(f"Using first {n_model_classes} class labels for ROC curve")
-        else:
-            effective_class_labels = class_labels
+                padded_proba = np.zeros((y_proba.shape[0], n_test_classes))
+                padded_proba[:, :y_proba.shape[1]] = y_proba
+                y_proba = padded_proba
         
-        # Create a new figure for each plot
-        fig = plt.figure(figsize=(8, 6))
-        ax = fig.add_subplot(111)
+        # Convert labels to one-hot encoding
+        y_test_bin = label_binarize(y_test, classes=unique_test_classes)
         
-        if n_expected_classes == 2:
-            # For binary classification, use the standard binary ROC
-            # Additional check to ensure we have probabilities for both classes
-            if y_proba.shape[1] < 2:
-                logger.warning(f"Binary classification in multiclass function only has {y_proba.shape[1]} probability columns for {title}")
-                return False
-            
-            # Check for NaN values specifically in the positive class probabilities
-            positive_class_proba = y_proba[:, 1]
-            if np.isnan(positive_class_proba).any():
-                logger.error(f"NaN values found in positive class probabilities for {title}")
-                return False
-            
-            fpr, tpr, _ = roc_curve(y_test, positive_class_proba)
-            roc_auc = auc(fpr, tpr)
-            ax.plot(fpr, tpr, color='darkorange', lw=2, 
-                   label=f'ROC curve (AUC = {roc_auc:.2f})')
-        else:
-            # For multi-class, binarize the output and compute ROC for each class
-            # Use the actual range of classes present in the test set, but limited by model capabilities
-            min_class = int(min(unique_test_classes))
-            max_class = int(max(unique_test_classes))
-            class_range = list(range(min_class, max_class + 1))
-            
-            # Ensure we don't exceed the number of classes the model can predict
-            class_range = class_range[:n_model_classes]
-            
+        # Create a new figure
+        plt.figure(figsize=(10, 8))
+        
+        # Compute ROC curve and ROC area for each class
+        fpr = dict()
+        tpr = dict()
+        roc_auc = dict()
+        
+        # Plot each class
+        for i in range(n_test_classes):
             try:
-                y_test_bin = label_binarize(y_test, classes=class_range)
-            except Exception as e:
-                logger.error(f"Failed to binarize labels for {title}: {str(e)}")
-                logger.debug(f"y_test unique values: {unique_test_classes}")
-                logger.debug(f"class_range: {class_range}")
-                return False
-            
-            # Handle case where y_test_bin might be 1D (only one class present)
-            if y_test_bin.ndim == 1:
-                y_test_bin = y_test_bin.reshape(-1, 1)
-            
-            # Ensure we don't try to access more classes than available
-            n_classes_to_plot = min(y_test_bin.shape[1], n_model_classes, len(class_range))
-            
-            # Compute ROC curve and ROC area for each class
-            fpr = dict()
-            tpr = dict()
-            roc_auc = dict()
-            
-            for i in range(n_classes_to_plot):
-                try:
-                    # Check for NaN values in this class's probabilities
-                    class_proba = y_proba[:, i]
-                    if np.isnan(class_proba).any():
-                        logger.warning(f"NaN values found in class {i} probabilities for {title}, skipping this class")
-                        continue
-                    
-                    fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], class_proba)
-                    roc_auc[i] = auc(fpr[i], tpr[i])
-                    
-                    # Use the effective class label if available, otherwise use index
-                    class_label = effective_class_labels[i] if i < len(effective_class_labels) else f"Class {i}"
-                    
-                    # Plot ROC curve for each class
-                    ax.plot(fpr[i], tpr[i], lw=2, 
-                           label=f'{class_label} (AUC = {roc_auc[i]:.2f})')
-                except Exception as e:
-                    logger.warning(f"Failed to compute ROC for class {i} in {title}: {str(e)}")
+                # Skip if no positive samples for this class
+                if np.sum(y_test_bin[:, i]) == 0:
+                    logger.warning(f"No positive samples for class {i}, skipping ROC curve")
                     continue
-            
-            # Compute micro-average ROC curve and ROC area if we have multiple classes
-            if y_test_bin.shape[1] > 1 and len(roc_auc) > 1:
-                try:
-                    # Only use the classes we successfully computed ROC for
-                    y_test_bin_subset = y_test_bin[:, :n_classes_to_plot]
-                    y_proba_subset = y_proba[:, :n_classes_to_plot]
                     
-                    # Check for NaN values in the flattened arrays
-                    if not (np.isnan(y_test_bin_subset.ravel()).any() or np.isnan(y_proba_subset.ravel()).any()):
-                        fpr["micro"], tpr["micro"], _ = roc_curve(y_test_bin_subset.ravel(), y_proba_subset.ravel())
-                        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
-                        
-                        # Plot micro-average ROC curve
-                        ax.plot(fpr["micro"], tpr["micro"], 
-                               color='deeppink', linestyle=':', linewidth=4,
-                               label=f'Micro-avg (AUC = {roc_auc["micro"]:.2f})')
-                except Exception as e:
-                    logger.warning(f"Failed to compute micro-average ROC for {title}: {str(e)}")
+                fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_proba[:, i])
+                roc_auc[i] = auc(fpr[i], tpr[i])
+                
+                # Use the class label if available, otherwise use index
+                class_label = class_labels[i] if i < len(class_labels) else f"Class {i}"
+                plt.plot(fpr[i], tpr[i], lw=2, 
+                        label=f'{class_label} (AUC = {roc_auc[i]:.2f})')
+            except Exception as e:
+                logger.warning(f"Failed to compute ROC for class {i}: {str(e)}")
+                continue
         
-        # Check if we have any curves to plot
-        if len(ax.lines) == 0:
-            logger.error(f"No ROC curves could be generated for {title}")
-            plt.close(fig)
-            return False
+        # Compute micro-average ROC curve and ROC area
+        if len(roc_auc) > 1:
+            try:
+                fpr["micro"], tpr["micro"], _ = roc_curve(y_test_bin.ravel(), y_proba.ravel())
+                roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+                plt.plot(fpr["micro"], tpr["micro"],
+                        label=f'Micro-avg (AUC = {roc_auc["micro"]:.2f})',
+                        color='deeppink', linestyle=':', linewidth=4)
+            except Exception as e:
+                logger.warning(f"Failed to compute micro-average ROC: {str(e)}")
         
         # Plot diagonal line
-        ax.plot([0, 1], [0, 1], 'k--', lw=2, alpha=0.8)
+        plt.plot([0, 1], [0, 1], 'k--', lw=2)
         
         # Set labels and title
-        ax.set_xlim([0.0, 1.0])
-        ax.set_ylim([0.0, 1.05])
-        ax.set_xlabel('False Positive Rate')
-        ax.set_ylabel('True Positive Rate')
-        ax.set_title(title)
-        ax.legend(loc="lower right")
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title(title)
+        plt.legend(loc="lower right")
         
         # Save and close
         plt.tight_layout()
         plt.savefig(out_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)  # Explicitly close the figure
+        plt.close()
         
-        success = verify_plot_exists(out_path)
-        if not success:
-            logger.error(f"Multi-class ROC curve plot file was not created or is empty: {out_path}")
-        return success
+        return True
+        
     except Exception as e:
         logger.error(f"Error creating multi-class ROC curve for {title}: {str(e)}")
-        logger.debug(f"Multi-class ROC curve error details: {repr(e)}")
-        import traceback
-        logger.debug(f"Multi-class ROC curve traceback:\n{traceback.format_exc()}")
-        plt.close('all')  # Ensure all figures are closed on error
         return False
 
 def plot_feature_importance(model, feature_names, title, out_path, top_n=20):

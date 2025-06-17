@@ -18,8 +18,8 @@ These errors were causing model training failures when the inverse transformatio
 2. **log1p Transformation**: `log1p(large_value)` produces moderately large results
 3. **StandardScaler**: Scaling can amplify these values further
 4. **Inverse Scaling**: Can produce extremely large values
-5. **expm1 Inverse**: `expm1(very_large_value)` overflows → produces `inf`
-6. **Model Training**: Models can't handle `inf` values → training fails
+5. **expm1 Inverse**: `expm1(very_large_value)` overflows -> produces `inf`
+6. **Model Training**: Models can't handle `inf` values -> training fails
 
 ### The Problem Chain:
 ```python
@@ -28,10 +28,10 @@ y = [10000]                    # Large original value
 log1p_y = [9.21]              # log1p transformation  
 scaled_y = [15.7]             # After StandardScaler (amplified)
 inverse_scaled = [157000]     # Inverse scaling (very large)
-expm1_result = inf            # expm1 overflow → CRASH
+expm1_result = inf            # expm1 overflow -> CRASH
 ```
 
-## 🔧 Solution Implemented
+##  Solution Implemented
 
 ### **1. Enhanced SafeInverseFunction**
 - Added **overflow detection** for `expm1` function
@@ -156,7 +156,7 @@ The overflow error fix has been **completely successful**. The issue was correct
 The machine learning pipeline now handles **all data ranges robustly**, from small values to extremely large values, without any overflow-related crashes.
 
 **Combined with previous fixes**:
-- ✅ **Pipeline Order**: Correct (log1p → scaling)
+- ✅ **Pipeline Order**: Correct (log1p -> scaling)
 - ✅ **Warning Reduction**: Working (global tracking)  
 - ✅ **Pickle Support**: Working (module-level classes)
 - ✅ **Overflow Protection**: Working (comprehensive safety)

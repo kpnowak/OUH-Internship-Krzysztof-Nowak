@@ -69,9 +69,9 @@ Created comprehensive test suite (`test_nan_handling.py`) that verifies:
 
 ### Test Results
 ```
-✓ Basic NaN handling: PASS
-✓ All-NaN modality handling: PASS
-✓ All tests passed! NaN handling is working correctly.
+ Basic NaN handling: PASS
+ All-NaN modality handling: PASS
+ All tests passed! NaN handling is working correctly.
 ```
 
 ## Impact and Benefits

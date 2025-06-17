@@ -15,7 +15,7 @@ This document summarizes the implementation of 4 fusion upgrades that help both 
 **Implementation Details**:
 - **Class**: `AttentionFuser` in `fusion.py`
 - **Architecture**: Two-layer MLP with configurable hidden dimensions
-- **Attention Mechanism**: Sample-specific weights computed via MLP → softmax normalization
+- **Attention Mechanism**: Sample-specific weights computed via MLP -> softmax normalization
 - **Training**: Uses modality variance as initial attention signal, adds sample-specific variation
 - **Fallback**: Graceful degradation to uniform weights if MLP training fails
 

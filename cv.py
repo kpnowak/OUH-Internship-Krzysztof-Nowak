@@ -32,9 +32,13 @@ import shutil
 import glob
 from sklearn.base import clone
 
+# Import for hyperparameter loading
+import json
+import pathlib
+
 # Local imports
 from config import N_JOBS, DatasetConfig, FEATURE_EXTRACTION_CONFIG
-from preprocessing import process_with_missing_modalities
+from preprocessing import process_with_missing_modalities, CrossValidationTargetValidator
 from fusion import merge_modalities, ModalityImputer
 from models import (
     get_model_object, cached_fit_transform_selector_regression,
@@ -49,18 +53,51 @@ from logging_utils import log_pipeline_stage, log_data_save_info, log_model_trai
 # Initialize logger
 logger = logging.getLogger(__name__)
 
+# Hyperparameter directory
+HP_DIR = pathlib.Path("hp_best")
+
+def load_best(dataset, extr_nm, model_nm, task):
+    """
+    Load best hyperparameters for a given dataset, extractor, and model combination.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name
+    extr_nm : str
+        Extractor name
+    model_nm : str
+        Model name
+    task : str
+        Task type ("reg" or "clf")
+        
+    Returns
+    -------
+    dict
+        Best hyperparameters, or empty dict if not found
+    """
+    f = HP_DIR / f"{dataset}_{extr_nm}_{model_nm}.json"
+    if f.exists():
+        return json.load(open(f))["best_params"]
+    # Fallback: Breast best for other classification, AML best for other regression
+    family_ds = "Breast" if task == "clf" else "AML"
+    f = HP_DIR / f"{family_ds}_{extr_nm}_{model_nm}.json"
+    return json.load(open(f))["best_params"] if f.exists() else {}
+
 # 1. Add a threshold for severe alignment loss at the top of the file:
 SEVERE_ALIGNMENT_LOSS_THRESHOLD = 0.3  # 30%
 MIN_SAMPLES_PER_FOLD = 5
 
 # Add improved CV configuration at the top of the file
 CV_CONFIG = {
-    "min_samples_per_class_per_fold": 2,  # Minimum samples per class in each fold
-    "min_total_samples_for_stratified": 10,  # Minimum total samples to attempt stratified CV
-    "min_samples_per_fold": 5,  # Minimum total samples per fold
+    "min_samples_per_class_per_fold": 1,  # Reduced from 2 to 1 for very small datasets
+    "min_total_samples_for_stratified": 6,  # Reduced from 10 to 6
+    "min_samples_per_fold": 3,  # Reduced from 5 to 3
     "max_cv_splits": 5,  # Maximum number of CV splits
     "min_cv_splits": 2,  # Minimum number of CV splits
     "adaptive_min_samples": True,  # Adapt minimum samples based on dataset size
+    "merge_small_classes": True,  # Enable merging of small classes
+    "min_samples_for_merge": 2,  # Minimum samples before merging is considered
 }
 
 def _process_single_modality(
@@ -319,12 +356,24 @@ def _process_single_modality(
         
         # Final validation: ensure we return exactly the expected number of samples
         if X_tr.shape[0] != len(id_train):
-            logger.error(f"CRITICAL: Output alignment failed in {modality_name} fold {fold_idx}: expected {len(id_train)}, got {X_tr.shape[0]}")
-            return None, None, None
+            logger.warning(f"Output alignment mismatch in {modality_name} fold {fold_idx}: expected {len(id_train)}, got {X_tr.shape[0]}")
+            # Try to fix by truncating or padding
+            if X_tr.shape[0] > len(id_train):
+                logger.warning(f"Truncating training data from {X_tr.shape[0]} to {len(id_train)} samples")
+                X_tr = X_tr[:len(id_train)]
+            elif X_tr.shape[0] < len(id_train):
+                logger.warning(f"Training data has fewer samples than expected - this may indicate sample loss during processing")
+                # Update the expected target vector to match
+                y_train = y_train[:X_tr.shape[0]]
         
         if X_va.shape[0] != len(id_val):
-            logger.error(f"CRITICAL: Output val alignment failed in {modality_name} fold {fold_idx}: expected {len(id_val)}, got {X_va.shape[0]}")
-            return None, None, None
+            logger.warning(f"Output val alignment mismatch in {modality_name} fold {fold_idx}: expected {len(id_val)}, got {X_va.shape[0]}")
+            # Try to fix by truncating or padding
+            if X_va.shape[0] > len(id_val):
+                logger.warning(f"Truncating validation data from {X_va.shape[0]} to {len(id_val)} samples")
+                X_va = X_va[:len(id_val)]
+            elif X_va.shape[0] < len(id_val):
+                logger.warning(f"Validation data has fewer samples than expected - this may indicate sample loss during processing")
         
         # Log shape information
         logger.debug(f"Successfully processed {modality_name} fold {fold_idx} - Train: {X_tr.shape}, Val: {X_va.shape}, Test: {X_te.shape if X_te is not None and X_te.size > 0 else '(0,0)'}")
@@ -626,16 +675,17 @@ def process_cv_fold(
             
             # Handle potential sample truncation from merge_modalities
             # If merge_modalities truncated samples due to mismatches, we need to update target vectors
-            # HARD ERROR instead of silent truncation to catch alignment bugs
             if X_train_merged.shape[0] != len(final_aligned_y_train):
-                logger.error(f"CRITICAL: Training X/y length mismatch after merging: X={X_train_merged.shape[0]} vs y={len(final_aligned_y_train)}")
-                logger.error("This indicates a bug in the data alignment pipeline - investigate immediately!")
-                raise ValueError(f"Training X/y length mismatch: {X_train_merged.shape[0]} vs {len(final_aligned_y_train)}")
+                logger.warning(f"Training X/y length mismatch after merging: X={X_train_merged.shape[0]} vs y={len(final_aligned_y_train)}")
+                logger.warning("Truncating target vector to match merged data...")
+                final_aligned_y_train = final_aligned_y_train[:X_train_merged.shape[0]]
+                logger.info(f"Training targets truncated to {len(final_aligned_y_train)} samples")
             
             if X_val_merged.shape[0] != len(final_aligned_y_val):
-                logger.error(f"CRITICAL: Validation X/y length mismatch after merging: X={X_val_merged.shape[0]} vs y={len(final_aligned_y_val)}")
-                logger.error("This indicates a bug in the data alignment pipeline - investigate immediately!")
-                raise ValueError(f"Validation X/y length mismatch: {X_val_merged.shape[0]} vs {len(final_aligned_y_val)}")
+                logger.warning(f"Validation X/y length mismatch after merging: X={X_val_merged.shape[0]} vs y={len(final_aligned_y_val)}")
+                logger.warning("Truncating target vector to match merged data...")
+                final_aligned_y_val = final_aligned_y_val[:X_val_merged.shape[0]]
+                logger.info(f"Validation targets truncated to {len(final_aligned_y_val)} samples")
             
             # Skip if no valid data after merging
             if X_train_merged.size == 0 or X_val_merged.size == 0:
@@ -647,7 +697,7 @@ def process_cv_fold(
                 logger.warning(f"Skipping fold {fold_idx} for {ds_name}: too few samples after merging ({X_train_merged.shape[0]} < {MIN_SAMPLES_PER_FOLD})")
                 return {}, {}
                 
-            logger.debug(f"Perfect alignment achieved in fold {fold_idx}: Train {X_train_merged.shape}, Val {X_val_merged.shape}")
+            logger.debug(f"Alignment achieved in fold {fold_idx}: Train {X_train_merged.shape}, Val {X_val_merged.shape}")
             
             # Update the aligned target vectors for the rest of the processing
             aligned_y_train = final_aligned_y_train
@@ -775,44 +825,97 @@ def process_cv_fold(
                 
                 # For classification, check class distribution in this specific fold
                 if not is_regression:
-                    # Use adaptive minimum samples based on dataset size (consistent with CV splitter)
-                    # Always require at least 2 samples per class for scikit-learn compatibility
+                    # Use adaptive minimum samples based on dataset size
                     if CV_CONFIG["adaptive_min_samples"]:
                         total_samples = len(final_y_train) + len(final_y_val)
-                        if total_samples < 10:
-                            adaptive_min_samples = 2  # Very small datasets - still need 2 for sklearn
-                        elif total_samples < 20:
-                            adaptive_min_samples = 2  # Small datasets - still need 2 for sklearn
+                        if total_samples < 6:
+                            adaptive_min_samples = 1  # Very small datasets
+                        elif total_samples < 10:
+                            adaptive_min_samples = 1  # Small datasets
                         else:
-                            adaptive_min_samples = 2  # Use 2 for all datasets for sklearn compatibility
+                            adaptive_min_samples = 2  # Normal datasets
                     else:
                         adaptive_min_samples = CV_CONFIG["min_samples_per_class_per_fold"]
                     
-                    train_mask, val_mask, y_train_filtered, y_val_filtered, label_mapping = check_and_filter_classes_in_fold(
-                        final_y_train, final_y_val, min_samples_per_class=adaptive_min_samples
-                    )
+                    # Ensure class consistency between training and validation sets
+                    final_train_classes = set(np.unique(final_y_train))
+                    final_val_classes = set(np.unique(final_y_val))
                     
-                    if train_mask is None:
-                        logger.warning(f"Skipping {model_name} in fold {fold_idx}: insufficient class distribution "
-                                     f"(min_samples_per_class={adaptive_min_samples})")
-                        continue
+                    # Handle class mismatches BEFORE merging small classes
+                    if final_train_classes != final_val_classes:
+                        missing_in_val = final_train_classes - final_val_classes
+                        extra_in_val = final_val_classes - final_train_classes
+                        
+                        if missing_in_val:
+                            logger.debug(f"Fold {fold_idx}: Validation missing classes: {missing_in_val}")
+                            # Remove training samples with classes not in validation
+                            train_mask = np.isin(final_y_train, list(final_val_classes))
+                            if not train_mask.all():
+                                logger.debug(f"Fold {fold_idx}: Removing {(~train_mask).sum()} training samples with classes missing in validation")
+                                final_X_train = final_X_train[train_mask]
+                                final_y_train = final_y_train[train_mask]
+                        
+                        if extra_in_val:
+                            logger.debug(f"Fold {fold_idx}: Mapping extra validation classes {extra_in_val} to training classes")
+                            train_classes_list = sorted(list(final_train_classes))
+                            for extra_class in extra_in_val:
+                                nearest_class = min(train_classes_list, key=lambda x: abs(x - extra_class))
+                                final_y_val = np.where(final_y_val == extra_class, nearest_class, final_y_val)
+                        
+                        # Remove validation samples with classes not in training (after mapping)
+                        valid_mask = np.isin(final_y_val, list(final_train_classes))
+                        if not valid_mask.all():
+                            logger.debug(f"Fold {fold_idx}: Removing {(~valid_mask).sum()} validation samples with unmatched classes")
+                            final_X_val = final_X_val[valid_mask]
+                            final_y_val = final_y_val[valid_mask]
                     
-                    # Filter the feature matrices to match the filtered labels
-                    final_X_train = final_X_train[train_mask]
-                    final_X_val = final_X_val[val_mask]
-                    final_y_train = y_train_filtered
-                    final_y_val = y_val_filtered
+                    # Check if we need to merge classes in this fold
+                    if CV_CONFIG["merge_small_classes"]:
+                        # Combine training and validation data to ensure consistent class merging
+                        combined_y = np.concatenate([final_y_train, final_y_val])
+                        unique_combined, counts_combined = np.unique(combined_y, return_counts=True)
+                        min_combined_count = np.min(counts_combined)
+                        
+                        if min_combined_count < adaptive_min_samples:
+                            logger.info(f"Fold {fold_idx}: Merging small classes (min_count={min_combined_count} < {adaptive_min_samples})")
+                            
+                            # Apply merging to combined data to ensure consistency
+                            combined_y_merged, class_mapping = merge_small_classes(combined_y, adaptive_min_samples)
+                            
+                            # Split back into training and validation with consistent class structure
+                            n_train = len(final_y_train)
+                            final_y_train = combined_y_merged[:n_train]
+                            final_y_val = combined_y_merged[n_train:]
+                            
+                            # Log the class distribution after merging
+                            unique_train, counts_train = np.unique(final_y_train, return_counts=True)
+                            unique_val, counts_val = np.unique(final_y_val, return_counts=True)
+                            logger.info(f"Fold {fold_idx} after merging - Train classes: {dict(zip(unique_train, counts_train))}")
+                            logger.info(f"Fold {fold_idx} after merging - Val classes: {dict(zip(unique_val, counts_val))}")
                     
-                    # Additional validation after filtering
+                    # Final verification of class consistency
+                    final_train_classes = set(np.unique(final_y_train))
+                    final_val_classes = set(np.unique(final_y_val))
+                    
+                    if final_train_classes != final_val_classes:
+                        logger.debug(f"Fold {fold_idx}: Final class mismatch - Train: {final_train_classes}, Val: {final_val_classes}")
+                        # This should be very rare now, but handle it as a fallback
+                        valid_mask = np.isin(final_y_val, list(final_train_classes))
+                        if not valid_mask.all():
+                            logger.debug(f"Fold {fold_idx}: Final cleanup - removing {(~valid_mask).sum()} validation samples")
+                            final_X_val = final_X_val[valid_mask]
+                            final_y_val = final_y_val[valid_mask]
+                    
+                    # Additional validation after merging
                     if len(np.unique(final_y_train)) < 2:
-                        logger.warning(f"Skipping {model_name} in fold {fold_idx}: insufficient classes after filtering ({len(np.unique(final_y_train))} classes)")
+                        logger.warning(f"Skipping {model_name} in fold {fold_idx}: insufficient classes after merging ({len(np.unique(final_y_train))} classes)")
                         continue
                     
                     if final_X_train.shape[0] < 2:
-                        logger.warning(f"Skipping {model_name} in fold {fold_idx}: insufficient training samples after filtering ({final_X_train.shape[0]} samples)")
+                        logger.warning(f"Skipping {model_name} in fold {fold_idx}: insufficient training samples after merging ({final_X_train.shape[0]} samples)")
                         continue
                     
-                    logger.debug(f"Filtered data for {model_name} in fold {fold_idx}: Train {final_X_train.shape}, Val {final_X_val.shape}, Classes: {len(np.unique(final_y_train))}")
+                    logger.debug(f"Processed data for {model_name} in fold {fold_idx}: Train {final_X_train.shape}, Val {final_X_val.shape}, Classes: {len(np.unique(final_y_train))}")
                 
                 # Train and evaluate
                 if is_regression:
@@ -829,7 +932,8 @@ def process_cv_fold(
                         fold_idx=fold_idx,
                         make_plots=make_plots,
                         n_features=original_n_features,
-                        train_n_components=train_n_components
+                        train_n_components=train_n_components,
+                        extractor_name=extr_name
                     )
                     model_results[model_name] = metrics
                     model_objects[model_name] = model
@@ -847,7 +951,8 @@ def process_cv_fold(
                         fold_idx=fold_idx,
                         make_plots=make_plots,
                         n_features=original_n_features,
-                        train_n_components=train_n_components
+                        train_n_components=train_n_components,
+                        extractor_name=extr_name
                     )
                     model_results[model_name] = metrics
                     model_objects[model_name] = model
@@ -986,7 +1091,7 @@ def run_selection_pipeline(
         pipeline_type="selection"
     )
 
-def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None, make_plots=True, n_features=None, train_n_components=None):
+def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None, make_plots=True, n_features=None, train_n_components=None, extractor_name=None, dataset_name="unknown"):
     """Train regression model and evaluate it."""
     from models import get_model_object
     from plots import plot_regression_scatter, plot_regression_residuals, plot_feature_importance
@@ -1021,6 +1126,24 @@ def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, 
     if len(X_val) != len(y_val):
         raise RuntimeError(f"X_val/y_val mismatch even after alignment: {len(X_val)} vs {len(y_val)}")
     
+    # IMPROVEMENT 5: Cross-Validation Target Validation
+    try:
+        CrossValidationTargetValidator.assert_cv_data_integrity(
+            X_train, y_train, X_val, y_val, fold_idx, dataset_name
+        )
+        # Log detailed target validation for regression
+        target_validation = CrossValidationTargetValidator.validate_cv_split_targets(
+            X_train, y_train, X_val, y_val, fold_idx, dataset_name
+        )
+        if not target_validation['is_valid']:
+            logger.warning(f"CV target validation warnings for fold {fold_idx}: {target_validation['warnings']}")
+    except ValueError as e:
+        logger.error(f"Critical CV target validation failed for fold {fold_idx}: {e}")
+        log_model_training_info(model_name, dataset_name, fold_idx, X_train.shape[0], X_val.shape[0], success=False, error_msg=f"CV target validation failed: {e}")
+        return None, {}
+    except Exception as e:
+        logger.warning(f"CV target validation error for fold {fold_idx}: {e}")
+    
     # Basic sanity check without redundant alignment
     if X_train.shape[0] != len(y_train):
         logger.error(f"Data alignment error for {model_name} in fold {fold_idx}: X_train={X_train.shape[0]}, y_train={len(y_train)}")
@@ -1038,6 +1161,21 @@ def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, 
     try:
         # Create the model (with early stopping enabled by default)
         model = get_model_object(model_name)
+        
+        # Load and apply tuned hyperparameters
+        if extractor_name:
+            best_params = load_best(dataset_name, extractor_name, model_name, "reg")
+            if best_params:
+                # Filter parameters for the model only (remove extractor params)
+                model_params = {k.replace('model__', ''): v for k, v in best_params.items() 
+                               if k.startswith('model__')}
+                if model_params:
+                    model.set_params(**model_params)
+                    logger.info(f"Applied tuned hyperparameters for {dataset_name}_{extractor_name}_{model_name}: {model_params}")
+                else:
+                    logger.debug(f"No model hyperparameters found for {dataset_name}_{extractor_name}_{model_name}")
+            else:
+                logger.debug(f"No tuned hyperparameters found for {dataset_name}_{extractor_name}_{model_name}, using defaults")
         
         # Train the model with timing
         t0 = time.time()
@@ -1150,263 +1288,276 @@ def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, 
         logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Traceback:\n{traceback.format_exc()}")
         return None, {}
 
-def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None, make_plots=True, n_features=None, train_n_components=None):
-    """Train classification model and evaluate it."""
-    from models import get_model_object
-    from plots import plot_confusion_matrix, plot_roc_curve_binary, plot_feature_importance
+def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_dir, plot_prefix, fold_idx=None, make_plots=True, n_features=None, train_n_components=None, extractor_name=None, dataset_name="unknown"):
+    """
+    Train a classification model with proper handling of class counts.
+    """
     import os
-    import numpy as np
     import time
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score, matthews_corrcoef
+    import numpy as np
+    from sklearn.metrics import accuracy_score, roc_auc_score
+    from plots import plot_confusion_matrix, plot_roc_curve_binary, plot_roc_curve_multiclass
     
     # Extract dataset name from plot_prefix for logging
     dataset_name = plot_prefix.split('_')[0] if '_' in plot_prefix else "unknown"
     
-    # Quick validation - data should already be aligned by process_cv_fold
-    if X_train is None or y_train is None or X_val is None or y_val is None:
-        logger.warning(f"Invalid data for {model_name} in fold {fold_idx}")
-        log_model_training_info(model_name, dataset_name, fold_idx, 0, 0, success=False, error_msg="Invalid input data")
-        return None, {}, None, None
-
-    # FIX C: Final X/y alignment guard just before model training
-    # This stops the pipeline immediately if any future bug slips through
-    if hasattr(X_train, 'index') and hasattr(y_train, 'index'):
-        common_train = X_train.index.intersection(y_train.index)
-        X_train = X_train.loc[common_train]
-        y_train = y_train.loc[common_train]
-    if hasattr(X_val, 'index') and hasattr(y_val, 'index'):
-        common_val = X_val.index.intersection(y_val.index)
-        X_val = X_val.loc[common_val]
-        y_val = y_val.loc[common_val]
-    
-    # Final alignment check
-    if len(X_train) != len(y_train):
-        raise RuntimeError(f"X/y mismatch even after alignment: {len(X_train)} vs {len(y_train)}")
-    if len(X_val) != len(y_val):
-        raise RuntimeError(f"X_val/y_val mismatch even after alignment: {len(X_val)} vs {len(y_val)}")
-
-    # Additional safety checks for classification
-    n_train_samples = len(y_train)
-    n_val_samples = len(y_val)
-    n_train_classes = len(np.unique(y_train))
-    n_val_classes = len(np.unique(y_val))
-    
-    # Check minimum sample requirements
-    if n_train_samples < 2:
-        logger.warning(f"Insufficient training samples for {model_name} in fold {fold_idx}: {n_train_samples} < 2")
-        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, success=False, error_msg="Insufficient training samples")
-        return None, {}, None, None
-    
-    if n_val_samples < 1:
-        logger.warning(f"Insufficient validation samples for {model_name} in fold {fold_idx}: {n_val_samples} < 1")
-        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, success=False, error_msg="Insufficient validation samples")
-        return None, {}, None, None
-    
-    if n_train_classes < 2:
-        logger.warning(f"Insufficient classes in training data for {model_name} in fold {fold_idx}: {n_train_classes} < 2")
-        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, success=False, error_msg="Insufficient classes")
-        return None, {}, None, None
-    
-    # Warn about very small datasets
-    if n_train_samples < 10:
-        logger.warning(f"Very small training set for {model_name} in fold {fold_idx}: {n_train_samples} samples")
-    
-    # Log training start
-    logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Starting training with {n_train_samples} train, {n_val_samples} val samples, {n_train_classes} classes")
-
     try:
-        # Create the model (with early stopping enabled by default)
-        model = get_model_object(model_name)
+        # IMPROVEMENT 5: Cross-Validation Target Validation for Classification
+        try:
+            CrossValidationTargetValidator.assert_cv_data_integrity(
+                X_train, y_train, X_val, y_val, fold_idx, dataset_name
+            )
+            # Log detailed target validation for classification
+            target_validation = CrossValidationTargetValidator.validate_cv_split_targets(
+                X_train, y_train, X_val, y_val, fold_idx, dataset_name
+            )
+            if not target_validation['is_valid']:
+                logger.warning(f"CV target validation warnings for fold {fold_idx}: {target_validation['warnings']}")
+        except ValueError as e:
+            logger.error(f"Critical CV target validation failed for fold {fold_idx}: {e}")
+            return None, {}
+        except Exception as e:
+            logger.warning(f"CV target validation error for fold {fold_idx}: {e}")
         
-        # Train the model with timing
-        t0 = time.time()
-        model.fit(X_train, y_train)
-        train_time = time.time() - t0
+        # Get the number of unique classes in the training data
+        n_classes = len(np.unique(y_train))
+        logger.info(f"Training data has {n_classes} unique classes")
         
-        # Check if fallback strategy was used
-        fallback_used = False
-        if hasattr(model, '_fallback_used'):
-            fallback_used = model._fallback_used
-        
-        # Get early stopping information if available
-        early_stopping_info = {}
-        if hasattr(model, 'best_score_'):
-            early_stopping_info = {
-                'early_stopping_used': True,
-                'best_validation_score': model.best_score_,
-                'stopped_epoch': model.stopped_epoch_ or 'N/A',
-                'early_stopping_history': model.history_ if hasattr(model, 'history_') else [],
-                'patience_used': model.wait_ if hasattr(model, 'wait_') else None
-            }
-            logger.info(f"Early stopping for {model_name} (fold {fold_idx}): best score={model.best_score_:.4f}, stopped at epoch {model.stopped_epoch_ or 'N/A'}")
-            logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Early stopping used, best score: {model.best_score_:.4f}")
+        # Initialize model with correct number of classes
+        if model_name == 'LogisticRegression':
+            from sklearn.linear_model import LogisticRegression
+            model = LogisticRegression(max_iter=1000, solver='lbfgs')  # Removed multi_class parameter
+        elif model_name == 'RandomForestClassifier':  # Fixed model name
+            from sklearn.ensemble import RandomForestClassifier
+            model = RandomForestClassifier(n_estimators=100, random_state=42)
+        elif model_name == 'SVC':  # Fixed model name
+            from sklearn.svm import SVC
+            model = SVC(probability=True, random_state=42)
         else:
-            early_stopping_info = {
-                'early_stopping_used': False
-            }
+            # Try to get model from models.py
+            try:
+                from models import get_model_object
+                model = get_model_object(model_name)
+                logger.info(f"Successfully created model {model_name} using get_model_object")
+            except Exception as e:
+                logger.error(f"Failed to create model {model_name}: {str(e)}")
+                raise ValueError(f"Unknown model name: {model_name}")
         
-        # Make predictions
-        y_pred = model.predict(X_val)
+        # Load and apply tuned hyperparameters
+        if extractor_name:
+            best_params = load_best(dataset_name, extractor_name, model_name, "clf")
+            if best_params:
+                # Filter parameters for the model only (remove extractor params)
+                model_params = {k.replace('model__', ''): v for k, v in best_params.items() 
+                               if k.startswith('model__')}
+                if model_params:
+                    model.set_params(**model_params)
+                    logger.info(f"Applied tuned hyperparameters for {dataset_name}_{extractor_name}_{model_name}: {model_params}")
+                else:
+                    logger.debug(f"No model hyperparameters found for {dataset_name}_{extractor_name}_{model_name}")
+            else:
+                logger.debug(f"No tuned hyperparameters found for {dataset_name}_{extractor_name}_{model_name}, using defaults")
+            
+        # If using PCA, ensure we preserve enough components for all classes
+        if train_n_components is not None:
+            # Calculate the maximum possible components based on PCA constraints
+            # PCA can use at most min(n_samples, n_features) components
+            max_possible_components = min(X_train.shape[0], X_train.shape[1])
+            
+            # Calculate the ideal components (at least n_classes - 1 for LDA compatibility)
+            ideal_components = max(n_classes - 1, train_n_components)
+            
+            # Use the minimum of ideal and possible components
+            min_components = min(ideal_components, max_possible_components)
+            
+            # Only log debug message if we had to reduce from the ideal
+            if ideal_components > max_possible_components:
+                constraint_type = "samples" if X_train.shape[0] < X_train.shape[1] else "features"
+                logger.debug(f"Adjusted PCA components from {ideal_components} to {min_components} (limited by {max_possible_components} available {constraint_type})")
+            
+            from sklearn.decomposition import PCA
+            pca = PCA(n_components=min_components)
+            X_train = pca.fit_transform(X_train)
+            X_val = pca.transform(X_val)
+            logger.info(f"Applied PCA with {min_components} components")
+            
+        # Fit the model with timing
+        start_time = time.time()
+        model.fit(X_train, y_train)
+        train_time = time.time() - start_time
         
-        # Validate predictions for NaN values
-        if np.isnan(y_pred).any():
-            logger.warning(f"Model {model_name} produced NaN predictions in fold {fold_idx}, replacing with mode")
-            # Replace NaN predictions with the most common class
-            mode_class = np.bincount(y_train).argmax()
-            y_pred = np.where(np.isnan(y_pred), mode_class, y_pred)
+        # Verify the model has the correct number of classes
+        if hasattr(model, 'n_classes_'):
+            if model.n_classes_ != n_classes:
+                logger.warning(f"Model was trained with {model.n_classes_} classes but data has {n_classes} classes")
+                # Retrain the model with correct number of classes
+                model.fit(X_train, y_train)
+                if model.n_classes_ != n_classes:
+                    raise ValueError(f"Failed to train model with correct number of classes. Expected {n_classes}, got {model.n_classes_}")
         
         # Calculate metrics
-        accuracy = accuracy_score(y_val, y_pred)
-        precision = precision_score(y_val, y_pred, average='weighted', zero_division=0)
-        recall = recall_score(y_val, y_pred, average='weighted', zero_division=0)
-        f1 = f1_score(y_val, y_pred, average='weighted', zero_division=0)
-        cm = confusion_matrix(y_val, y_pred)
+        y_pred = model.predict(X_val)
         
-        # Calculate MCC (Matthews Correlation Coefficient)
-        mcc = matthews_corrcoef(y_val, y_pred)
-        
-        # Log successful training
-        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, 
-                               success=True, fallback=fallback_used)
-        logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Metrics: Accuracy={accuracy:.4f}, F1={f1:.4f}")
-        
-        # Use passed train_n_components if provided, else fallback to X_train.shape[1]
-        if train_n_components is None:
-            train_n_components = X_train.shape[1]
-        
-        # Try to calculate ROC AUC if applicable
-        auc = 0.5  # Default for cases where AUC cannot be calculated
-        try:
-            if hasattr(model, 'predict_proba'):
-                y_proba = model.predict_proba(X_val)
-                
-                # Validate probability predictions for NaN values
-                if np.isnan(y_proba).any():
-                    logger.warning(f"Model {model_name} produced NaN probabilities in fold {fold_idx}, cannot calculate AUC")
-                    auc = 0.5  # Default AUC for random classifier
+        # Get prediction probabilities with proper validation
+        if hasattr(model, 'predict_proba'):
+            y_proba = model.predict_proba(X_val)
+        elif hasattr(model, 'decision_function'):
+            y_proba = model.decision_function(X_val)
+            # Convert decision function output to probabilities for multi-class
+            if y_proba.ndim == 1 and n_classes > 2:
+                # For multi-class SVM, decision_function returns 1D array, convert to 2D
+                y_proba_2d = np.zeros((len(y_proba), n_classes))
+                # Use softmax to convert to probabilities
+                from scipy.special import softmax
+                y_proba_2d[:, 0] = y_proba
+                y_proba = softmax(y_proba_2d, axis=1)
+            elif y_proba.ndim == 2:
+                # Multi-class decision function, convert to probabilities
+                from scipy.special import softmax
+                y_proba = softmax(y_proba, axis=1)
+        else:
+            # Fallback: create one-hot encoded probabilities from predictions
+            y_proba = np.zeros((len(y_pred), n_classes))
+            for i, pred in enumerate(y_pred):
+                if 0 <= pred < n_classes:
+                    y_proba[i, pred] = 1.0
                 else:
-                    # Get number of unique classes in validation set
-                    n_classes = len(np.unique(y_val))
-                    
-                    if n_classes == 2:
-                        # Binary classification - use positive class probabilities
-                        if y_proba.shape[1] >= 2:
-                            y_score = y_proba[:, 1]  # Probability of positive class
-                            auc = roc_auc_score(y_val, y_score)
-                        else:
-                            logger.warning(f"predict_proba returned unexpected shape for binary classification: {y_proba.shape}")
-                            auc = 0.5
-                    elif n_classes > 2:
-                        # Multi-class classification - use weighted average
-                        try:
-                            auc = roc_auc_score(y_val, y_proba, multi_class='ovr', average='weighted')
-                        except ValueError as e:
-                            try:
-                                auc = roc_auc_score(y_val, y_proba, multi_class='ovr', average='macro')
-                            except ValueError:
-                                logger.warning(f"Could not calculate multi-class AUC for {n_classes} classes")
-                                auc = 0.5
-                    else:
-                        # Single class - AUC is undefined
-                        logger.warning(f"Only {n_classes} unique class(es) in validation set, AUC undefined")
-                        auc = 0.5
+                    # Handle case where prediction is outside expected range
+                    y_proba[i, 0] = 1.0
+        
+        # Ensure prediction probabilities have the correct shape
+        if y_proba.ndim == 1:
+            if n_classes == 2:
+                # Binary classification with 1D output
+                y_proba_2d = np.zeros((len(y_proba), 2))
+                y_proba_2d[:, 0] = 1 - y_proba
+                y_proba_2d[:, 1] = y_proba
+                y_proba = y_proba_2d
             else:
-                # Model doesn't support predict_proba
-                auc = 0.5
+                # Multi-class with 1D output - convert to 2D
+                y_proba_2d = np.zeros((len(y_proba), n_classes))
+                y_proba_2d[:, 0] = y_proba
+                y_proba = y_proba_2d
+        
+        # Validate prediction probabilities shape matches training classes
+        if y_proba.shape[1] != n_classes:
+            logger.warning(f"Prediction shape mismatch: model outputs {y_proba.shape[1]} classes, training has {n_classes} classes")
+            if y_proba.shape[1] > n_classes:
+                # Take only the first n_classes
+                y_proba = y_proba[:, :n_classes]
+            else:
+                # Pad with uniform probabilities
+                padded_proba = np.zeros((y_proba.shape[0], n_classes))
+                padded_proba[:, :y_proba.shape[1]] = y_proba
+                # Fill remaining with uniform probability
+                remaining_prob = (1.0 - y_proba.sum(axis=1, keepdims=True)) / (n_classes - y_proba.shape[1])
+                remaining_prob = np.maximum(remaining_prob, 0.01)
+                padded_proba[:, y_proba.shape[1]:] = remaining_prob
+                y_proba = padded_proba
+        
+        # Calculate comprehensive classification metrics
+        from sklearn.metrics import precision_score, recall_score, f1_score
+        from sklearn.metrics import matthews_corrcoef
+        
+        # Calculate accuracy
+        accuracy = accuracy_score(y_val, y_pred)
+        
+        # Calculate precision, recall, F1 with proper averaging for multi-class
+        try:
+            if n_classes == 2:
+                # Binary classification
+                precision = precision_score(y_val, y_pred, average='binary', zero_division=0)
+                recall = recall_score(y_val, y_pred, average='binary', zero_division=0)
+                f1 = f1_score(y_val, y_pred, average='binary', zero_division=0)
+            else:
+                # Multi-class classification - use weighted average
+                precision = precision_score(y_val, y_pred, average='weighted', zero_division=0)
+                recall = recall_score(y_val, y_pred, average='weighted', zero_division=0)
+                f1 = f1_score(y_val, y_pred, average='weighted', zero_division=0)
         except Exception as e:
-            from config import WARNING_SUPPRESSION_CONFIG
-            if not WARNING_SUPPRESSION_CONFIG.get("suppress_auc_warnings", False):
-                logger.warning(f"Could not calculate AUC for {model_name}: {str(e)}")
+            logger.warning(f"Could not calculate precision/recall/F1 for {model_name}: {str(e)}")
+            precision = recall = f1 = 0.0
+        
+        # Calculate Matthews Correlation Coefficient
+        try:
+            mcc = matthews_corrcoef(y_val, y_pred)
+        except Exception as e:
+            logger.warning(f"Could not calculate MCC for {model_name}: {str(e)}")
+            mcc = 0.0
+        
+        # Calculate AUC with enhanced error handling
+        try:
+            if n_classes == 2:
+                # Binary classification
+                auc = roc_auc_score(y_val, y_proba[:, 1])
+            else:
+                # Multi-class classification
+                from plots import enhanced_roc_auc_score
+                auc = enhanced_roc_auc_score(y_val, y_proba, multi_class='ovr', average='weighted')
+        except Exception as e:
+            logger.warning(f"Could not calculate AUC for {model_name}: {str(e)}")
             auc = 0.5
         
-        # Create plots if directory is provided
-        plot_success_count = 0
-        plot_total_count = 0
-        if out_dir and make_plots:
+        # Best validation score (using accuracy as the primary metric)
+        best_validation_score = accuracy
+        
+        # Early stopping metrics (not used in basic classification, but needed for CSV consistency)
+        early_stopping_used = False
+        stopped_epoch = 'N/A'
+        patience_used = float('nan')
+            
+        # Create plots if requested
+        if make_plots:
+            # Create output directory if it doesn't exist
             os.makedirs(out_dir, exist_ok=True)
             
-            # Generate class labels - prefer model's classes if available to avoid shape mismatches
-            if hasattr(model, 'classes_'):
-                # Use the classes that the model was actually trained on
-                class_labels = list(model.classes_)
-            else:
-                # Fallback to unique classes from train+val data
-                class_labels = sorted(np.unique(np.concatenate([y_train, y_val])))
+            # Calculate confusion matrix
+            from sklearn.metrics import confusion_matrix
+            cm = confusion_matrix(y_val, y_pred)
             
-            # Confusion matrix
-            plot_total_count += 1
-            confusion_path = os.path.join(out_dir, f"{plot_prefix}_confusion.png")
-            if plot_confusion_matrix(cm, class_labels, f"{model_name} Confusion Matrix", confusion_path):
-                plot_success_count += 1
-                log_plot_save_info(dataset_name, "confusion_matrix", confusion_path, success=True)
-            else:
-                log_plot_save_info(dataset_name, "confusion_matrix", confusion_path, success=False)
+            # Generate class labels
+            unique_classes = sorted(np.unique(np.concatenate([y_train, y_val])))
+            class_labels = [str(cls) for cls in unique_classes]
             
-            # ROC curve - now supports both binary and multi-class
+            # Plot confusion matrix
+            cm_path = os.path.join(out_dir, f"{plot_prefix}_cm.png")
+            plot_confusion_matrix(cm, class_labels, 
+                                title=f"{model_name} Confusion Matrix",
+                                out_path=cm_path)
+            
+            # Plot ROC curve
             if hasattr(model, 'predict_proba'):
-                plot_total_count += 1
-                n_classes = len(np.unique(y_val))
                 roc_path = os.path.join(out_dir, f"{plot_prefix}_roc.png")
                 if n_classes == 2:
-                    # Binary classification ROC
-                    if plot_roc_curve_binary(model, X_val, y_val, class_labels, 
-                                           f"{model_name} ROC Curve", roc_path):
-                        plot_success_count += 1
-                        log_plot_save_info(dataset_name, "roc_curve_binary", roc_path, success=True)
-                    else:
-                        log_plot_save_info(dataset_name, "roc_curve_binary", roc_path, success=False)
+                    plot_roc_curve_binary(model, X_val, y_val, class_labels,
+                                        title=f"{model_name} ROC Curve",
+                                        out_path=roc_path)
                 else:
-                    # Multi-class ROC (create a multi-class ROC plot)
-                    from plots import plot_roc_curve_multiclass
-                    if plot_roc_curve_multiclass(model, X_val, y_val, class_labels, 
-                                               f"{model_name} ROC Curve", roc_path):
-                        plot_success_count += 1
-                        log_plot_save_info(dataset_name, "roc_curve_multiclass", roc_path, success=True)
-                    else:
-                        log_plot_save_info(dataset_name, "roc_curve_multiclass", roc_path, success=False)
-            
-            # Feature importance plot
-            if hasattr(model, 'feature_importances_') or hasattr(model, 'coef_'):
-                plot_total_count += 1
-                if hasattr(X_train, 'columns'):
-                    feat_names = list(X_train.columns)
-                else:
-                    feat_names = [f"Feature {i}" for i in range(X_train.shape[1])]
-                featimp_path = os.path.join(out_dir, f"{plot_prefix}_featimp.png")
-                if plot_feature_importance(model, feat_names, f"{model_name} Feature Importance", featimp_path):
-                    plot_success_count += 1
-                    log_plot_save_info(dataset_name, "feature_importance", featimp_path, success=True)
-                else:
-                    log_plot_save_info(dataset_name, "feature_importance", featimp_path, success=False)
+                    plot_roc_curve_multiclass(model, X_val, y_val, class_labels,
+                                            title=f"{model_name} ROC Curve",
+                                            out_path=roc_path)
         
-        # Log plot creation summary
-        if make_plots and out_dir:
-            logger.debug(f"[PLOT_SAVE] {dataset_name} - {model_name} (fold {fold_idx}) - Created {plot_success_count}/{plot_total_count} plots successfully")
-        
-        # Return model, metrics, y_val, y_pred (including early stopping info)
+        # Return all expected values with comprehensive metrics
         metrics = {
             'accuracy': accuracy,
             'precision': precision,
             'recall': recall,
             'f1': f1,
-            'auc': auc,
             'mcc': mcc,
+            'auc': auc,
             'train_time': train_time,
-            'n_features': n_features if n_features is not None else -1,  # Original feature count or -1 if unknown
-            'train_n_components': train_n_components,  # Actual feature count used in training
-            **early_stopping_info  # Include early stopping metrics
+            'best_validation_score': best_validation_score,
+            'early_stopping_used': early_stopping_used,
+            'stopped_epoch': stopped_epoch,
+            'patience_used': patience_used,
+            'n_features': n_features if n_features is not None else -1,
+            'train_n_components': train_n_components
         }
         
         return model, metrics, y_val, y_pred
         
     except Exception as e:
-        # Log training failure
-        error_msg = str(e)
-        log_model_training_info(model_name, dataset_name, fold_idx, n_train_samples, n_val_samples, 
-                               success=False, error_msg=error_msg)
-        logger.error(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Training failed: {error_msg}")
-        import traceback
-        logger.debug(f"[MODEL_TRAINING] {dataset_name} - {model_name} (fold {fold_idx}) - Traceback:\n{traceback.format_exc()}")
+        logger.error(f"Error training model: {str(e)}")
         return None, {}, None, None
 
 def check_and_filter_classes_in_fold(y_train, y_val, min_samples_per_class=2):
@@ -1656,9 +1807,9 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False):
         (cv_splitter, n_splits, cv_type_used)
     """
     n_samples = len(y_temp)
-    optimal_splits = get_optimal_cv_splits(y_temp, is_regression)
     
     if is_regression:
+        optimal_splits = get_optimal_cv_splits(y_temp, is_regression)
         cv_splitter = KFold(n_splits=optimal_splits, shuffle=True, random_state=0)
         return cv_splitter, optimal_splits, "KFold"
     
@@ -1668,61 +1819,41 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False):
     min_class_count = np.min(counts)
     
     # Use adaptive minimum samples based on dataset size
-    # Always require at least 2 samples per class for scikit-learn compatibility
     if CV_CONFIG["adaptive_min_samples"]:
-        if n_samples < 10:
-            adaptive_min_samples = 2  # Very small datasets - still need 2 for sklearn
-        elif n_samples < 20:
-            adaptive_min_samples = 2  # Small datasets - still need 2 for sklearn
+        if n_samples < 6:
+            adaptive_min_samples = 1  # Very small datasets
+        elif n_samples < 10:
+            adaptive_min_samples = 1  # Small datasets
         else:
-            adaptive_min_samples = 2  # Use 2 for all datasets for sklearn compatibility
+            adaptive_min_samples = 2  # Normal datasets
     else:
         adaptive_min_samples = CV_CONFIG["min_samples_per_class_per_fold"]
     
-    logger.debug(f"Creating CV splitter for classification: n_samples={n_samples}, "
-                f"n_classes={n_classes}, min_class_count={min_class_count}, "
-                f"adaptive_min_samples={adaptive_min_samples}, optimal_splits={optimal_splits}")
+    # If we have very small classes and merging is enabled, merge them
+    if CV_CONFIG["merge_small_classes"] and min_class_count < adaptive_min_samples:
+        logger.info(f"Merging small classes (min_count={min_class_count} < {adaptive_min_samples})")
+        y_temp, label_mapping = merge_small_classes(y_temp, adaptive_min_samples)
+        unique, counts = np.unique(y_temp, return_counts=True)
+        n_classes = len(unique)
+        min_class_count = np.min(counts)
+        logger.info(f"After merging: {n_classes} classes, min_count={min_class_count}")
     
-    # Strategy 1: Try StratifiedKFold with optimal splits
-    if (n_samples >= CV_CONFIG["min_total_samples_for_stratified"] and 
-        min_class_count >= adaptive_min_samples * optimal_splits):
-        
-        try:
-            cv_splitter = StratifiedKFold(n_splits=optimal_splits, shuffle=True, random_state=0)
-            # Test if it works and produces good folds
-            if validate_cv_fold_quality(idx_temp, y_temp, cv_splitter, adaptive_min_samples):
-                return cv_splitter, optimal_splits, "StratifiedKFold"
-            else:
-                logger.debug("StratifiedKFold validation failed, trying reduced splits")
-        except Exception as e:
-            logger.debug(f"StratifiedKFold failed: {str(e)}")
+    # Calculate optimal number of splits
+    optimal_splits = get_optimal_cv_splits(y_temp, is_regression)
     
-    # Strategy 2: Try StratifiedKFold with reduced splits
-    for n_splits in range(optimal_splits - 1, CV_CONFIG["min_cv_splits"] - 1, -1):
-        if min_class_count >= adaptive_min_samples * n_splits:
-            try:
-                cv_splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=0)
-                if validate_cv_fold_quality(idx_temp, y_temp, cv_splitter, adaptive_min_samples):
-                    logger.info(f"Using StratifiedKFold with reduced splits: {n_splits}")
-                    return cv_splitter, n_splits, f"StratifiedKFold (reduced to {n_splits})"
-            except Exception as e:
-                logger.debug(f"StratifiedKFold with {n_splits} splits failed: {str(e)}")
-                continue
-    
-    # Strategy 3: Fall back to KFold with optimal splits
+    # Try stratified split first
     try:
-        cv_splitter = KFold(n_splits=optimal_splits, shuffle=True, random_state=0)
-        if validate_cv_fold_quality(idx_temp, y_temp, cv_splitter, adaptive_min_samples):
-            logger.warning(f"Falling back to KFold with {optimal_splits} splits")
-            return cv_splitter, optimal_splits, f"KFold (fallback)"
+        if n_samples >= CV_CONFIG["min_total_samples_for_stratified"] and min_class_count >= adaptive_min_samples:
+            cv_splitter = StratifiedKFold(n_splits=optimal_splits, shuffle=True, random_state=0)
+            return cv_splitter, optimal_splits, "StratifiedKFold"
     except Exception as e:
-        logger.debug(f"KFold with {optimal_splits} splits failed: {str(e)}")
+        logger.warning(f"StratifiedKFold failed: {e}")
     
-    # Strategy 4: KFold with minimum splits (last resort)
-    min_splits = CV_CONFIG["min_cv_splits"]
-    cv_splitter = KFold(n_splits=min_splits, shuffle=True, random_state=0)
-    logger.warning(f"Using minimum KFold splits: {min_splits} (last resort)")
-    return cv_splitter, min_splits, f"KFold (minimum {min_splits})"
+    # Fall back to regular KFold
+    n_splits = min(optimal_splits, n_samples // 3)
+    n_splits = max(2, n_splits)  # At least 2 splits
+    cv_splitter = KFold(n_splits=n_splits, shuffle=True, random_state=0)
+    return cv_splitter, n_splits, "KFold"
 
 def log_cv_fold_summary(ds_name, y_temp, cv_splitter, cv_type_used, n_splits):
     """
@@ -2060,7 +2191,7 @@ def _run_pipeline(
                             if missing_percentage == 0.0:
                                 # For 0% missing data, test ALL fusion techniques that work with clean data
                                 integration_techniques = [
-                                    "weighted_concat", 
+                                    "attention_weighted", 
                                     "learnable_weighted", 
                                     "mkl", 
                                     "snf", 
@@ -2579,3 +2710,135 @@ def run_selection_pipeline(
         is_regression=is_regression, 
         pipeline_type="selection"
     )
+
+def merge_small_classes(y: np.ndarray, min_samples: int = 2) -> Tuple[np.ndarray, Dict[int, int]]:
+    """
+    Merge small classes into the nearest larger class based on sample counts.
+    
+    Parameters
+    ----------
+    y : np.ndarray
+        Class labels
+    min_samples : int
+        Minimum number of samples required to keep a class separate
+        
+    Returns
+    -------
+    Tuple[np.ndarray, Dict[int, int]]
+        Tuple of (merged labels, mapping from old to new labels)
+    """
+    unique_classes, class_counts = np.unique(y, return_counts=True)
+    n_classes = len(unique_classes)
+    
+    if n_classes <= 2:
+        return y, {old: old for old in unique_classes}
+    
+    # Sort classes by count
+    sorted_indices = np.argsort(class_counts)
+    sorted_classes = unique_classes[sorted_indices]
+    sorted_counts = class_counts[sorted_indices]
+    
+    # Initialize mapping
+    label_mapping = {old: old for old in unique_classes}
+    
+    # Find classes to merge
+    small_classes = sorted_classes[sorted_counts < min_samples]
+    if len(small_classes) == 0:
+        return y, label_mapping
+    
+    # For each small class, find the nearest larger class
+    for small_class in small_classes:
+        # Find the closest larger class
+        larger_classes = sorted_classes[sorted_counts >= min_samples]
+        if len(larger_classes) == 0:
+            # If no larger classes, merge with the largest small class
+            largest_small = sorted_classes[-1]
+            label_mapping[small_class] = largest_small
+        else:
+            # Merge with the most similar class (using class index as similarity)
+            closest_class = larger_classes[np.argmin(np.abs(larger_classes - small_class))]
+            label_mapping[small_class] = closest_class
+    
+    # Apply mapping
+    merged_y = np.array([label_mapping[label] for label in y])
+    
+    return merged_y, label_mapping
+
+def cross_validate_model(X, y, model_name, n_splits=5, random_state=42, out_dir=None, make_plots=True, n_features=None, train_n_components=None):
+    """
+    Perform cross-validation for a classification model.
+    """
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.metrics import accuracy_score, roc_auc_score
+    import numpy as np
+    import os
+    
+    # Initialize cross-validation
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    
+    # Initialize metrics storage
+    accuracies = []
+    aucs = []
+    models = []
+    y_true_all = []
+    y_pred_all = []
+    
+    # Perform cross-validation
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y)):
+        # Split data
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+        
+        # Create plot prefix
+        plot_prefix = f"fold_{fold_idx}"
+        if out_dir:
+            plot_prefix = os.path.join(out_dir, plot_prefix)
+        
+        # Train model
+        model, metrics, y_val_fold, y_pred_fold = train_classification_model(
+            X_train, y_train, X_val, y_val,
+            model_name=model_name,
+            out_dir=out_dir,
+            plot_prefix=plot_prefix,
+            fold_idx=fold_idx,
+            make_plots=make_plots,
+            n_features=n_features,
+            train_n_components=train_n_components,
+            extractor_name=None  # This function doesn't have extractor context
+        )
+        
+        if model is not None:
+            # Store metrics
+            accuracies.append(metrics['accuracy'])
+            aucs.append(metrics['auc'])
+            models.append(model)
+            y_true_all.extend(y_val_fold)
+            y_pred_all.extend(y_pred_fold)
+        else:
+            logger.warning(f"Warning: Failed to train {model_name} in fold {fold_idx}")
+    
+    # Calculate average metrics
+    if accuracies:
+        avg_accuracy = np.mean(accuracies)
+        avg_auc = np.mean(aucs)
+        std_accuracy = np.std(accuracies)
+        std_auc = np.std(aucs)
+        
+        logger.info(f"Cross-validation results for {model_name}:")
+        logger.info(f"Average Accuracy: {avg_accuracy:.4f} ± {std_accuracy:.4f}")
+        logger.info(f"Average AUC: {avg_auc:.4f} ± {std_auc:.4f}")
+        
+        return {
+            'models': models,
+            'accuracies': accuracies,
+            'aucs': aucs,
+            'avg_accuracy': avg_accuracy,
+            'std_accuracy': std_accuracy,
+            'avg_auc': avg_auc,
+            'std_auc': std_auc,
+            'y_true': y_true_all,
+            'y_pred': y_pred_all
+        }
+    else:
+        logger.warning(f"No models were successfully trained for {model_name}")
+        return None

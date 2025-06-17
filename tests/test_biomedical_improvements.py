@@ -92,7 +92,7 @@ def test_preprocessing_pipeline():
     assert not np.any(np.isnan(X_processed)), "Processed data contains NaN values"
     assert not np.any(np.isinf(X_processed)), "Processed data contains infinite values"
     
-    logger.info("✓ Preprocessing pipeline test passed")
+    logger.info(" Preprocessing pipeline test passed")
     return True
 
 def test_feature_selection():
@@ -117,7 +117,7 @@ def test_feature_selection():
             assert len(set(selected_indices)) == 32, "Duplicate features selected"
             assert all(0 <= idx < X.shape[1] for idx in selected_indices), "Invalid feature indices"
             
-            logger.info(f"✓ {method} feature selection passed")
+            logger.info(f" {method} feature selection passed")
             
         except Exception as e:
             logger.warning(f"✗ {method} feature selection failed: {e}")
@@ -135,7 +135,7 @@ def test_cv_strategy():
     is_valid = validate_cv_splits(cv_strategy, X_small, y_small, task_type='classification')
     
     assert is_valid, "CV strategy validation failed for small dataset"
-    logger.info("✓ Small dataset CV strategy test passed")
+    logger.info(" Small dataset CV strategy test passed")
     
     # Test with medium dataset
     X_medium, y_medium = create_biomedical_like_data(n_samples=100, n_features=200, task_type='classification')
@@ -144,7 +144,7 @@ def test_cv_strategy():
     is_valid = validate_cv_splits(cv_strategy, X_medium, y_medium, task_type='classification')
     
     assert is_valid, "CV strategy validation failed for medium dataset"
-    logger.info("✓ Medium dataset CV strategy test passed")
+    logger.info(" Medium dataset CV strategy test passed")
     
     return True
 
@@ -188,7 +188,7 @@ def test_model_performance():
             # Performance should be better than random (0.5 for binary classification)
             assert mean_score > 0.55, f"{model_name} performance too low: {mean_score:.3f}"
             
-            logger.info(f"✓ {model_name} test passed")
+            logger.info(f" {model_name} test passed")
             
         except Exception as e:
             logger.warning(f"✗ {model_name} test failed: {e}")
@@ -235,7 +235,7 @@ def test_regression_performance():
             # Performance should be positive (better than mean predictor)
             assert mean_score > 0.0, f"{model_name} R² too low: {mean_score:.3f}"
             
-            logger.info(f"✓ {model_name} regression test passed")
+            logger.info(f" {model_name} regression test passed")
             
         except Exception as e:
             logger.warning(f"✗ {model_name} regression test failed: {e}")
@@ -264,7 +264,7 @@ def run_all_tests():
         
         try:
             test_func()
-            logger.info(f"✓ {test_name} PASSED")
+            logger.info(f" {test_name} PASSED")
             passed += 1
         except Exception as e:
             logger.error(f"✗ {test_name} FAILED: {e}")

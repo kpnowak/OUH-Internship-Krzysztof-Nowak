@@ -41,7 +41,7 @@ def test_configuration():
             print(f"✗ Missing configuration keys: {missing_keys}")
             return False
         else:
-            print("✓ All required configuration keys present")
+            print(" All required configuration keys present")
             return True
         
     except Exception as e:
@@ -64,7 +64,7 @@ def test_balanced_models():
         for model_name in balanced_models:
             try:
                 model = get_model_object(model_name)
-                print(f"✓ {model_name} created successfully: {type(model)}")
+                print(f" {model_name} created successfully: {type(model)}")
             except Exception as e:
                 print(f"! {model_name} creation failed (may be due to missing dependencies): {str(e)}")
         
@@ -125,7 +125,7 @@ def test_threshold_optimization():
         print(f"  MCC improvement: {improvement:.4f}")
         
         if improvement > 0:
-            print("✓ Threshold optimization improved MCC")
+            print(" Threshold optimization improved MCC")
         else:
             print("! Threshold optimization did not improve MCC (may be expected for some datasets)")
         

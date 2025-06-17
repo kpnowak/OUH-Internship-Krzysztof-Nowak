@@ -28,7 +28,7 @@ Replace your current MRMR selectors with these fast alternatives:
 | **CorrelationFS** | **600x faster** | ⭐⭐⭐ | **Ultra-fast baseline** |
 | MRMR (baseline) | 1x | ⭐⭐⭐⭐ | Slow reference |
 
-## 🔧 How to Use
+##  How to Use
 
 ### Option 1: Update Your Selector Dictionaries
 
@@ -141,7 +141,7 @@ print(f"Fast: {fast_result['score']:.3f} in {fast_time:.1f}s")
 print(f"Speedup: {mrmr_time/fast_time:.1f}x")
 ```
 
-## 🔧 Configuration (Optional)
+##  Configuration (Optional)
 
 The methods work out-of-the-box, but you can customize in `config.py`:
 

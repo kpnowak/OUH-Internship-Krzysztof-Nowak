@@ -73,7 +73,7 @@ def test_configuration():
             print(f"✗ Missing configuration keys: {missing_keys}")
             return False
         else:
-            print("✓ All required configuration keys present")
+            print(" All required configuration keys present")
             return True
         
     except Exception as e:
@@ -105,7 +105,7 @@ def test_sparse_plsda():
         X_train_transformed = sparse_plsda.fit_transform(X_train, y_train)
         X_test_transformed = sparse_plsda.transform(X_test)
         
-        print(f"✓ Sparse PLS-DA fitted successfully")
+        print(f" Sparse PLS-DA fitted successfully")
         print(f"  Original features: {X_train.shape[1]}")
         print(f"  Transformed features: {X_train_transformed.shape[1]}")
         print(f"  Components extracted: {sparse_plsda.x_weights_.shape[1]}")
@@ -133,13 +133,13 @@ def test_sparse_plsda():
         print(f"  Transformed data - MCC: {mcc_transformed:.4f}, Accuracy: {acc_transformed:.4f}")
         
         if mcc_transformed >= mcc_original:
-            print(f"✓ Sparse PLS-DA maintained/improved MCC (+{mcc_transformed - mcc_original:.4f})")
+            print(f" Sparse PLS-DA maintained/improved MCC (+{mcc_transformed - mcc_original:.4f})")
         else:
             print(f"! Sparse PLS-DA decreased MCC ({mcc_transformed - mcc_original:.4f})")
         
         # Test parameter access
         params = sparse_plsda.get_params()
-        print(f"✓ Parameter access working: {len(params)} parameters")
+        print(f" Parameter access working: {len(params)} parameters")
         
         return True
         
@@ -177,7 +177,7 @@ def test_kernel_pca_median_heuristic():
         X_train_transformed = kernel_pca.fit_transform(X_train)
         X_test_transformed = kernel_pca.transform(X_test)
         
-        print(f"✓ Kernel PCA fitted successfully")
+        print(f" Kernel PCA fitted successfully")
         print(f"  Original features: {X_train.shape[1]}")
         print(f"  Transformed features: {X_train_transformed.shape[1]}")
         print(f"  Computed gamma: {kernel_pca.gamma_computed_:.6f}")
@@ -203,17 +203,17 @@ def test_kernel_pca_median_heuristic():
         print(f"  Transformed data - R²: {r2_transformed:.4f}")
         
         if r2_transformed >= r2_original:
-            print(f"✓ Kernel PCA maintained/improved R² (+{r2_transformed - r2_original:.4f})")
+            print(f" Kernel PCA maintained/improved R² (+{r2_transformed - r2_original:.4f})")
         else:
             print(f"! Kernel PCA decreased R² ({r2_transformed - r2_original:.4f})")
         
         # Test median heuristic calculation
         gamma_manual = kernel_pca._compute_median_heuristic_gamma(X_train[:50])
-        print(f"✓ Median heuristic calculation working: gamma = {gamma_manual:.6f}")
+        print(f" Median heuristic calculation working: gamma = {gamma_manual:.6f}")
         
         # Test parameter access
         params = kernel_pca.get_params()
-        print(f"✓ Parameter access working: {len(params)} parameters")
+        print(f" Parameter access working: {len(params)} parameters")
         
         return True
         
@@ -239,7 +239,7 @@ def test_extractor_integration():
         clf_extractors = get_classification_extractors()
         
         if "SparsePLS-DA" in clf_extractors:
-            print("✓ SparsePLS-DA found in classification extractors")
+            print(" SparsePLS-DA found in classification extractors")
             extractor = clf_extractors["SparsePLS-DA"]
             print(f"  Components: {extractor.n_components}")
             print(f"  Alpha: {extractor.alpha}")
@@ -251,7 +251,7 @@ def test_extractor_integration():
         reg_extractors = get_regression_extractors()
         
         if "KernelPCA-RBF" in reg_extractors:
-            print("✓ KernelPCA-RBF found in regression extractors")
+            print(" KernelPCA-RBF found in regression extractors")
             extractor = reg_extractors["KernelPCA-RBF"]
             print(f"  Components: {extractor.n_components}")
             print(f"  Kernel: {extractor.kernel}")
@@ -265,7 +265,7 @@ def test_extractor_integration():
         reg_extractors_disabled = get_regression_extractors()
         
         if "SparsePLS-DA" not in clf_extractors_disabled and "KernelPCA-RBF" not in reg_extractors_disabled:
-            print("✓ Feature engineering extractors properly disabled")
+            print(" Feature engineering extractors properly disabled")
         else:
             print("! Feature engineering extractors not properly disabled")
         
@@ -297,7 +297,7 @@ def test_cli_integration():
         args = parser.parse_args(["--feature-engineering"])
         
         if hasattr(args, 'feature_engineering') and args.feature_engineering:
-            print("✓ CLI argument --feature-engineering parsed successfully")
+            print(" CLI argument --feature-engineering parsed successfully")
         else:
             print("✗ CLI argument parsing failed")
             return False
@@ -310,7 +310,7 @@ def test_cli_integration():
         FEATURE_ENGINEERING_CONFIG["enabled"] = True
         
         if FEATURE_ENGINEERING_CONFIG["enabled"]:
-            print("✓ Configuration can be enabled via CLI simulation")
+            print(" Configuration can be enabled via CLI simulation")
         else:
             print("✗ Configuration enabling failed")
         
@@ -351,7 +351,7 @@ def test_performance_comparison():
         print(f"  Enhanced extractors: {len(extractors_enhanced)}")
         
         if len(extractors_enhanced) > len(extractors_standard):
-            print("✓ Feature engineering adds new extractors")
+            print(" Feature engineering adds new extractors")
         else:
             print("! Feature engineering may not be adding extractors")
         
@@ -371,7 +371,7 @@ def test_performance_comparison():
         print(f"  Enhanced regression extractors: {len(reg_extractors_enhanced)}")
         
         if len(reg_extractors_enhanced) > len(reg_extractors_standard):
-            print("✓ Feature engineering adds new regression extractors")
+            print(" Feature engineering adds new regression extractors")
         else:
             print("! Feature engineering may not be adding regression extractors")
         

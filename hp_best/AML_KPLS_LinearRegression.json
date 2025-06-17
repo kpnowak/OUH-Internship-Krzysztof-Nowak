@@ -1,0 +1,7 @@
+{
+  "best_params": {
+    "extractor__n_components": 2,
+    "extractor__gamma": 0.025118864315095794
+  },
+  "best_score": -0.00774632970191047
+}

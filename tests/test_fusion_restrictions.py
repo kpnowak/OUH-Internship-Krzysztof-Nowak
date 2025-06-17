@@ -24,7 +24,7 @@ def test_fusion_restrictions():
     # Test weighted_concat (should work)
     try:
         result = merge_modalities(X1, X2, X3, strategy='weighted_concat', y=y, is_regression=True)
-        print(f'✓ weighted_concat: {result.shape}')
+        print(f' weighted_concat: {result.shape}')
     except Exception as e:
         print(f'✗ weighted_concat failed: {e}')
 
@@ -33,9 +33,9 @@ def test_fusion_restrictions():
         result = merge_modalities(X1, X2, X3, strategy='learnable_weighted', y=y, is_regression=True, is_train=True)
         if isinstance(result, tuple):
             merged_data, fitted_fusion = result
-            print(f'✓ learnable_weighted: {merged_data.shape} (with fitted object)')
+            print(f' learnable_weighted: {merged_data.shape} (with fitted object)')
         else:
-            print(f'✓ learnable_weighted: {result.shape}')
+            print(f' learnable_weighted: {result.shape}')
     except Exception as e:
         print(f'✗ learnable_weighted failed: {e}')
 
@@ -56,9 +56,9 @@ def test_fusion_restrictions():
         result = merge_modalities(X1_missing, X2, X3, strategy='learnable_weighted', y=y, is_regression=True, is_train=True)
         if isinstance(result, tuple):
             merged_data, fitted_fusion = result
-            print(f'✓ learnable_weighted with missing data: {merged_data.shape} (with fitted object)')
+            print(f' learnable_weighted with missing data: {merged_data.shape} (with fitted object)')
         else:
-            print(f'✓ learnable_weighted with missing data: {result.shape}')
+            print(f' learnable_weighted with missing data: {result.shape}')
     except Exception as e:
         print(f'✗ learnable_weighted with missing data failed: {e}')
 
@@ -67,9 +67,9 @@ def test_fusion_restrictions():
         result = merge_modalities(X1_missing, X2, X3, strategy='early_fusion_pca', n_components=10, is_train=True)
         if isinstance(result, tuple):
             merged_data, fitted_fusion = result
-            print(f'✓ early_fusion_pca with missing data: {merged_data.shape} (with fitted object)')
+            print(f' early_fusion_pca with missing data: {merged_data.shape} (with fitted object)')
         else:
-            print(f'✓ early_fusion_pca with missing data: {result.shape}')
+            print(f' early_fusion_pca with missing data: {result.shape}')
     except Exception as e:
         print(f'✗ early_fusion_pca with missing data failed: {e}')
 
@@ -83,18 +83,18 @@ def test_fusion_restrictions():
             
             # Now test validation mode
             val_result = merge_modalities(X1, X2, X3, strategy='learnable_weighted', fitted_fusion=fitted_fusion, is_train=False)
-            print(f'✓ learnable_weighted validation mode: {val_result.shape}')
+            print(f' learnable_weighted validation mode: {val_result.shape}')
         else:
             print('✗ Could not get fitted fusion object for validation test')
     except Exception as e:
         print(f'✗ learnable_weighted validation mode failed: {e}')
 
     print('\n=== Summary ===')
-    print('✓ weighted_concat: Only works with 0% missing data')
-    print('✓ learnable_weighted, mkl, snf, early_fusion_pca: Work with 0%, 20%, and 50% missing data')
-    print('✓ average and sum fusion techniques: COMMENTED OUT')
-    print('✓ Training mode returns (data, fitted_object) tuples')
-    print('✓ Validation mode returns just data arrays')
+    print(' weighted_concat: Only works with 0% missing data')
+    print(' learnable_weighted, mkl, snf, early_fusion_pca: Work with 0%, 20%, and 50% missing data')
+    print(' average and sum fusion techniques: COMMENTED OUT')
+    print(' Training mode returns (data, fitted_object) tuples')
+    print(' Validation mode returns just data arrays')
     print('\n=== Test Complete ===')
 
 if __name__ == "__main__":

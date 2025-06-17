@@ -1,0 +1,10 @@
+{
+  "best_params": {
+    "model__fit_intercept": true,
+    "model__copy_X": false,
+    "extractor__tol": 0.001,
+    "extractor__n_components": 3,
+    "extractor__max_iter": 1000
+  },
+  "best_score": -0.15779109828435348
+}

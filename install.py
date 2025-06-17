@@ -55,7 +55,7 @@ def check_python_version():
     """Check Python version compatibility."""
     version = sys.version_info
     if version >= (3, 8):
-        print_status(f"Python {version.major}.{version.minor}.{version.micro} detected - Compatible ✓", "SUCCESS")
+        print_status(f"Python {version.major}.{version.minor}.{version.micro} detected - Compatible ", "SUCCESS")
         return True
     else:
         print_status(f"Python {version.major}.{version.minor}.{version.micro} detected - Incompatible", "ERROR")
@@ -67,7 +67,7 @@ def get_installation_choice():
     """Get user's installation preference."""
     print(f"{Colors.BOLD}Installation Options:{Colors.END}")
     print()
-    print("1. 🔧 Basic Installation (Core dependencies only)")
+    print("1.  Basic Installation (Core dependencies only)")
     print("   - Essential packages for running the pipeline")
     print("   - Recommended for production use")
     print()

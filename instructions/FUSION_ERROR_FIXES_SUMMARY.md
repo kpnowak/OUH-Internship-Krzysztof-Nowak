@@ -158,9 +158,9 @@ WARNING - Imputation failed: cannot access local variable 'merged' where it is n
 
 ### After Fix
 ```
-✓ Fusion module imported successfully
-✓ Merge successful! Result shape: (10, 8)
-✓ Fusion merge_modalities working correctly
+ Fusion module imported successfully
+ Merge successful! Result shape: (10, 8)
+ Fusion merge_modalities working correctly
 ```
 
 ## Integration Impact

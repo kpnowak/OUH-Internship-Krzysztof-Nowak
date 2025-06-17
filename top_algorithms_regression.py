@@ -67,7 +67,7 @@ if USE_WEIGHTED_SCORING:
     print()
 else:
     print("=== USING LEXICOGRAPHIC RANKING ===")
-    print("Priority order: baseline_rmse → baseline_r2 → baseline_mae → robustness → train_time_avg")
+    print("Priority order: baseline_rmse -> baseline_r2 -> baseline_mae -> robustness -> train_time_avg")
     print()
 
 # Create SAVE_DIR if it doesn't exist

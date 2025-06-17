@@ -47,7 +47,7 @@ def test_stratification_feasibility_check():
     
     # Test the logic from our fix
     if test_samples < n_classes:
-        print("✓ CORRECT: Stratification not feasible, should use random split")
+        print(" CORRECT: Stratification not feasible, should use random split")
         try:
             # This should fail
             X_train, X_test, y_train, y_test = train_test_split(
@@ -56,16 +56,16 @@ def test_stratification_feasibility_check():
             print("✗ ERROR: Stratified split should have failed but didn't")
             return False
         except ValueError as e:
-            print(f"✓ EXPECTED: Stratified split failed as expected: {e}")
+            print(f" EXPECTED: Stratified split failed as expected: {e}")
             
             # Now try without stratification
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=test_size, random_state=0
             )
-            print("✓ SUCCESS: Random split worked as fallback")
+            print(" SUCCESS: Random split worked as fallback")
             return True
     else:
-        print("✓ Stratification is feasible")
+        print(" Stratification is feasible")
         return True
 
 def test_kidney_specific_scenario():
@@ -100,17 +100,17 @@ def test_kidney_specific_scenario():
                 X_train, X_test, y_train, y_test = train_test_split(
                     X_kidney, y_kidney, test_size=test_size, random_state=0, stratify=y_kidney
                 )
-                print(f"  ✓ SUCCESS: Stratified split worked")
+                print(f"   SUCCESS: Stratified split worked")
                 
                 # Check that all classes are represented in test set
                 unique_test_classes = np.unique(y_test)
-                print(f"  ✓ Test set has {len(unique_test_classes)} classes: {unique_test_classes}")
+                print(f"   Test set has {len(unique_test_classes)} classes: {unique_test_classes}")
                 
             except ValueError as e:
                 print(f"  ✗ UNEXPECTED: Stratified split failed: {e}")
                 return False
         else:
-            print(f"  ✓ CORRECT: Would skip stratification due to insufficient test samples")
+            print(f"   CORRECT: Would skip stratification due to insufficient test samples")
     
     return True
 
@@ -135,9 +135,9 @@ def test_early_stopping_stratification():
     
     # This should use our improved logic
     if val_samples >= n_classes and n_classes <= 10 and n_samples >= 20:
-        print("  ✓ Would use stratification")
+        print("   Would use stratification")
     else:
-        print("  ✓ Would skip stratification (correct)")
+        print("   Would skip stratification (correct)")
     
     return True
 
@@ -162,7 +162,7 @@ def main():
         try:
             result = test_func()
             if result:
-                print(f"✓ {test_name}: PASSED")
+                print(f" {test_name}: PASSED")
             else:
                 print(f"✗ {test_name}: FAILED")
                 all_passed = False

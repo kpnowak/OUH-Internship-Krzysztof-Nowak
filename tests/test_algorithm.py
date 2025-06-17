@@ -43,7 +43,7 @@ def test_with_small_dataset():
         try:
             main()
             regression_time = time.time() - start_time
-            print(f"✓ Regression test completed in {regression_time:.2f} seconds")
+            print(f" Regression test completed in {regression_time:.2f} seconds")
         except Exception as e:
             print(f"✗ Regression test failed: {str(e)}")
             import traceback
@@ -65,7 +65,7 @@ def test_with_small_dataset():
         try:
             main()
             classification_time = time.time() - start_time
-            print(f"✓ Classification test completed in {classification_time:.2f} seconds")
+            print(f" Classification test completed in {classification_time:.2f} seconds")
         except Exception as e:
             print(f"✗ Classification test failed: {str(e)}")
             import traceback

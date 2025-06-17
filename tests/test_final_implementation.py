@@ -174,7 +174,7 @@ def main():
         try:
             result = test()
             results.append(result)
-            print(f"✓ {test.__name__} passed")
+            print(f" {test.__name__} passed")
         except Exception as e:
             print(f"✗ {test.__name__} failed: {e}")
             results.append(False)

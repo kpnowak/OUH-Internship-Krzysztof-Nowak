@@ -25,6 +25,9 @@ from sklearn.metrics import (
 )
 from sklearn.base import clone
 import warnings
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
@@ -499,8 +502,8 @@ def enhanced_roc_auc_score(y_true: np.ndarray, y_score: np.ndarray,
     """
     Enhanced ROC AUC score calculation with proper multi-class handling.
     
-    This function fixes the issue where multi-class AUC was stuck at 0.50 by
-    using the 'ovr' (one-vs-rest) strategy.
+    This function ensures proper calculation of ROC AUC for both binary and multi-class
+    scenarios using the one-vs-rest (ovr) strategy with proper handling of class imbalance.
     
     Parameters
     ----------
@@ -517,25 +520,153 @@ def enhanced_roc_auc_score(y_true: np.ndarray, y_score: np.ndarray,
     -------
     float
         AUC score
-    """
-    try:
-        # Check for binary vs multi-class
-        unique_classes = np.unique(y_true)
-        n_classes = len(unique_classes)
         
-        if n_classes == 2:
-            # Binary classification
-            if y_score.ndim > 1 and y_score.shape[1] >= 2:
-                return roc_auc_score(y_true, y_score[:, 1])
+    Raises
+    ------
+    ValueError
+        If the input data is invalid or AUC cannot be calculated
+    """
+    # Input validation
+    if y_true is None or y_score is None:
+        raise ValueError("Input arrays cannot be None")
+    
+    if len(y_true) != len(y_score):
+        raise ValueError("Length of y_true and y_score must be equal")
+    
+    # Check for binary vs multi-class
+    unique_classes = np.unique(y_true)
+    n_classes = len(unique_classes)
+    
+    if n_classes < 2:
+        raise ValueError("Number of unique classes must be at least 2")
+    
+    # Ensure y_score has correct shape
+    if n_classes == 2:
+        # Binary classification
+        if y_score.ndim > 1:
+            if y_score.shape[1] == 2:
+                # Use probability of positive class
+                y_score = y_score[:, 1]
+            elif y_score.shape[1] == 1:
+                # Already in correct shape
+                y_score = y_score.ravel()
             else:
-                return roc_auc_score(y_true, y_score)
+                raise ValueError(f"Invalid shape for binary classification: {y_score.shape}")
+    else:
+        # Multi-class classification
+        if y_score.ndim != 2 or y_score.shape[1] != n_classes:
+            raise ValueError(f"Invalid shape for multi-class classification: {y_score.shape}, expected (n_samples, {n_classes})")
+    
+    # Calculate AUC
+    if n_classes == 2:
+        return roc_auc_score(y_true, y_score)
+    else:
+        # For multi-class, ensure we have probabilities for all classes
+        if not np.allclose(y_score.sum(axis=1), 1.0, atol=1e-5):
+            raise ValueError("Probabilities must sum to 1 for each sample")
+        
+        # Convert labels to one-hot encoding for multi-class
+        y_true_bin = label_binarize(y_true, classes=unique_classes)
+        
+        # Calculate AUC for each class
+        auc_scores = []
+        for i in range(n_classes):
+            try:
+                # Skip if no positive samples for this class
+                if np.sum(y_true_bin[:, i]) == 0:
+                    logger.warning(f"No positive samples for class {i}, skipping AUC calculation")
+                    continue
+                    
+                # Calculate AUC for this class
+                auc = roc_auc_score(y_true_bin[:, i], y_score[:, i])
+                auc_scores.append(auc)
+            except Exception as e:
+                logger.warning(f"Failed to calculate AUC for class {i}: {str(e)}")
+                continue
+        
+        if not auc_scores:
+            raise ValueError("Could not calculate AUC for any class")
+        
+        # Apply averaging strategy
+        if average == 'weighted':
+            # Weight by class frequency
+            class_weights = np.bincount(y_true) / len(y_true)
+            return np.average(auc_scores, weights=class_weights)
+        elif average == 'macro':
+            return np.mean(auc_scores)
+        elif average == 'micro':
+            # Micro-averaging combines all classes into one
+            return roc_auc_score(y_true_bin.ravel(), y_score.ravel())
         else:
-            # Multi-class classification with proper 'ovr' strategy
-            return roc_auc_score(y_true, y_score, multi_class=multi_class, average=average)
+            raise ValueError(f"Invalid averaging strategy: {average}")
+
+
+def plot_multi_class_roc(y_true: np.ndarray, y_score: np.ndarray, 
+                        classes: Optional[List[str]] = None,
+                        title: str = "Multi-class ROC Curve",
+                        figsize: Tuple[int, int] = (10, 8)) -> None:
+    """
+    Plot ROC curves for multi-class classification.
+    
+    Parameters
+    ----------
+    y_true : np.ndarray
+        True labels
+    y_score : np.ndarray
+        Predicted probabilities
+    classes : List[str], optional
+        Class names for the legend
+    title : str, default="Multi-class ROC Curve"
+        Plot title
+    figsize : Tuple[int, int], default=(10, 8)
+        Figure size
+    """
+    # Get unique classes
+    unique_classes = np.unique(y_true)
+    n_classes = len(unique_classes)
+    
+    if n_classes < 2:
+        raise ValueError("Number of unique classes must be at least 2")
+    
+    # Convert labels to one-hot encoding
+    y_true_bin = label_binarize(y_true, classes=unique_classes)
+    
+    # Compute ROC curve and ROC area for each class
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+    
+    for i in range(n_classes):
+        # Skip if no positive samples for this class
+        if np.sum(y_true_bin[:, i]) == 0:
+            logger.warning(f"No positive samples for class {i}, skipping ROC curve")
+            continue
             
-    except Exception as e:
-        logger.warning(f"Enhanced AUC calculation failed: {str(e)}")
-        return 0.5
+        fpr[i], tpr[i], _ = roc_curve(y_true_bin[:, i], y_score[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+    
+    # Plot ROC curves
+    plt.figure(figsize=figsize)
+    
+    # Plot each class
+    for i in range(n_classes):
+        if i in fpr:  # Only plot if we have data for this class
+            class_name = classes[i] if classes is not None else f"Class {i}"
+            plt.plot(fpr[i], tpr[i], label=f'{class_name} (AUC = {roc_auc[i]:.2f})')
+    
+    # Plot diagonal line
+    plt.plot([0, 1], [0, 1], 'k--')
+    
+    # Customize plot
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title(title)
+    plt.legend(loc="lower right")
+    plt.grid(True)
+    
+    return plt.gcf()
 
 
 def create_enhanced_cv_strategy(X: np.ndarray, y: np.ndarray, 
@@ -676,7 +807,7 @@ def test_enhanced_metrics():
     print(f"  Nested CV Score: {results['mean_score']:.4f} ± {results['std_score']:.4f}")
     print(f"  Best Parameters: {nested_cv.get_best_hyperparameters(results)}")
     
-    print("\n✓ All tests completed successfully!")
+    print("\n All tests completed successfully!")
 
 
 if __name__ == "__main__":

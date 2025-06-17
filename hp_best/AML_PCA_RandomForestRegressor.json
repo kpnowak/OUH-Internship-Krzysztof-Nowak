@@ -1,0 +1,9 @@
+{
+  "best_params": {
+    "model__n_estimators": 800,
+    "model__min_samples_leaf": 4,
+    "model__max_depth": 5,
+    "extractor__n_components": 2
+  },
+  "best_score": -0.1671975832789124
+}

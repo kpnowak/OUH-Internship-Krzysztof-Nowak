@@ -28,7 +28,7 @@ def create_transformed_target_regressor(...):
         ...
 ```
 
-## 🔧 Solution Implemented
+##  Solution Implemented
 
 ### **Moved Classes to Module Level**
 - Relocated `CombinedTransformFunction` and `CombinedInverseFunction` to module level
@@ -71,7 +71,7 @@ def create_transformed_target_regressor(...):
 ```
 
 ### **Functionality Preserved**:
-- ✅ **Pipeline Order**: Still correct (log1p → scaling)
+- ✅ **Pipeline Order**: Still correct (log1p -> scaling)
 - ✅ **Warning Reduction**: Still working (global tracking)
 - ✅ **Data Handling**: Still robust (handles all data types)
 - ✅ **Performance**: Still optimal (proper transformations)
@@ -97,7 +97,7 @@ class CombinedTransformFunction:
         self.fitted = False
     
     def __call__(self, y):
-        # Apply log1p → scaling in correct order
+        # Apply log1p -> scaling in correct order
         ...
 
 # UPDATED: Function now uses module-level classes

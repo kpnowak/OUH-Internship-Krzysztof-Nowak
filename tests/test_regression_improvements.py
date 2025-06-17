@@ -61,7 +61,7 @@ def test_configuration():
             print(f"✗ Missing configuration keys: {missing_keys}")
             return False
         else:
-            print("✓ All required configuration keys present")
+            print(" All required configuration keys present")
             return True
         
     except Exception as e:
@@ -83,7 +83,7 @@ def test_target_transformations():
         # Test AML transformation (log1p)
         transform_func, inverse_func, description = get_target_transformation("aml")
         if transform_func is not None:
-            print(f"✓ AML transformation found: {description}")
+            print(f" AML transformation found: {description}")
             
             # Test the transformation
             test_values = np.array([0, 1, 10, 50, 100])
@@ -95,7 +95,7 @@ def test_target_transformations():
             print(f"  Recovered: {recovered}")
             
             if np.allclose(test_values, recovered, rtol=1e-10):
-                print("✓ AML transformation is invertible")
+                print(" AML transformation is invertible")
             else:
                 print("✗ AML transformation is not properly invertible")
         else:
@@ -104,7 +104,7 @@ def test_target_transformations():
         # Test Sarcoma transformation (sqrt)
         transform_func, inverse_func, description = get_target_transformation("sarcoma")
         if transform_func is not None:
-            print(f"✓ Sarcoma transformation found: {description}")
+            print(f" Sarcoma transformation found: {description}")
             
             # Test the transformation
             test_values = np.array([0, 1, 4, 9, 25])
@@ -116,7 +116,7 @@ def test_target_transformations():
             print(f"  Recovered: {recovered}")
             
             if np.allclose(test_values, recovered, rtol=1e-10):
-                print("✓ Sarcoma transformation is invertible")
+                print(" Sarcoma transformation is invertible")
             else:
                 print("✗ Sarcoma transformation is not properly invertible")
         else:
@@ -127,7 +127,7 @@ def test_target_transformations():
         transformed_model = create_transformed_target_regressor(base_model, "aml")
         
         if hasattr(transformed_model, 'regressor'):
-            print("✓ TransformedTargetRegressor created successfully for AML")
+            print(" TransformedTargetRegressor created successfully for AML")
         else:
             print("! TransformedTargetRegressor not created (may be due to sklearn version)")
         
@@ -153,7 +153,7 @@ def test_improved_models():
         for model_name in improved_models:
             try:
                 model = get_model_object(model_name)
-                print(f"✓ {model_name} created successfully: {type(model)}")
+                print(f" {model_name} created successfully: {type(model)}")
                 
                 # Check for robust loss settings
                 if hasattr(model, 'loss') and model.loss == 'huber':
@@ -193,7 +193,7 @@ def test_outlier_detection():
         print(f"  Data with outliers detected: {outliers_detected_with_outliers}")
         
         if not outliers_detected_normal and outliers_detected_with_outliers:
-            print("✓ Outlier detection working correctly")
+            print(" Outlier detection working correctly")
             return True
         else:
             print("! Outlier detection may need tuning")
@@ -230,7 +230,7 @@ def test_integration():
         )
         
         if model is not None and metrics:
-            print("✓ train_regression_model completed successfully")
+            print(" train_regression_model completed successfully")
             print(f"  Metrics returned:")
             for key, value in metrics.items():
                 if isinstance(value, (int, float)):
@@ -252,7 +252,7 @@ def test_integration():
             # Check R² improvement
             r2 = metrics.get('r2', -999)
             if r2 > 0:
-                print(f"✓ Positive R² achieved: {r2:.4f}")
+                print(f" Positive R² achieved: {r2:.4f}")
             else:
                 print(f"! R² still negative/low: {r2:.4f} (may need more data or different approach)")
             
@@ -310,7 +310,7 @@ def test_performance_comparison():
             
             if robust_r2 > standard_r2:
                 improvement = robust_r2 - standard_r2
-                print(f"✓ Robust model improved R² by {improvement:.4f}")
+                print(f" Robust model improved R² by {improvement:.4f}")
             else:
                 print(f"! Robust model did not improve R² (may need more challenging data)")
         

@@ -26,6 +26,79 @@ from scipy import stats
 
 logger = logging.getLogger(__name__)
 
+def calculate_mad_per_feature(X: np.ndarray) -> np.ndarray:
+    """
+    Calculate MAD (Median Absolute Deviation) for each feature.
+    
+    MAD is more robust to outliers than variance as it uses median instead of mean
+    and absolute instead of squared deviations.
+    
+    Args:
+        X: Input data (samples × features)
+    
+    Returns:
+        Array of MAD values for each feature
+    """
+    mad_values = []
+    for i in range(X.shape[1]):
+        feature_data = X[:, i]
+        # Handle NaN values
+        valid_data = feature_data[~np.isnan(feature_data)]
+        
+        if len(valid_data) == 0:
+            mad_values.append(0.0)
+        elif len(valid_data) == 1:
+            mad_values.append(0.0)
+        else:
+            median_val = np.median(valid_data)
+            mad = np.median(np.abs(valid_data - median_val))
+            # Scale by 1.4826 to make MAD equivalent to standard deviation for normal distributions
+            mad_scaled = mad * 1.4826
+            mad_values.append(mad_scaled)
+    
+    return np.array(mad_values)
+
+class MADThreshold:
+    """
+    MAD-based feature selector, similar to VarianceThreshold but using MAD.
+    
+    MAD (Median Absolute Deviation) is more robust to outliers than variance.
+    """
+    
+    def __init__(self, threshold: float = 0.0):
+        self.threshold = threshold
+        self.mad_values_ = None
+        self.support_mask_ = None
+    
+    def fit(self, X: np.ndarray, y=None) -> 'MADThreshold':
+        """Fit the MAD threshold selector."""
+        X = np.asarray(X)
+        self.mad_values_ = calculate_mad_per_feature(X)
+        self.support_mask_ = self.mad_values_ > self.threshold
+        return self
+    
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        """Transform data by selecting features above MAD threshold."""
+        if self.support_mask_ is None:
+            raise ValueError("This MADThreshold instance is not fitted yet.")
+        
+        X = np.asarray(X)
+        return X[:, self.support_mask_]
+    
+    def fit_transform(self, X: np.ndarray, y=None) -> np.ndarray:
+        """Fit and transform in one step."""
+        return self.fit(X, y).transform(X)
+    
+    def get_support(self, indices: bool = False) -> Union[np.ndarray, List[int]]:
+        """Get support mask or indices."""
+        if self.support_mask_ is None:
+            raise ValueError("This MADThreshold instance is not fitted yet.")
+        
+        if indices:
+            return np.where(self.support_mask_)[0]
+        else:
+            return self.support_mask_
+
 class GenomicFeatureSelector:
     """
     Genomic-optimized feature selection with ensemble methods and biological relevance.
@@ -109,6 +182,8 @@ class GenomicFeatureSelector:
             self._fit_variance_f_test(X, y, is_regression)
         elif self.method == "chi2":
             self._fit_chi2(X, y, is_regression)
+        elif self.method == "fast_elastic_net":
+            self._fit_fast_elastic_net(X, y, is_regression)
         else:
             # Fallback to genomic ensemble
             logger.warning(f"Unknown method {self.method}, using genomic_ensemble")
@@ -188,7 +263,7 @@ class GenomicFeatureSelector:
         # Method 4: Minimal regularization (very permissive)
         try:
             if is_regression:
-                model = ElasticNet(alpha=0.00001, l1_ratio=0.1, max_iter=1000, random_state=self.random_state)
+                model = ElasticNet(alpha=0.2, l1_ratio=0.5, max_iter=1000, random_state=self.random_state)  # OPTIMIZED: Stricter alpha
             else:
                 model = LogisticRegression(
                     C=10000.0, penalty='l1', solver='liblinear', 
@@ -271,10 +346,10 @@ class GenomicFeatureSelector:
         # Add biological relevance factors
         bio_scores = np.copy(base_scores)
         
-        # Factor 1: Variance stability (prefer features with consistent variance)
-        variances = np.var(X, axis=0)
-        variance_stability = 1.0 / (1.0 + np.abs(variances - np.median(variances)))
-        bio_scores *= (1.0 + 0.2 * variance_stability)
+        # Factor 1: MAD stability (prefer features with consistent MAD - more robust than variance)
+        mad_values = calculate_mad_per_feature(X)
+        mad_stability = 1.0 / (1.0 + np.abs(mad_values - np.median(mad_values)))
+        bio_scores *= (1.0 + 0.2 * mad_stability)
         
         # Factor 2: Non-zero expression (prefer features with more non-zero values)
         non_zero_ratio = np.mean(X != 0, axis=0)
@@ -299,19 +374,19 @@ class GenomicFeatureSelector:
         """
         logger.debug("GenomicFS: Using permissive univariate selection")
         
-        # Use very low variance threshold
-        var_threshold = self.kwargs.get('variance_threshold', 1e-6)
-        var_selector = VarianceThreshold(threshold=var_threshold)
+        # Use very low MAD threshold (more robust than variance)
+        mad_threshold = self.kwargs.get('mad_threshold', 1e-6)
+        mad_selector = MADThreshold(threshold=mad_threshold)
         
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore')
-            X_var = var_selector.fit_transform(X)
+            X_mad = mad_selector.fit_transform(X)
         
-        var_features = np.where(var_selector.get_support())[0]
+        mad_features = np.where(mad_selector.get_support())[0]
         
-        if X_var.shape[1] <= self.n_features:
-            self.selected_features_ = var_features
-            self.feature_scores_ = np.ones(len(var_features))
+        if X_mad.shape[1] <= self.n_features:
+            self.selected_features_ = mad_features
+            self.feature_scores_ = np.ones(len(mad_features))
             return
         
         # Very permissive statistical selection
@@ -322,11 +397,11 @@ class GenomicFeatureSelector:
         
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore')
-            selector.fit(X_var, y)
+            selector.fit(X_mad, y)
         
         # Map back to original indices
-        selected_var_indices = np.where(selector.get_support())[0]
-        self.selected_features_ = var_features[selected_var_indices]
+        selected_mad_indices = np.where(selector.get_support())[0]
+        self.selected_features_ = mad_features[selected_mad_indices]
         self.feature_scores_ = selector.scores_
         
         logger.info("GenomicFS: Applied permissive univariate selection")
@@ -387,23 +462,23 @@ class GenomicFeatureSelector:
     
     def _fit_variance_f_test(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
         """
-        Fast variance + F-test selection with genomic optimization.
+        Fast MAD + F-test selection with genomic optimization (more robust than variance).
         """
-        logger.debug("GenomicFS: Using variance + F-test selection")
+        logger.debug("GenomicFS: Using MAD + F-test selection")
         
-        # Very permissive variance threshold
-        variance_threshold = self.kwargs.get('variance_threshold', 1e-6)
-        var_selector = VarianceThreshold(threshold=variance_threshold)
+        # Very permissive MAD threshold (more robust than variance)
+        mad_threshold = self.kwargs.get('mad_threshold', 1e-6)
+        mad_selector = MADThreshold(threshold=mad_threshold)
         
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore')
-            X_var = var_selector.fit_transform(X)
+            X_mad = mad_selector.fit_transform(X)
         
-        var_features = np.where(var_selector.get_support())[0]
+        mad_features = np.where(mad_selector.get_support())[0]
         
-        if X_var.shape[1] <= self.n_features:
-            self.selected_features_ = var_features
-            self.feature_scores_ = np.ones(len(var_features))
+        if X_mad.shape[1] <= self.n_features:
+            self.selected_features_ = mad_features
+            self.feature_scores_ = np.ones(len(mad_features))
             return
         
         # F-test selection
@@ -414,14 +489,14 @@ class GenomicFeatureSelector:
         
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore')
-            f_selector.fit(X_var, y)
+            f_selector.fit(X_mad, y)
         
         # Map back to original indices
         f_features = np.where(f_selector.get_support())[0]
-        self.selected_features_ = var_features[f_features]
+        self.selected_features_ = mad_features[f_features]
         self.feature_scores_ = f_selector.scores_
         
-        logger.info("GenomicFS: Applied variance + F-test selection")
+        logger.info("GenomicFS: Applied MAD + F-test selection")
     
     def _fit_chi2(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
         """
@@ -445,20 +520,20 @@ class GenomicFeatureSelector:
             logger.debug(f"GenomicFS: Shifting {np.sum(negative_features)} features to non-negative range for chi2")
             X_nonneg[:, negative_features] -= min_vals[negative_features]
         
-        # Apply variance threshold first to remove constant features
-        variance_threshold = self.kwargs.get('variance_threshold', 1e-6)
-        var_selector = VarianceThreshold(threshold=variance_threshold)
+        # Apply MAD threshold first to remove constant features (more robust than variance)
+        mad_threshold = self.kwargs.get('mad_threshold', 1e-6)
+        mad_selector = MADThreshold(threshold=mad_threshold)
         
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore')
-            X_var = var_selector.fit_transform(X_nonneg)
+            X_mad = mad_selector.fit_transform(X_nonneg)
         
-        var_features = np.where(var_selector.get_support())[0]
+        mad_features = np.where(mad_selector.get_support())[0]
         
-        if X_var.shape[1] <= self.n_features:
-            self.selected_features_ = var_features
-            self.feature_scores_ = np.ones(len(var_features))
-            logger.info(f"GenomicFS: Chi2 selected {len(var_features)} features (all after variance filtering)")
+        if X_mad.shape[1] <= self.n_features:
+            self.selected_features_ = mad_features
+            self.feature_scores_ = np.ones(len(mad_features))
+            logger.info(f"GenomicFS: Chi2 selected {len(mad_features)} features (all after MAD filtering)")
             return
         
         # Apply chi2 selection
@@ -469,11 +544,11 @@ class GenomicFeatureSelector:
             
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore')
-                chi2_selector.fit(X_var, y)
+                chi2_selector.fit(X_mad, y)
             
             # Map back to original indices
             chi2_features = np.where(chi2_selector.get_support())[0]
-            self.selected_features_ = var_features[chi2_features]
+            self.selected_features_ = mad_features[chi2_features]
             self.feature_scores_ = chi2_selector.scores_
             
             logger.info(f"GenomicFS: Chi2 selected {len(self.selected_features_)} features")
@@ -482,6 +557,120 @@ class GenomicFeatureSelector:
             logger.warning(f"Chi2 selection failed: {e}, falling back to F-test")
             # Fallback to F-test if chi2 fails
             self._fit_variance_f_test(X, y, is_regression)
+    
+    def _fit_fast_elastic_net(self, X: np.ndarray, y: np.ndarray, is_regression: bool):
+        """
+        Fast ElasticNet-based feature selection optimized for speed.
+        """
+        logger.debug("GenomicFS: Using fast ElasticNet selection")
+        
+        # Step 1: Quick MAD filtering to remove constant features (more robust than variance)
+        mad_threshold = 1e-6
+        mad_selector = MADThreshold(threshold=mad_threshold)
+        
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore')
+            X_mad = mad_selector.fit_transform(X)
+        
+        mad_features = np.where(mad_selector.get_support())[0]
+        
+        if X_mad.shape[1] <= self.n_features:
+            self.selected_features_ = mad_features
+            self.feature_scores_ = np.ones(len(mad_features))
+            logger.info(f"GenomicFS: Fast ElasticNet selected {len(mad_features)} features (all after MAD filtering)")
+            return
+        
+        # Step 2: Fast univariate pre-filtering to reduce dimensionality
+        # Select top 3x target features using F-test for speed
+        prefilter_k = min(self.n_features * 3, X_mad.shape[1])
+        
+        try:
+            if is_regression:
+                prefilter_selector = SelectKBest(f_regression, k=prefilter_k)
+            else:
+                prefilter_selector = SelectKBest(f_classif, k=prefilter_k)
+            
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+                X_prefiltered = prefilter_selector.fit_transform(X_mad, y)
+            
+            prefilter_features = np.where(prefilter_selector.get_support())[0]
+            
+        except Exception as e:
+            logger.warning(f"Pre-filtering failed: {e}, using all features")
+            X_prefiltered = X_mad
+            prefilter_features = np.arange(X_mad.shape[1])
+        
+        # Step 3: Fast ElasticNet with optimized parameters
+        try:
+            # Scale features for regularization
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_prefiltered)
+            
+            if is_regression:
+                # Use very light regularization for speed
+                model = ElasticNet(
+                    alpha=0.2,        # OPTIMIZED: Stricter regularization (0.001 → 0.2, range 0.1-0.5)
+                    l1_ratio=0.5,     # Balanced L1/L2 regularization for feature selection
+                    max_iter=500,     # Reduced iterations for speed
+                    random_state=self.random_state,
+                    selection='random'  # Random coordinate descent for speed
+                )
+            else:
+                # Use LogisticRegression with L1 penalty
+                model = LogisticRegression(
+                    C=100.0,          # Light regularization (high C)
+                    penalty='l1',
+                    solver='liblinear',  # Fast solver for L1
+                    max_iter=500,     # Reduced iterations for speed
+                    random_state=self.random_state
+                )
+            
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+                model.fit(X_scaled, y)
+            
+            # Get feature importance scores
+            if hasattr(model, 'coef_'):
+                if model.coef_.ndim > 1:
+                    importance_scores = np.abs(model.coef_).max(axis=0)
+                else:
+                    importance_scores = np.abs(model.coef_)
+            else:
+                importance_scores = np.abs(model.feature_importances_)
+            
+            # Select top features
+            top_prefilter_indices = np.argsort(importance_scores)[-self.n_features:]
+            
+            # Map back to original indices
+            selected_mad_indices = prefilter_features[top_prefilter_indices]
+            self.selected_features_ = mad_features[selected_mad_indices]
+            self.feature_scores_ = importance_scores[top_prefilter_indices]
+            
+            logger.info(f"GenomicFS: Fast ElasticNet selected {len(self.selected_features_)} features")
+            
+        except Exception as e:
+            logger.warning(f"Fast ElasticNet failed: {e}, falling back to F-test")
+            # Fallback to simple F-test selection
+            try:
+                if is_regression:
+                    fallback_selector = SelectKBest(f_regression, k=self.n_features)
+                else:
+                    fallback_selector = SelectKBest(f_classif, k=self.n_features)
+                
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore')
+                    fallback_selector.fit(X_mad, y)
+                
+                fallback_features = np.where(fallback_selector.get_support())[0]
+                self.selected_features_ = mad_features[fallback_features]
+                self.feature_scores_ = fallback_selector.scores_
+                
+                logger.info(f"GenomicFS: Fallback F-test selected {len(self.selected_features_)} features")
+                
+            except Exception as fallback_e:
+                logger.error(f"Fallback also failed: {fallback_e}, using MAD-only selection")
+                self._fit_mad_fallback(X)
     
     def _combine_genomic_scores(self, methods: List[Tuple[str, np.ndarray]], n_features: int) -> np.ndarray:
         """
@@ -531,17 +720,17 @@ class GenomicFeatureSelector:
         
         return combined
     
-    def _fit_variance_fallback(self, X: np.ndarray):
+    def _fit_mad_fallback(self, X: np.ndarray):
         """
-        Fallback method using only variance.
+        Fallback method using only MAD (more robust than variance).
         """
-        logger.warning("GenomicFS: Using variance fallback method")
+        logger.warning("GenomicFS: Using MAD fallback method")
         
-        variances = np.var(X, axis=0)
-        top_indices = np.argsort(variances)[-self.n_features:]
+        mad_values = calculate_mad_per_feature(X)
+        top_indices = np.argsort(mad_values)[-self.n_features:]
         
         self.selected_features_ = top_indices
-        self.feature_scores_ = variances[top_indices]
+        self.feature_scores_ = mad_values[top_indices]
     
     def transform(self, X: np.ndarray) -> np.ndarray:
         """

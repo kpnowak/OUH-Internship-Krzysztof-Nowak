@@ -8,7 +8,7 @@ The real data results showed catastrophic failures in integration methods:
 - **weighted_concat**: R² = -0.35 (poor but manageable)
 
 ## Root Cause
-1. **Information Bottleneck**: Selecting 512 features → reducing to 30-108 components
+1. **Information Bottleneck**: Selecting 512 features -> reducing to 30-108 components
 2. **Scale Mismatch**: Different modalities have vastly different scales causing numerical instability
 3. **Integration Method Failures**: PCA/averaging destroying genomic signal structure
 4. **Missing Value Handling**: Integration methods can't handle sparse genomic data properly

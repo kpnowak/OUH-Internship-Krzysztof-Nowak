@@ -30,9 +30,17 @@ from preprocessing import (
     normalize_sample_ids, 
     advanced_feature_filtering,
     biomedical_preprocessing_pipeline,
+    robust_biomedical_preprocessing_pipeline,
     log_transform_data,
     quantile_normalize_data,
-    handle_sparse_features
+    handle_sparse_features,
+    # Add new enhanced preprocessing imports (DataOrientationValidator moved to this file)
+    ModalityAwareScaler,
+    AdaptiveFeatureSelector,
+    SampleIntersectionManager,
+    PreprocessingValidator,
+    FusionMethodStandardizer,
+    enhanced_comprehensive_preprocessing_pipeline
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +48,180 @@ logger = logging.getLogger(__name__)
 # Global cache for loaded modalities
 _modality_cache = {}
 _cache_lock = threading.Lock()
+
+class DataOrientationValidationError(Exception):
+    """Custom exception for data orientation validation errors"""
+    pass
+
+class DataOrientationValidator:
+    """
+    Priority 1: Fix Data Orientation Issues (IMMEDIATE)
+    Validates and fixes data matrix orientation to prevent transposition issues.
+    
+    This class has been moved from preprocessing.py to data_io.py to catch
+    orientation issues as early as possible in the data loading process.
+    """
+    
+    @staticmethod
+    def validate_dataframe_orientation(df: pd.DataFrame, modality_name: str = "unknown") -> pd.DataFrame:
+        """
+        Validate and fix DataFrame orientation issues that cause preprocessing inconsistencies.
+        This version works with pandas DataFrames and provides rich context about the data.
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input DataFrame with features as rows and samples as columns (expected)
+        modality_name : str
+            Name of the modality for logging
+            
+        Returns
+        -------
+        pd.DataFrame
+            Properly oriented DataFrame
+        """
+        if df.empty:
+            logger.warning(f"Empty DataFrame provided for {modality_name}")
+            return df
+            
+        n_features, n_samples = df.shape  # DataFrame: rows=features, columns=samples
+        
+        # Log original dimensions
+        logger.info(f"{modality_name} original shape: {df.shape} (features={n_features}, samples={n_samples})")
+        
+        # Check if sample IDs are in the index instead of columns (common mistake)
+        sample_pattern = ['TCGA', 'sample', 'SAMPLE_', 'patient', 'PATIENT']
+        
+        # Count potential sample IDs in index vs columns
+        index_sample_count = sum(1 for idx in df.index if isinstance(idx, str) 
+                                and any(pattern in idx for pattern in sample_pattern))
+        column_sample_count = sum(1 for col in df.columns if isinstance(col, str) 
+                                 and any(pattern in col for pattern in sample_pattern))
+        
+        logger.debug(f"{modality_name}: sample IDs in index={index_sample_count}, in columns={column_sample_count}")
+        
+        # Decision logic for transposition
+        needs_transpose = False
+        transpose_reason = ""
+        
+        # Rule 1: If samples are clearly in the index, transpose
+        if index_sample_count >= 5 and column_sample_count < 5:
+            needs_transpose = True
+            transpose_reason = f"samples detected in index ({index_sample_count}) rather than columns ({column_sample_count})"
+        
+        # Rule 2: For gene expression data, be more aggressive about detecting wrong orientation
+        elif modality_name.lower() in ["gene_expression", "gene", "expression", "exp"]:
+            # Gene expression should have many more features than samples
+            if n_features < n_samples and n_samples > 100:
+                needs_transpose = True
+                transpose_reason = f"gene expression with {n_features} features < {n_samples} samples (suspicious)"
+            # Also check if we have way too many "samples" (likely features)
+            elif n_samples > 10000:
+                needs_transpose = True
+                transpose_reason = f"gene expression with {n_samples} samples > 10000 (likely features)"
+        
+        # Rule 3: General biological data validation
+        elif n_features < 50 and n_samples > 1000:
+            # Very few features but many samples - likely wrong orientation
+            needs_transpose = True
+            transpose_reason = f"suspicious ratio: {n_features} features vs {n_samples} samples"
+        
+        # Apply transposition if needed
+        if needs_transpose:
+            logger.warning(f"Transposing {modality_name}: {transpose_reason}")
+            logger.info(f"Before transpose: {df.shape} -> After transpose: {(df.T.shape)}")
+            df = df.T
+            n_features, n_samples = df.shape
+        
+        # Final validation checks
+        if n_samples < 5:
+            raise DataOrientationValidationError(f"Insufficient samples for {modality_name}: {n_samples}")
+        
+        if n_features < 10:
+            logger.warning(f"Very few features for {modality_name}: {n_features}")
+        
+        # Log final validated dimensions
+        logger.info(f"{modality_name} validated shape: {df.shape} (features={n_features}, samples={n_samples})")
+        
+        return df
+    
+    @staticmethod
+    def validate_data_orientation(X: np.ndarray, modality_name: str = "unknown") -> np.ndarray:
+        """
+        Validate and fix data matrix orientation issues (numpy array version).
+        This is kept for backward compatibility with preprocessing.py functions.
+        
+        Parameters
+        ----------
+        X : np.ndarray
+            Input data matrix
+        modality_name : str
+            Name of the modality for logging
+            
+        Returns
+        -------
+        np.ndarray
+            Properly oriented data matrix
+        """
+        if X.size == 0:
+            logger.warning(f"Empty array provided for {modality_name}")
+            return X
+            
+        n_samples, n_features = X.shape
+        
+        # Log original dimensions
+        logger.info(f"{modality_name} original shape: {X.shape}")
+        
+        # Critical validation for gene expression data
+        if modality_name.lower() in ["gene_expression", "gene", "expression", "exp"]:
+            if n_samples > n_features and n_samples > 1000:
+                logger.warning(f"Suspicious orientation for {modality_name}: {n_samples} samples > {n_features} features")
+                logger.info(f"Auto-transposing {modality_name}: {X.shape} -> {X.T.shape}")
+                X = X.T
+                n_samples, n_features = X.shape
+        
+        # General validation - biological data should have samples <= features in most cases
+        if n_samples > n_features * 10:
+            logger.error(f"Extreme sample/feature ratio for {modality_name}: {n_samples}/{n_features}")
+            raise DataOrientationValidationError(f"Suspicious data orientation for {modality_name}")
+        
+        # Validate minimum requirements
+        if n_samples < 10:
+            raise DataOrientationValidationError(f"Insufficient samples for {modality_name}: {n_samples}")
+        
+        logger.info(f"{modality_name} validated shape: {X.shape}")
+        return X
+    
+    @staticmethod
+    def validate_modality_consistency(modality_dict: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+        """
+        Ensure all modalities have consistent sample counts after orientation fixes.
+        
+        Parameters
+        ----------
+        modality_dict : Dict[str, np.ndarray]
+            Dictionary of modality data
+            
+        Returns
+        -------
+        Dict[str, np.ndarray]
+            Validated modality dictionary
+        """
+        validated_dict = {}
+        sample_counts = {}
+        
+        # Validate each modality
+        for modality, X in modality_dict.items():
+            validated_X = DataOrientationValidator.validate_data_orientation(X, modality)
+            validated_dict[modality] = validated_X
+            sample_counts[modality] = validated_X.shape[0]
+        
+        # Check for sample count consistency
+        unique_counts = set(sample_counts.values())
+        if len(unique_counts) > 1:
+            logger.warning(f"Inconsistent sample counts across modalities: {sample_counts}")
+        
+        return validated_dict
 
 def get_file_hash(file_path: Path) -> str:
     """Generate a hash for file caching based on path and modification time."""
@@ -632,14 +814,15 @@ def preprocess_genomic_data(df: pd.DataFrame, modality_name: str) -> pd.DataFram
             df = df.fillna(df.median(axis=1), axis=0)
             logger.debug(f"Filled missing values with median for {modality_name}")
     
-    # Remove constant features (no variance)
+    # Remove constant features (no MAD - more robust than variance)
     if modality_name.lower() != 'methylation':  # Methylation can have legitimate constant values
-        feature_variance = df.var(axis=1)
-        non_constant = feature_variance > 1e-8  # Very small threshold for numerical stability
+        # Calculate MAD for each feature (row-wise since features are in rows)
+        feature_mad = df.apply(lambda row: np.median(np.abs(row - np.median(row))) * 1.4826, axis=1)
+        non_constant = feature_mad > 1e-8  # Very small threshold for numerical stability
         
         if not non_constant.all():
             removed_count = (~non_constant).sum()
-            logger.info(f"Removing {removed_count} constant features from {modality_name}")
+            logger.info(f"Removing {removed_count} constant features from {modality_name} using MAD")
             df = df[non_constant]
     
     # Apply log transformation for expression data
@@ -760,18 +943,12 @@ def load_modality(base_path: Union[str, Path],
     
     logger.info(f"Loaded {modality_name} data: shape={df.shape}")
     
-    # Ensure correct orientation (features in rows, samples in columns)
-    sample_pattern = ['TCGA', 'sample', 'SAMPLE_', 'patient', 'PATIENT']
-    
-    # OPTIMIZED: Quick orientation check
-    tcga_in_columns = sum(1 for col in df.columns if isinstance(col, str) 
-                         and any(pattern in col for pattern in sample_pattern))
-    
-    if tcga_in_columns < 5:
-        # Check if samples are in rows (need to transpose)
-        if any(x in str(df.index[0]) for x in sample_pattern):
-            logger.debug(f"Transposing {modality_name}: samples detected in rows")
-            df = df.T
+    # ENHANCED: Use sophisticated orientation validation (moved from preprocessing.py)
+    try:
+        df = DataOrientationValidator.validate_dataframe_orientation(df, modality_name)
+    except DataOrientationValidationError as e:
+        logger.error(f"Critical orientation validation error for {modality_name}: {str(e)}")
+        return None
     
     # Ensure index/column names are strings
     df.index = df.index.astype(str)
@@ -1272,6 +1449,9 @@ def optimize_class_distribution(y_series: pd.Series,
                                min_class_size: int = 5) -> Tuple[pd.Series, List[str]]:
     """
     Optimize class distribution for better CV performance.
+    Generalized: merges rare classes for all datasets, not just those with 'T' in the label.
+    For numeric classes, merges smallest classes with nearest neighbor.
+    For string classes, merges rare classes into the most common class.
     
     Parameters
     ----------
@@ -1289,94 +1469,93 @@ def optimize_class_distribution(y_series: pd.Series,
     Tuple[pd.Series, List[str]]
         (optimized_outcome_series, optimized_sample_ids)
     """
+    import numpy as np
     if task_type != 'classification':
         return y_series, common_ids
     
     # Filter to common samples
     y_filtered = y_series.loc[common_ids]
     class_counts = y_filtered.value_counts()
-    
     logger.info(f"Original class distribution: {class_counts.to_dict()}")
     
     # Identify classes with insufficient samples
     small_classes = class_counts[class_counts < min_class_size].index.tolist()
-    
     if not small_classes:
         logger.info("All classes have sufficient samples for CV")
         return y_filtered, common_ids
-    
     logger.info(f"Classes with <{min_class_size} samples: {small_classes}")
     
-    # Strategy 1: Merge similar classes if possible
-    merged_classes = {}
-    for small_class in small_classes:
-        # For pathologic_T, merge similar stages
-        if isinstance(small_class, str) and 'T' in small_class:
-            # Extract base T stage (T1, T2, T3, T4)
-            base_stage = re.match(r'(T[0-4])', small_class)
-            if base_stage:
-                base = base_stage.group(1)
-                if base not in merged_classes:
-                    merged_classes[base] = []
-                merged_classes[base].append(small_class)
-    
-    # Apply merging
     y_optimized = y_filtered.copy()
     samples_to_keep = set(common_ids)
     
-    for base_class, sub_classes in merged_classes.items():
-        if len(sub_classes) > 1:
-            # Merge sub-classes into base class
-            for sub_class in sub_classes:
-                y_optimized = y_optimized.replace(sub_class, base_class)
-            logger.info(f"Merged {sub_classes} -> {base_class}")
+    # --- Generalized merging logic ---
+    # Numeric classes: merge with nearest neighbor
+    # String classes: merge into most common class
+    try:
+        # Try to treat as numeric
+        y_numeric = pd.to_numeric(y_optimized, errors='coerce')
+        is_numeric = not y_numeric.isna().all()
+    except Exception:
+        is_numeric = False
     
-    # Strategy 2: Remove classes that are still too small after merging
+    if is_numeric:
+        # For each small class, merge with nearest neighbor (by value)
+        unique_classes = sorted(class_counts.index)
+        for small_class in small_classes:
+            # Find nearest neighbor class (by value, not in small_classes)
+            try:
+                small_val = float(small_class)
+                other_classes = [float(c) for c in unique_classes if c not in small_classes]
+                if not other_classes:
+                    continue
+                nearest = min(other_classes, key=lambda x: abs(x - small_val))
+                logger.info(f"Merging rare class {small_class} into nearest neighbor {nearest}")
+                y_optimized = y_optimized.replace(small_class, nearest)
+            except Exception as e:
+                logger.warning(f"Failed to merge numeric class {small_class}: {e}")
+    else:
+        # For string/categorical classes, merge into most common class
+        most_common = class_counts.idxmax()
+        for small_class in small_classes:
+            logger.info(f"Merging rare class {small_class} into most common class {most_common}")
+            y_optimized = y_optimized.replace(small_class, most_common)
+    
+    # Remove classes that are still too small after merging
     updated_counts = y_optimized.value_counts()
     still_small = updated_counts[updated_counts < min_class_size].index.tolist()
-    
     if still_small:
         logger.info(f"Removing classes with <{min_class_size} samples: {still_small}")
         samples_to_remove = y_optimized[y_optimized.isin(still_small)].index
         samples_to_keep = samples_to_keep - set(samples_to_remove)
         y_optimized = y_optimized.drop(samples_to_remove)
-    
     final_counts = y_optimized.value_counts()
     logger.info(f"Optimized class distribution: {final_counts.to_dict()}")
     logger.info(f"Samples retained: {len(y_optimized)}/{len(y_filtered)} ({len(y_optimized)/len(y_filtered)*100:.1f}%)")
-    
     return y_optimized, sorted(list(samples_to_keep))
 
-def load_dataset(ds_name: str, modalities: List[str], outcome_col: str, 
+def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str] = None, 
                  task_type: str = 'classification', 
                  parallel: bool = True, 
-                 use_cache: bool = True) -> Tuple[Dict[str, pd.DataFrame], pd.Series, List[str]]:
+                 use_cache: bool = True, 
+                 min_class_size: int = 5) -> Tuple[Dict[str, pd.DataFrame], pd.Series, List[str]]:
     """
     Load dataset with comprehensive optimizations for all cancer types.
     Enhanced with parallel processing and caching for maximum performance.
-    
-    Parameters
-    ----------
-    ds_name : str
-        Dataset name (e.g., 'colon', 'breast', 'kidney', etc.)
-    modalities : List[str]
-        List of modality names to load
-    outcome_col : str
-        Name of the outcome column
-    task_type : str
-        Type of task ('classification' or 'regression')
-    parallel : bool
-        Whether to use parallel processing for loading modalities
-    use_cache : bool
-        Whether to use caching for faster repeated loads
-        
-    Returns
-    -------
-    Tuple[Dict[str, pd.DataFrame], pd.Series, List[str]]
-        (modality_data, outcome_series, common_sample_ids)
+    Now supports min_class_size as a parameter.
     """
     logger.info(f"=== LOADING DATASET: {ds_name.upper()} ===")
     logger.info(f"Modalities: {modalities}")
+    
+    # If outcome_col is None, get it from configuration
+    if outcome_col is None:
+        from config import DatasetConfig
+        config = DatasetConfig.get_config(ds_name)
+        if config:
+            outcome_col = config['outcome_col']
+            logger.info(f"Using outcome column from config: {outcome_col}")
+        else:
+            raise ValueError(f"No configuration found for dataset {ds_name} and no outcome_col specified")
+    
     logger.info(f"Outcome column: {outcome_col}")
     logger.info(f"Task type: {task_type}")
     
@@ -1507,7 +1686,25 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
     # FIX A: Drop rows with missing targets BEFORE any split
     # This ensures every sample in X has a target, preventing alignment issues
     if outcome_col is not None:
-        mask = ~clinical_df[outcome_col].isna() & np.isfinite(clinical_df[outcome_col].fillna(0))
+        # First check if data is numeric or can be converted to numeric
+        outcome_data = clinical_df[outcome_col].copy()
+        
+        # For classification tasks, the outcome might be strings (classes)
+        if task_type == 'classification':
+            # For classification, just remove NaN/missing values
+            mask = ~outcome_data.isna() & (outcome_data != '') & (outcome_data.notna())
+        else:
+            # For regression, ensure data is numeric
+            try:
+                # Try to convert to numeric, handling errors gracefully
+                numeric_outcome = pd.to_numeric(outcome_data, errors='coerce')
+                # Create mask for valid numeric values (not NaN and finite)
+                mask = ~numeric_outcome.isna() & np.isfinite(numeric_outcome)
+            except Exception as e:
+                logger.warning(f"Could not apply numeric filtering to outcome data: {str(e)}")
+                # Fallback to just removing missing values
+                mask = ~outcome_data.isna() & (outcome_data != '') & (outcome_data.notna())
+        
         # Apply mask to both outcome and clinical data to maintain alignment
         y_series = clinical_df.loc[mask, outcome_col]
         clinical_df = clinical_df.loc[mask]
@@ -1592,14 +1789,11 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
     
     # Optimize class distribution for better CV performance (classification only)
     if task_type == 'classification':
-        logger.info(f"\\n=== CLASS DISTRIBUTION OPTIMIZATION ===")
-        
-        # Apply dynamic label re-mapping before optimization
+        logger.info(f"\n=== CLASS DISTRIBUTION OPTIMIZATION ===")
         from preprocessing import _remap_labels
         y_series = _remap_labels(y_series, ds_name)
-        
         y_optimized, optimized_ids = optimize_class_distribution(
-            y_series, common_ids, task_type, min_class_size=5
+            y_series, common_ids, task_type, min_class_size=min_class_size
         )
     else:
         # For regression, just filter to common_ids
@@ -1874,12 +2068,21 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: str,
                 logger.error("Cannot compute median - all values are NaN!")
                 raise ValueError("All outcome values are NaN - cannot proceed with regression task")
         
-        # Final validation: ensure all values are finite
-        infinite_count = np.isinf(y_filtered).sum()
-        if infinite_count > 0:
-            logger.warning(f"Found {infinite_count} infinite values in outcome data, replacing with median")
-            median_value = y_filtered[np.isfinite(y_filtered)].median()
-            y_filtered = y_filtered.replace([np.inf, -np.inf], median_value)
+        # Final validation: ensure all values are finite (only for numeric data)
+        try:
+            # Only check for infinite values if data is numeric
+            if pd.api.types.is_numeric_dtype(y_filtered):
+                infinite_count = np.isinf(y_filtered).sum()
+                if infinite_count > 0:
+                    logger.warning(f"Found {infinite_count} infinite values in outcome data, replacing with median")
+                    finite_values = y_filtered[np.isfinite(y_filtered)]
+                    if len(finite_values) > 0:
+                        median_value = finite_values.median()
+                        y_filtered = y_filtered.replace([np.inf, -np.inf], median_value)
+                    else:
+                        logger.warning("All values are infinite, cannot replace with median")
+        except Exception as e:
+            logger.debug(f"Could not check for infinite values (data may be non-numeric): {str(e)}")
         
         # Dataset-specific validation for regression targets
         if task_type == 'regression':
@@ -2047,11 +2250,29 @@ def load_and_preprocess_data(dataset_name: str, task_type: str,
             if hasattr(data, 'values'):
                 data = data.values
             
-            # Apply biomedical preprocessing
-            processed_data, transformers = biomedical_preprocessing_pipeline(data)
+            # Apply robust biomedical preprocessing with aggressive dimensionality reduction
+            # Determine modality type for proper configuration
+            modality_type = modality.lower().replace(' ', '_')
+            processed_data, transformers, preprocessing_report = robust_biomedical_preprocessing_pipeline(
+                data, modality_type=modality_type
+            )
             processed_data_dict[modality] = processed_data
             
             logger.info(f"{modality} processed shape: {processed_data.shape}")
+            
+            # Log preprocessing improvements
+            if 'aggressive_dimensionality_reduction' in preprocessing_report:
+                reduction_info = preprocessing_report['aggressive_dimensionality_reduction']
+                logger.info(f"  Dimensionality reduction: {reduction_info['initial_features']} -> {reduction_info['final_features']} features ({reduction_info['reduction_ratio']:.1%} reduction)")
+            
+            if 'sparsity_handling' in preprocessing_report:
+                sparsity_info = preprocessing_report['sparsity_handling']
+                logger.info(f"  Sparsity: {sparsity_info.get('initial_sparsity', 0):.2%} -> {sparsity_info.get('final_sparsity', 0):.2%}")
+            
+            if 'numerical_stability' in preprocessing_report:
+                stability_info = preprocessing_report['numerical_stability']
+                if stability_info.get('problematic_features_removed', 0) > 0:
+                    logger.info(f"  Numerical stability: removed {stability_info['problematic_features_removed']} problematic features")
         
         data_dict = processed_data_dict
     
@@ -2091,3 +2312,203 @@ def load_and_preprocess_data(dataset_name: str, task_type: str,
     
     logger.info(f"Data preprocessing complete for {dataset_name}")
     return data_dict, target
+
+def load_and_preprocess_data_enhanced(
+    dataset_name, 
+    task_type='regression',
+    enable_all_improvements=True,
+    apply_priority_fixes=True,
+    enable_missing_imputation=True,
+    enable_target_analysis=True,
+    enable_mad_recalibration=True,
+    enable_target_aware_selection=True
+):
+    """
+    Enhanced data loading and preprocessing with all improvements enabled.
+    
+    Args:
+        dataset_name: Name of the dataset to load
+        task_type: 'regression' or 'classification'
+        enable_all_improvements: Enable all preprocessing improvements
+        apply_priority_fixes: Apply priority data quality fixes
+        enable_missing_imputation: Enable missing modality imputation
+        enable_target_analysis: Enable target distribution analysis
+        enable_mad_recalibration: Enable MAD threshold recalibration
+        enable_target_aware_selection: Enable target-aware feature selection
+    
+    Returns:
+        tuple: (processed_modalities, y_aligned, sample_ids, report)
+    """
+    logger = logging.getLogger(__name__)
+    logger.info(f"Loading and preprocessing {dataset_name} dataset for {task_type}")
+    
+    # Load the dataset with sample IDs using configuration-based outcome columns
+    modalities, y_series, common_ids = load_dataset(
+        dataset_name.lower(), 
+        modalities=['exp', 'methy', 'mirna'], 
+        outcome_col=None,  # Let load_dataset determine from config
+        task_type=task_type
+    )
+    
+    logger.info(f"Successfully loaded {dataset_name} with {len(common_ids)} samples")
+    
+    # Convert modalities to the expected format for the preprocessing pipeline
+    # The pipeline expects Dict[str, Tuple[np.ndarray, List[str]]]
+    modality_data_dict = {}
+    for modality_name, modality_df in modalities.items():
+        # Convert DataFrame to numpy array (transpose to get samples x features)
+        X = modality_df.T.values  # modality_df is features x samples
+        modality_data_dict[modality_name] = (X, common_ids)
+    
+    # Apply enhanced comprehensive preprocessing
+    if enable_all_improvements:
+        processed_modalities, y_aligned = enhanced_comprehensive_preprocessing_pipeline(
+            modality_data_dict=modality_data_dict,
+            y=y_series.values,
+            fusion_method="fusion_weighted_concat",
+            task_type=task_type,
+            dataset_name=dataset_name,
+            enable_missing_imputation=enable_missing_imputation,
+            enable_target_analysis=enable_target_analysis,
+            enable_mad_recalibration=enable_mad_recalibration,
+            enable_target_aware_selection=enable_target_aware_selection
+        )
+        
+        # Create report
+        report = {
+            'preprocessing_method': 'enhanced_comprehensive',
+            'n_samples': len(y_aligned),
+            'n_modalities': len(processed_modalities),
+            'total_features': sum(X.shape[1] for X in processed_modalities.values())
+        }
+        
+        # Return sample_ids as common_ids
+        sample_ids = common_ids[:len(y_aligned)]
+    else:
+        # Basic preprocessing without improvements
+        processed_modalities, y_aligned, sample_ids, report = basic_preprocessing_pipeline(
+            modalities, y_series, common_ids
+        )
+    
+    logger.info(f"Preprocessing completed successfully for {dataset_name}")
+    return processed_modalities, y_aligned, sample_ids, report
+
+
+
+
+
+
+
+# ============================================================================
+# TUNER_HALVING.PY COMPATIBILITY WRAPPER
+# ============================================================================
+
+def load_dataset_for_tuner(dataset_name, task=None):
+    """
+    Load dataset with FULL preprocessing pipeline for tuner_halving.py compatibility.
+    
+    This ensures hyperparameters are optimized on the same preprocessed data
+    that the main pipeline uses, providing consistent and meaningful optimization.
+    
+    Parameters
+    ----------
+    dataset_name : str
+        Name of the dataset (e.g., 'AML', 'Breast', etc.)
+    task : str
+        Task type ('reg' or 'clf')
+        
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        Fully preprocessed features (X) and targets (y) as numpy arrays
+    """
+    from config import DatasetConfig
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Loading dataset {dataset_name} for tuning with FULL preprocessing pipeline (task: {task})")
+    
+    # Determine task type
+    if task is None:
+        # Get configuration for the dataset
+        config = DatasetConfig.get_config(dataset_name.lower())
+        if not config:
+            raise ValueError(f"No configuration found for dataset: {dataset_name}")
+        
+        # Infer from outcome column name
+        outcome_col = config.get('outcome_col', '')
+        if 'blast' in outcome_col.lower() or 'length' in outcome_col.lower():
+            task_type = 'regression'
+        else:
+            task_type = 'classification'
+    else:
+        task_type = 'regression' if task == 'reg' else 'classification'
+    
+    # Use the SAME data loading as main pipeline, but simplified for single modality concatenation
+    logger.info(f"Loading data using main pipeline approach for {dataset_name}")
+    
+    # Get configuration for the dataset
+    config = DatasetConfig.get_config(dataset_name.lower())
+    if not config:
+        raise ValueError(f"No configuration found for dataset: {dataset_name}")
+    
+    # Map modality names to short names (same as main pipeline)
+    modality_mapping = {
+        "Gene Expression": "exp",
+        "miRNA": "mirna", 
+        "Methylation": "methy"
+    }
+    
+    modality_short_names = []
+    for full_name in config['modalities'].keys():
+        short_name = modality_mapping.get(full_name, full_name.lower())
+        modality_short_names.append(short_name)
+    
+    # Load dataset using the main function (includes preprocessing)
+    modalities_data, y_series, common_ids = load_dataset(
+        ds_name=dataset_name.lower(),
+        modalities=modality_short_names,
+        outcome_col=config['outcome_col'],
+        task_type=task_type,
+        parallel=True,
+        use_cache=True
+    )
+    
+    if not modalities_data or y_series is None:
+        raise ValueError(f"Failed to load data for {dataset_name}")
+    
+    # Ensure all modalities have the same samples (aligned by common_ids)
+    logger.info(f"Loaded {len(modalities_data)} modalities with {len(common_ids)} common samples")
+    
+    # Concatenate all modalities into single feature matrix
+    X_parts = []
+    modality_info = []
+    
+    for modality_name, modality_df in modalities_data.items():
+        # Transpose to get samples x features (modality_df is features x samples)
+        X_modality = modality_df.T.values
+        X_parts.append(X_modality)
+        modality_info.append(f"{modality_name}: {X_modality.shape[1]} features")
+        logger.info(f"  {modality_name} shape: {X_modality.shape}")
+    
+    # Concatenate horizontally (samples x all_features)
+    X = np.concatenate(X_parts, axis=1)
+    y = y_series.values
+    
+    logger.info(f"Dataset {dataset_name} loaded with FULL preprocessing:")
+    logger.info(f"  Final X shape: {X.shape}")
+    logger.info(f"  Final y shape: {y.shape}")
+    logger.info(f"  Modalities: {', '.join(modality_info)}")
+    logger.info(f"  Total features after preprocessing: {X.shape[1]}")
+    
+    # Final validation
+    if np.any(np.isnan(X)) or np.any(np.isinf(X)):
+        logger.warning("Found NaN/Inf values in preprocessed data, cleaning...")
+        X = np.nan_to_num(X, nan=0.0, posinf=1e6, neginf=-1e6)
+    
+    if np.any(np.isnan(y)) or np.any(np.isinf(y)):
+        logger.warning("Found NaN/Inf values in target, cleaning...")
+        y = np.nan_to_num(y, nan=0.0, posinf=1e6, neginf=-1e6)
+    
+    return X, y
+

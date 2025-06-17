@@ -153,11 +153,11 @@ def load_and_preprocess_data(dataset_name, task_type,
 The comprehensive test suite validates all improvements:
 
 ```
-✓ Preprocessing Pipeline PASSED
-✓ Feature Selection PASSED  
-✓ CV Strategy PASSED
-✓ Classification Performance PASSED
-✓ Regression Performance PASSED
+ Preprocessing Pipeline PASSED
+ Feature Selection PASSED  
+ CV Strategy PASSED
+ Classification Performance PASSED
+ Regression Performance PASSED
 ```
 
 ### Expected Performance Gains

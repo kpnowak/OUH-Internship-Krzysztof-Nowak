@@ -38,7 +38,7 @@ def create_balanced_pipeline(base_model, use_smote_undersampling=True, smote_k_n
 3. **Pipeline Serialization**: When the balanced pipeline was saved during cross-validation, pickle couldn't find the class definition
 4. **Error Propagation**: This caused all classification models using SMOTE to fail during the "best fold" processing
 
-## 🔧 Solution Implemented
+##  Solution Implemented
 
 ### **Moved SafeSMOTE to Module Level**
 - **Relocated class definition** from inside function to module level (top of cv.py)

@@ -14,7 +14,7 @@ A systematic component-by-component testing approach was used to identify and is
 
 ## Issues Identified and Fixed
 
-### 1. ❌ → ✅ RandomForestRegressor Pickle Recursion Error
+### 1. ❌ -> ✅ RandomForestRegressor Pickle Recursion Error
 
 **Problem**: 
 - Error: `maximum recursion depth exceeded` when trying to pickle RandomForestRegressor models
@@ -56,7 +56,7 @@ def __setstate__(self, state):
 
 **Result**: ✅ RandomForestRegressor models can now be pickled and unpickled successfully
 
-### 2. ❌ → ✅ LateFusionStacking "Model not fitted" Error
+### 2. ❌ -> ✅ LateFusionStacking "Model not fitted" Error
 
 **Problem**:
 - Error: `ValueError: Model not fitted` when calling `predict()` on LateFusionStacking
@@ -98,7 +98,7 @@ if not self.fitted_ or self.modality_models_ is None or self.meta_learner_ is No
 
 **Result**: ✅ LateFusionStacking now properly stores trained models and can make predictions
 
-### 3. ❌ → ✅ Target Transformation NaN Generation
+### 3. ❌ -> ✅ Target Transformation NaN Generation
 
 **Problem**:
 - `log1p` transformation was creating NaN values for negative targets < -1
@@ -131,7 +131,7 @@ def __call__(self, y):
 
 **Result**: ✅ Target transformation now safely handles negative values without creating NaN
 
-### 4. ❌ → ✅ Fusion Performance Warning Spam
+### 4. ❌ -> ✅ Fusion Performance Warning Spam
 
 **Problem**:
 - Excessive WARNING messages: "All modalities have zero or very low performance"
@@ -158,7 +158,7 @@ logger.debug("This is normal for challenging datasets or when using simple evalu
 
 **Result**: ✅ Fusion performance messages now logged at appropriate INFO level
 
-### 5. ❌ → ✅ Cross-Validation Pipeline Parameter Error
+### 5. ❌ -> ✅ Cross-Validation Pipeline Parameter Error
 
 **Problem**:
 - Error: `get_selector_object() missing 1 required positional argument: 'n_feats'`

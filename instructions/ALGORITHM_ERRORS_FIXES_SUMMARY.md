@@ -96,25 +96,25 @@ logger.debug("This is normal for challenging datasets or when using simple evalu
 ### Test Results
 All fixes were verified with comprehensive tests:
 
-1. **Pickle Fix Test**: ✓ PASSED
+1. **Pickle Fix Test**:  PASSED
    - Models can be successfully pickled and unpickled
    - Loaded models produce identical predictions
    - No pickle-related errors
 
-2. **Safe Transformation Functions Test**: ✓ PASSED
+2. **Safe Transformation Functions Test**:  PASSED
    - Positive values transform correctly and are invertible
    - Negative values (< -1) are handled safely without creating NaN
    - No NaN values are generated
 
-3. **Sklearn Warnings Suppression Test**: ✓ PASSED
+3. **Sklearn Warnings Suppression Test**:  PASSED
    - No sklearn inverse function warnings are generated
    - `check_inverse=False` successfully suppresses warnings
 
-4. **Fusion Performance Warnings Test**: ✓ PASSED
+4. **Fusion Performance Warnings Test**:  PASSED
    - Low performance messages are logged at INFO level
    - No misleading WARNING level messages
 
-5. **End-to-End Pipeline Test**: ✓ PASSED
+5. **End-to-End Pipeline Test**:  PASSED
    - Complete pipeline works with all fixes
    - Models train successfully with negative target values
    - Pickled models work correctly

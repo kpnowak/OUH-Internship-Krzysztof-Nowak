@@ -159,7 +159,7 @@ for train_outer, test_outer in outer_cv.split(X, y):
 - **Std Residual**: Additional diagnostic metric
 - **Target Scaling Flag**: Indicates when scaling was applied
 
-## 🔧 Technical Implementation Details
+##  Technical Implementation Details
 
 ### Code Integration
 All fixes have been integrated into the existing pipeline without breaking changes:

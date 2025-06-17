@@ -11,7 +11,7 @@ This document summarizes the comprehensive class imbalance fixes implemented to 
 ## Problem Statement
 
 The original issue was identified in the Colon dataset example:
-- **Accuracy ≈ 0.72, MCC ≈ 0.02** → Model predicting majority stage almost every time
+- **Accuracy ≈ 0.72, MCC ≈ 0.02** -> Model predicting majority stage almost every time
 - **Extreme class skew** ≈ 70% of samples in one stage (0.70 : 0.20 : 0.10 distribution)
 - **Macro-F1 ≈ 0.25** indicating poor performance on minority classes
 
@@ -201,7 +201,7 @@ Test results show significant MCC improvement:
 
 Based on the requirements, the implementation should address:
 
-1. **MCC improvement:** From ≈ 0.02 → 0.23+ (spot-check result mentioned)
+1. **MCC improvement:** From ≈ 0.02 -> 0.23+ (spot-check result mentioned)
 2. **Better minority class performance:** Improved macro-F1 scores
 3. **Maintained accuracy:** Threshold optimization can improve accuracy while boosting MCC
 

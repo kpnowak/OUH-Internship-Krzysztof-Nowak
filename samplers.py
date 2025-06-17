@@ -6,6 +6,7 @@ Safe samplers module for handling class imbalance with robust edge case handling
 import numpy as np
 import logging
 from typing import Union, Optional
+from imblearn.over_sampling import SMOTE, RandomOverSampler
 
 logger = logging.getLogger(__name__)
 
@@ -381,3 +382,12 @@ def recommend_sampling_strategy(y, verbose=True):
             print(f"  Use undersampling: Yes")
     
     return recommendations 
+
+def safe_sampler(y):
+    _, counts = np.unique(y, return_counts=True)
+    m = counts.min()
+    if m >= 6:
+        return SMOTE(k_neighbors=min(5, m-1))
+    if m >= 3:
+        return RandomOverSampler()
+    return None

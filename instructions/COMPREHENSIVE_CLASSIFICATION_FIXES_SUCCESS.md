@@ -14,7 +14,7 @@ Based on your excellent analysis, we have successfully implemented comprehensive
 
 **Root Cause**: Local class/closure (`SafeSMOTE`) inside helper function, passed to joblib-parallel CV loop. Joblib can only serialize **top-level** classes/functions, not closures.
 
-## 🔧 Solutions Implemented
+##  Solutions Implemented
 
 ### **1. Safe Sampler That Never Crashes** ✅
 

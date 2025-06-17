@@ -148,8 +148,8 @@ RandomForest(n_estimators=1000, max_depth=None)  # 5x more trees, unlimited dept
    ```
 
 3. **Consider even more permissive settings**:
-   - Reduce regularization further (alpha=0.0001 → 0.00001)
-   - Increase model capacity (n_estimators=1000 → 2000)
+   - Reduce regularization further (alpha=0.0001 -> 0.00001)
+   - Increase model capacity (n_estimators=1000 -> 2000)
    - Use ensemble methods (combine multiple models)
 
 ### **For Classification (already excellent)**

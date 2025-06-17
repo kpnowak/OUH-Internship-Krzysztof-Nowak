@@ -1,0 +1,8 @@
+{
+  "best_params": {
+    "model__l1_ratio": 0.7000000000000001,
+    "model__alpha": 0.013894954943731374,
+    "extractor__n_components": 2
+  },
+  "best_score": -0.01642527182896932
+}
