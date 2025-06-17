@@ -1,9 +1,0 @@
-{
-  "best_params": {
-    "model__l1_ratio": 0.7000000000000001,
-    "model__alpha": 0.3727593720314942,
-    "extractor__n_components": 2,
-    "extractor__gamma": 0.00630957344480193
-  },
-  "best_score": -0.015618522961934408
-}

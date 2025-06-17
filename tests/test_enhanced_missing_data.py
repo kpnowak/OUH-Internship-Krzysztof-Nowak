@@ -291,7 +291,7 @@ def test_weighted_concat_restriction():
             is_train=True
         )
         print(f"  Result shape: {result.shape}")
-        print("  ⚠️  weighted_concat was allowed despite missing data (fallback applied)")
+        print("    weighted_concat was allowed despite missing data (fallback applied)")
         
     except Exception as e:
         print(f"  ✗ weighted_concat correctly restricted: {str(e)}")

@@ -49,7 +49,7 @@ def test_sarcoma_max_extraction():
             logger.error("Failed to load Sarcoma dataset")
             return False
         
-        logger.info(f"✅ Sarcoma dataset loaded successfully:")
+        logger.info(f" Sarcoma dataset loaded successfully:")
         logger.info(f"   - Samples: {len(common_ids)}")
         logger.info(f"   - Modalities: {list(modalities.keys())}")
         logger.info(f"   - Target dtype: {y.dtype}")
@@ -84,10 +84,10 @@ def test_sarcoma_max_extraction():
         logger.info(f"Found {found_expected}/{len(expected_max_values)} expected maximum values")
         
         if found_expected >= 3:  # At least half should be found
-            logger.info("✅ Maximum value extraction appears to be working correctly")
+            logger.info(" Maximum value extraction appears to be working correctly")
             return True
         else:
-            logger.warning("⚠️  Few expected maximum values found - extraction may not be working optimally")
+            logger.warning("  Few expected maximum values found - extraction may not be working optimally")
             return True  # Still pass, but with warning
         
     except Exception as e:
@@ -107,11 +107,11 @@ def main():
     logger.info("\n" + "="*60)
     if success:
         logger.info("🎉 SARCOMA DATASET TEST PASSED!")
-        logger.info("✅ Maximum value extraction is working correctly")
-        logger.info("✅ No more warnings about pipe-separated values")
-        logger.info("✅ Algorithm ready for production use")
+        logger.info(" Maximum value extraction is working correctly")
+        logger.info(" No more warnings about pipe-separated values")
+        logger.info(" Algorithm ready for production use")
     else:
-        logger.error("❌ SARCOMA DATASET TEST FAILED")
+        logger.error(" SARCOMA DATASET TEST FAILED")
     
     return success
 

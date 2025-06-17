@@ -249,23 +249,23 @@ def test_configuration_values():
     logger.info(f"N_VALUES_LIST: {N_VALUES_LIST}")
     expected_min = 128
     if min(N_VALUES_LIST) >= expected_min:
-        logger.info("✅ N_VALUES_LIST uses genomic-appropriate ranges")
+        logger.info(" N_VALUES_LIST uses genomic-appropriate ranges")
     else:
-        logger.error(f"❌ N_VALUES_LIST still too small, minimum should be >= {expected_min}")
+        logger.error(f" N_VALUES_LIST still too small, minimum should be >= {expected_min}")
     
     # Test performance targets
     logger.info(f"Regression R² target: {PERFORMANCE_TARGETS['regression']['r2_min']}")
     logger.info(f"Classification MCC target: {PERFORMANCE_TARGETS['classification']['mcc_min']}")
     
     if PERFORMANCE_TARGETS['regression']['r2_min'] >= 0.5:
-        logger.info("✅ Regression targets are appropriately ambitious")
+        logger.info(" Regression targets are appropriately ambitious")
     else:
-        logger.warning("⚠️ Regression targets might be too low")
+        logger.warning(" Regression targets might be too low")
     
     if PERFORMANCE_TARGETS['classification']['mcc_min'] >= 0.5:
-        logger.info("✅ Classification targets are appropriately ambitious")
+        logger.info(" Classification targets are appropriately ambitious")
     else:
-        logger.warning("⚠️ Classification targets might be too low")
+        logger.warning(" Classification targets might be too low")
 
 def compare_old_vs_new_approach():
     """Compare old vs new approach on the same data."""
@@ -309,9 +309,9 @@ def compare_old_vs_new_approach():
     logger.info(f"\nImprovement: {improvement:.4f} ({improvement/abs(r2_old)*100:.1f}% relative)")
     
     if r2_new > r2_old:
-        logger.info("✅ New approach shows improvement!")
+        logger.info(" New approach shows improvement!")
     else:
-        logger.warning("⚠️ New approach needs further tuning")
+        logger.warning(" New approach needs further tuning")
     
     return r2_old, r2_new
 
@@ -338,31 +338,31 @@ def main():
         logger.info("SUMMARY OF RESULTS")
         logger.info("=" * 50)
         
-        logger.info("\n📊 Feature Selection Results:")
+        logger.info("\n Feature Selection Results:")
         for method, result in fs_results.items():
             if isinstance(result, dict):
-                logger.info(f"  {method}: ✅ Working")
+                logger.info(f"  {method}:  Working")
             else:
-                logger.info(f"  {method}: ❌ {result}")
+                logger.info(f"  {method}:  {result}")
         
         logger.info("\n📈 Regression Performance:")
         for model, result in reg_results.items():
             if isinstance(result, dict):
                 r2 = result['r2']
-                status = "✅ Target met" if result['target_met'] else ("🟡 Adequate" if result['adequate'] else "❌ Poor")
+                status = " Target met" if result['target_met'] else ("🟡 Adequate" if result['adequate'] else " Poor")
                 logger.info(f"  {model}: R² = {r2:.4f} {status}")
             else:
-                logger.info(f"  {model}: ❌ {result}")
+                logger.info(f"  {model}:  {result}")
         
-        logger.info("\n🎯 Classification Performance:")
+        logger.info("\n Classification Performance:")
         for model, result in clf_results.items():
             if isinstance(result, dict):
                 mcc = result['mcc']
                 acc = result['accuracy']
-                status = "✅ Target met" if result['target_met'] else ("🟡 Adequate" if result['adequate'] else "❌ Poor")
+                status = " Target met" if result['target_met'] else ("🟡 Adequate" if result['adequate'] else " Poor")
                 logger.info(f"  {model}: MCC = {mcc:.4f}, Acc = {acc:.4f} {status}")
             else:
-                logger.info(f"  {model}: ❌ {result}")
+                logger.info(f"  {model}:  {result}")
         
         logger.info(f"\n🔄 Approach Comparison:")
         logger.info(f"  Old approach R²: {r2_old:.4f}")
@@ -387,11 +387,11 @@ def main():
         if reg_success and clf_success:
             logger.info("🎉 EXCELLENT: Both regression and classification targets achieved!")
         elif reg_success or clf_success:
-            logger.info("🎯 GOOD: At least one task meets performance targets")
+            logger.info(" GOOD: At least one task meets performance targets")
         elif r2_new > 0.1:  # Some meaningful signal
             logger.info("📈 PROMISING: Showing meaningful improvement, needs fine-tuning")
         else:
-            logger.info("⚠️ NEEDS WORK: Further optimization required")
+            logger.info(" NEEDS WORK: Further optimization required")
         
         logger.info("\n✨ Genomic optimization testing complete!")
         

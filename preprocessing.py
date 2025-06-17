@@ -123,6 +123,95 @@ class ModalityAwareScaler:
         return np.clip(X, clip_range[0], clip_range[1])
     
     @staticmethod
+    def apply_expression_outlier_clipping(X_scaled: np.ndarray, modality_type: str, 
+                                        use_adaptive_clipping: bool = True) -> np.ndarray:
+        """
+        Apply modality-specific outlier clipping with enhanced handling for expression data.
+        
+        For expression data, uses ±5 SD clipping after robust scaling to handle extreme values
+        that remain after scaling, as recommended for biomedical data processing.
+        
+        Parameters
+        ----------
+        X_scaled : np.ndarray
+            Already scaled data
+        modality_type : str
+            Type of modality (gene_expression, mirna, etc.)
+        use_adaptive_clipping : bool
+            Whether to use adaptive clipping ranges based on modality type
+            
+        Returns
+        -------
+        np.ndarray
+            Clipped data
+        """
+        modality_lower = modality_type.lower()
+        
+        if use_adaptive_clipping and modality_lower in ["gene_expression", "gene", "expression", "exp"]:
+            # For expression data: use ±5 SD clipping as recommended
+            clip_range = (-5.0, 5.0)
+            logger.info(f"Applying ±5 SD outlier clipping for {modality_type}")
+        elif use_adaptive_clipping and modality_lower in ["mirna", "miRNA"]:
+            # For miRNA: slightly more conservative clipping
+            clip_range = (-4.0, 4.0)
+            logger.info(f"Applying ±4 SD outlier clipping for {modality_type}")
+        else:
+            # Default clipping for other modalities
+            clip_range = (-6.0, 6.0)
+            logger.info(f"Applying default ±6 SD outlier clipping for {modality_type}")
+        
+        # Apply clipping
+        X_clipped = np.clip(X_scaled, clip_range[0], clip_range[1])
+        
+        # Log clipping statistics
+        n_clipped = np.sum((X_scaled < clip_range[0]) | (X_scaled > clip_range[1]))
+        total_values = X_scaled.size
+        clipping_rate = (n_clipped / total_values) * 100 if total_values > 0 else 0
+        
+        logger.info(f"Outlier clipping for {modality_type}: {n_clipped}/{total_values} values clipped ({clipping_rate:.2f}%)")
+        
+        return X_clipped
+    
+    @staticmethod
+    def apply_log1p_transformation(X_raw: np.ndarray, modality_type: str) -> np.ndarray:
+        """
+        Apply log1p transformation to raw expression data before scaling.
+        
+        This is an alternative to post-scaling clipping that can help with extreme
+        expression values by transforming them before scaling occurs.
+        
+        Parameters
+        ----------
+        X_raw : np.ndarray
+            Raw expression data (before any scaling)
+        modality_type : str
+            Type of modality
+            
+        Returns
+        -------
+        np.ndarray
+            Log1p transformed data
+        """
+        modality_lower = modality_type.lower()
+        
+        if modality_lower in ["gene_expression", "gene", "expression", "exp", "mirna", "miRNA"]:
+            # Ensure all values are non-negative for log1p
+            X_positive = np.maximum(X_raw, 0)
+            
+            # Apply log1p transformation
+            X_log1p = np.log1p(X_positive)
+            
+            # Log transformation statistics
+            original_max = np.max(X_raw)
+            transformed_max = np.max(X_log1p)
+            logger.info(f"Log1p transformation for {modality_type}: max value {original_max:.3f} -> {transformed_max:.3f}")
+            
+            return X_log1p
+        else:
+            logger.info(f"Log1p transformation not applied to {modality_type} (not expression data)")
+            return X_raw
+    
+    @staticmethod
     def scale_modality_data(X: np.ndarray, modality_type: str, fit_scaler: bool = True, 
                            fitted_scaler: Optional[object] = None) -> Tuple[np.ndarray, Optional[object]]:
         """
@@ -163,8 +252,8 @@ class ModalityAwareScaler:
         else:
             X_scaled = scaler.transform(X)
         
-        # Apply outlier clipping
-        X_scaled = ModalityAwareScaler.apply_outlier_clipping(X_scaled)
+        # Apply enhanced modality-specific outlier clipping
+        X_scaled = ModalityAwareScaler.apply_expression_outlier_clipping(X_scaled, modality_type)
         
         # Log scaling effectiveness
         original_var = np.mean(np.var(X, axis=0))
@@ -602,7 +691,11 @@ def enhanced_comprehensive_preprocessing_pipeline(
     enable_target_aware_selection: bool = True
 ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
     """
-    Comprehensive preprocessing pipeline implementing all 6 priority fixes + 5 AML improvements.
+    DEPRECATED: Use run_enhanced_preprocessing_pipeline from enhanced_pipeline_integration instead.
+    
+    This function is kept for backward compatibility only.
+    For new code, use the 4-phase enhanced preprocessing pipeline which provides
+    better architecture, error handling, and more advanced features.
     
     Parameters
     ----------
@@ -630,144 +723,48 @@ def enhanced_comprehensive_preprocessing_pipeline(
     Tuple[Dict[str, np.ndarray], np.ndarray]
         Preprocessed modality data and aligned targets
     """
-    logger.info(f"Starting enhanced comprehensive preprocessing pipeline for {dataset_name}")
-    
-    # ==================================================================================
-    # IMPROVEMENT 1: Regression Target Analysis & Transformation
-    # ==================================================================================
-    if enable_target_analysis and task_type == "regression":
-        logger.info("Improvement 1: Analyzing target distribution")
-        target_analysis = RegressionTargetAnalyzer.analyze_target_distribution(y, dataset_name)
-        
-        # Apply transformation if recommended
-        if target_analysis['transformation_recommendations']:
-            recommended_transform = target_analysis['transformation_recommendations'][0]['transform']
-            logger.info(f"Applying recommended target transformation: {recommended_transform}")
-            y_transformed, target_transformer = RegressionTargetAnalyzer.apply_target_transformation(
-                y, recommended_transform
-            )
-            if target_transformer is not None:
-                y = y_transformed
-                logger.info("Target transformation applied successfully")
-    
-    # ==================================================================================
-    # IMPROVEMENT 2: Missing Modality Imputation vs. Patient Dropping
-    # ==================================================================================
-    if enable_missing_imputation:
-        logger.info("Improvement 2: Analyzing missing data patterns")
-        missing_pattern_analysis = MissingModalityImputer.detect_missing_patterns(modality_data_dict)
-        
-        if missing_pattern_analysis['imputation_potential']:
-            logger.info("Applying missing modality imputation")
-            modality_data_dict = MissingModalityImputer.impute_missing_modalities(
-                modality_data_dict, method='knn', k=5
-            )
-        else:
-            logger.info("High missing rate detected, proceeding with complete case analysis")
-    
-    # ==================================================================================
-    # PRIORITY 1: Data Orientation Validation (MOVED TO DATA_IO.PY)
-    # ==================================================================================
-    logger.info("Priority 1: Data orientation validation now handled at data loading stage")
-    # Data orientation is now validated in data_io.py during load_modality()
-    # This ensures orientation is fixed as early as possible in the pipeline
-    validated_dict = modality_data_dict  # Data comes pre-validated from load_modality
-    
-    # ==================================================================================
-    # IMPROVEMENT 3: MAD Threshold Recalibration for Transposed Data
-    # ==================================================================================
-    if enable_mad_recalibration:
-        logger.info("Improvement 3: Recalibrating MAD thresholds for correct orientation")
-        recalibrated_dict = {}
-        for modality, (X, sample_ids) in validated_dict.items():
-            X_filtered, mad_selector = MADThresholdRecalibrator.apply_recalibrated_mad_filtering(X, modality)
-            recalibrated_dict[modality] = (X_filtered, sample_ids)
-        validated_dict = recalibrated_dict
-    
-    # ==================================================================================
-    # PRIORITY 4: Sample Intersection Management
-    # ==================================================================================
-    logger.info("Priority 4: Managing sample intersection")
-    master_samples = SampleIntersectionManager.create_master_patient_list(validated_dict)
-    aligned_dict = SampleIntersectionManager.align_modalities_to_master_list(validated_dict, master_samples)
-    
-    # Align targets to master samples
-    first_modality_samples = list(modality_data_dict.values())[0][1]
-    y_aligned_indices = [first_modality_samples.index(sample) for sample in master_samples if sample in first_modality_samples]
-    y_aligned = y[y_aligned_indices] if len(y_aligned_indices) == len(master_samples) else y[:len(master_samples)]
-    
-    # ==================================================================================
-    # PRIORITY 5: Enhanced Validation - Raw Data
-    # ==================================================================================
-    logger.info("Priority 5: Validating raw data stage")
-    PreprocessingValidator.validate_preprocessing_stage(aligned_dict, "raw", task_type)
-    
-    # ==================================================================================
-    # PRIORITY 2: Modality-Specific Scaling
-    # ==================================================================================
-    logger.info("Priority 2: Applying modality-specific scaling")
-    scaled_dict = {}
-    for modality, X in aligned_dict.items():
-        X_scaled, scaler = ModalityAwareScaler.scale_modality_data(X, modality)
-        scaled_dict[modality] = X_scaled
-    
-    # ==================================================================================
-    # IMPROVEMENT 4: Enhanced Target-Feature Relationship Analysis & Selection
-    # ==================================================================================
-    if enable_target_aware_selection:
-        logger.info("Improvement 4: Applying target-aware feature selection")
-        target_selected_dict = {}
-        
-        for modality, X in scaled_dict.items():
-            # Calculate appropriate number of features
-            n_samples = X.shape[0]
-            target_features = AdaptiveFeatureSelector.calculate_adaptive_feature_count(n_samples)
-            
-            # Apply target-aware selection
-            X_selected, selector = TargetFeatureRelationshipAnalyzer.target_aware_feature_selection(
-                X, y_aligned, modality, target_features, task_type
-            )
-            target_selected_dict[modality] = X_selected
-        
-        scaled_dict = target_selected_dict
-    else:
-        # ==================================================================================
-        # PRIORITY 3: Adaptive Feature Selection (Fallback)
-        # ==================================================================================
-        logger.info("Priority 3: Applying adaptive feature selection")
-        selected_dict = {}
-        for modality, X in scaled_dict.items():
-            X_selected, selector = AdaptiveFeatureSelector.select_features_adaptive(
-                X, y_aligned, modality, task_type
-            )
-            selected_dict[modality] = X_selected
-        scaled_dict = selected_dict
-    
-    # ==================================================================================
-    # PRIORITY 6: Fusion Method Standardization
-    # ==================================================================================
-    logger.info("Priority 6: Applying fusion method standardization")
-    final_dict = FusionMethodStandardizer.standardize_fusion_preprocessing(
-        fusion_method, scaled_dict, y_aligned, task_type
+    import warnings
+    warnings.warn(
+        "enhanced_comprehensive_preprocessing_pipeline is deprecated. Use run_enhanced_preprocessing_pipeline from enhanced_pipeline_integration instead.",
+        DeprecationWarning,
+        stacklevel=2
     )
     
-    # ==================================================================================
-    # Final Validation
-    # ==================================================================================
-    logger.info("Final validation")
-    is_valid, issues = PreprocessingValidator.validate_preprocessing_stage(final_dict, "final", task_type)
-    
-    if not is_valid:
-        logger.error(f"Final validation failed: {issues}")
-    
-    logger.info(f"Enhanced comprehensive preprocessing pipeline completed successfully for {dataset_name}")
-    
-    # Log final statistics
-    total_samples = len(y_aligned)
-    total_features = sum(X.shape[1] for X in final_dict.values())
-    logger.info(f"Final preprocessed data: {total_samples} samples, {total_features} total features across {len(final_dict)} modalities")
-    
-    return final_dict, y_aligned
+    # Redirect to 4-phase pipeline
+    try:
+        from enhanced_pipeline_integration import run_enhanced_preprocessing_pipeline
+        processed_data, y_aligned, metadata = run_enhanced_preprocessing_pipeline(
+            modality_data_dict, y, fusion_method, task_type, dataset_name
+        )
+        return processed_data, y_aligned
+    except Exception as e:
+        logger.warning(f"4-phase pipeline failed: {e}, using robust fallback")
+        # Fallback to robust preprocessing for each modality
+        from preprocessing import robust_biomedical_preprocessing_pipeline
+        
+        processed_dict = {}
+        for modality_name, (X, sample_ids) in modality_data_dict.items():
+            # Determine modality type
+            if 'exp' in modality_name.lower():
+                modality_type = 'gene_expression'
+            elif 'mirna' in modality_name.lower():
+                modality_type = 'mirna'
+            elif 'methy' in modality_name.lower():
+                modality_type = 'methylation'
+            else:
+                modality_type = 'unknown'
+            
+            # Apply robust preprocessing
+            X_processed, transformers, report = robust_biomedical_preprocessing_pipeline(
+                X, modality_type=modality_type
+            )
+            processed_dict[modality_name] = X_processed
+        
+        # Align targets
+        n_samples = list(processed_dict.values())[0].shape[0]
+        y_aligned = y[:n_samples] if len(y) >= n_samples else y
+        
+        return processed_dict, y_aligned
 
 def calculate_mad_per_feature(X: np.ndarray) -> np.ndarray:
     """
@@ -2414,12 +2411,11 @@ def knn_imputation_with_biological_similarity(X: np.ndarray,
 
 def biomedical_preprocessing_pipeline(X, y=None, config=None):
     """
-    Comprehensive preprocessing pipeline for biomedical data with enhanced sparsity and skewness handling.
+    DEPRECATED: Use robust_biomedical_preprocessing_pipeline instead.
     
-    NEW FEATURES:
-    - Enhanced sparsity handling for high-zero genomic data (e.g., 43.92% zeros in miRNA)
-    - Smart skewness correction that avoids over-correction issues
-    - Configurable transformation strategies
+    This function is kept for backward compatibility only.
+    For new code, use robust_biomedical_preprocessing_pipeline which provides
+    better error handling and consistent train/test processing.
     
     Args:
         X: Feature matrix (samples × features for sklearn compatibility)
@@ -2429,94 +2425,24 @@ def biomedical_preprocessing_pipeline(X, y=None, config=None):
     Returns:
         Tuple of (preprocessed_data, transformers, preprocessing_report)
     """
-    if config is None:
-        config = PREPROCESSING_CONFIG
+    import warnings
+    warnings.warn(
+        "biomedical_preprocessing_pipeline is deprecated. Use robust_biomedical_preprocessing_pipeline instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     
-    transformers = {}
-    preprocessing_report = {}
-    
-    logging.info("Starting enhanced biomedical preprocessing pipeline")
-    logging.info(f"Initial data shape: {X.shape}")
-    
-    # Step 1: Handle missing values
-    if config.get('impute_missing', True):
-        X, imputer = impute_missing_values(X)
-        transformers['imputer'] = imputer
-    
-    # Step 2: Enhanced sparsity handling (NEW)
-    if config.get('enhanced_sparsity_handling', True):
-        sparsity_config = {
-            'sparsity_threshold': config.get('sparsity_threshold', 0.9),
-            'mad_threshold': config.get('mad_threshold', 1e-6),
-            'min_expression_threshold': config.get('min_expression_threshold', 0.1)
-        }
-        X, sparsity_info, sparsity_selector = enhanced_sparsity_handling(X, sparsity_config)
-        transformers['sparsity_selector'] = sparsity_selector
-        preprocessing_report['sparsity_handling'] = sparsity_info
-    elif config.get('remove_low_mad', True):
-        # Fallback to old method if enhanced sparsity handling is disabled
-        X, mad_selector = handle_sparse_features(
-            X, config.get('mad_threshold', 0.001)
-        )
-        transformers['mad_selector'] = mad_selector
-    
-    # Step 3: Smart skewness correction (NEW)
-    if config.get('smart_skewness_correction', True):
-        skewness_config = {
-            'target_skewness_threshold': config.get('target_skewness_threshold', 0.5),
-            'enable_log_transform': config.get('enable_log_transform', True),
-            'enable_power_transform': config.get('enable_power_transform', True),
-            'enable_quantile_transform': config.get('enable_quantile_transform', True)
-        }
-        X, skewness_info, skewness_transformer = smart_skewness_correction(X, skewness_config)
-        transformers['skewness_transformer'] = skewness_transformer
-        preprocessing_report['skewness_correction'] = skewness_info
-    elif config.get('log_transform', True):
-        # Fallback to old log transformation if smart skewness correction is disabled
-        X = log_transform_data(X)
-    
-    # Step 4: Outlier handling
-    if config.get('handle_outliers', True):
-        X = robust_outlier_detection_safe(X, config.get('outlier_threshold', 4.0))
-    
-    # Step 5: Final normalization (only if skewness correction didn't apply quantile transform)
-    if (config.get('quantile_transform', True) and 
-        preprocessing_report.get('skewness_correction', {}).get('transformation_applied') not in ['quantile-uniform', 'quantile-normal']):
-        X, quantile_transformer = quantile_normalize_data(X)
-        transformers['quantile_transformer'] = quantile_transformer
-    
-    # Step 6: Remove highly correlated features
-    if config.get('remove_highly_correlated', True):
-        X, correlation_selector = remove_highly_correlated_features(
-            X, config.get('correlation_threshold', 0.98)
-        )
-        transformers['correlation_selector'] = correlation_selector
-    
-    # Generate final report
-    preprocessing_report['final_shape'] = X.shape
-    preprocessing_report['transformers_applied'] = list(transformers.keys())
-    
-    logging.info(f"Enhanced preprocessing pipeline complete:")
-    logging.info(f"  Final data shape: {X.shape}")
-    if 'sparsity_handling' in preprocessing_report:
-        sparsity_info = preprocessing_report['sparsity_handling']
-        logging.info(f"  Sparsity: {sparsity_info.get('initial_sparsity', 0):.2%} -> {sparsity_info.get('final_sparsity', 0):.2%}")
-    if 'skewness_correction' in preprocessing_report:
-        skewness_info = preprocessing_report['skewness_correction']
-        logging.info(f"  Skewness: {skewness_info.get('initial_skewness', 0):.3f} -> {skewness_info.get('final_skewness', 0):.3f}")
-        logging.info(f"  Transformation: {skewness_info.get('transformation_applied', 'none')}")
-    
-    return X, transformers, preprocessing_report
+    # Redirect to robust version
+    return robust_biomedical_preprocessing_pipeline(X, y_train=y, config=config)
 
 
 def enhanced_biomedical_preprocessing_pipeline(X, y=None, modality_type='unknown', config=None):
     """
-    Enhanced preprocessing pipeline with modality-specific optimizations.
+    DEPRECATED: Use robust_biomedical_preprocessing_pipeline instead.
     
-    This function provides modality-specific preprocessing for different genomic data types:
-    - miRNA: Aggressive sparsity handling, smart skewness correction
-    - Gene Expression: Moderate sparsity handling, log transformation focus
-    - Methylation: Conservative sparsity handling, distribution preservation
+    This function is kept for backward compatibility only.
+    For new code, use robust_biomedical_preprocessing_pipeline which provides
+    better error handling, consistent train/test processing, and more advanced features.
     
     Args:
         X: Feature matrix (samples × features for sklearn compatibility)
@@ -2527,72 +2453,15 @@ def enhanced_biomedical_preprocessing_pipeline(X, y=None, modality_type='unknown
     Returns:
         Tuple of (preprocessed_data, transformers, preprocessing_report)
     """
+    import warnings
+    warnings.warn(
+        "enhanced_biomedical_preprocessing_pipeline is deprecated. Use robust_biomedical_preprocessing_pipeline instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     
-    # Modality-specific default configurations
-    modality_configs = {
-        'mirna': {
-            'enhanced_sparsity_handling': True,
-            'sparsity_threshold': 0.9,          # Aggressive: remove features with >90% zeros
-            'smart_skewness_correction': True,
-            'target_skewness_threshold': 0.5,   # Target excellent skewness
-            'enable_log_transform': True,
-            'enable_power_transform': True,
-            'enable_quantile_transform': True,
-            'min_expression_threshold': 0.1,
-            'handle_outliers': True,
-            'outlier_threshold': 4.0
-        },
-        'gene_expression': {
-            'enhanced_sparsity_handling': True,
-            'sparsity_threshold': 0.85,         # Moderate: remove features with >85% zeros
-            'smart_skewness_correction': True,
-            'target_skewness_threshold': 0.7,   # Slightly more lenient
-            'enable_log_transform': True,
-            'enable_power_transform': False,    # Log transform usually sufficient
-            'enable_quantile_transform': False,
-            'min_expression_threshold': 0.05,
-            'handle_outliers': True,
-            'outlier_threshold': 5.0
-        },
-        'methylation': {
-            'enhanced_sparsity_handling': True,
-            'sparsity_threshold': 0.95,         # Conservative: methylation can have legitimate zeros
-            'smart_skewness_correction': False, # Methylation is typically 0-1 range, preserve distribution
-            'log_transform': False,             # Don't log-transform methylation data
-            'enable_power_transform': False,
-            'min_expression_threshold': 0.0,   # No minimum threshold for methylation
-            'handle_outliers': True,
-            'outlier_threshold': 3.0            # More sensitive outlier detection
-        },
-        'unknown': {
-            'enhanced_sparsity_handling': True,
-            'sparsity_threshold': 0.9,
-            'smart_skewness_correction': True,
-            'target_skewness_threshold': 0.5,
-            'enable_log_transform': True,
-            'enable_power_transform': True,
-            'enable_quantile_transform': True,
-            'handle_outliers': True
-        }
-    }
-    
-    # Get modality-specific config
-    modality_type = modality_type.lower()
-    if modality_type not in modality_configs:
-        modality_type = 'unknown'
-    
-    default_config = modality_configs[modality_type]
-    
-    # Merge with user-provided config
-    if config is not None:
-        final_config = {**default_config, **config}
-    else:
-        final_config = default_config
-    
-    logging.info(f"Using enhanced preprocessing for modality: {modality_type}")
-    
-    # Apply the enhanced preprocessing pipeline
-    return biomedical_preprocessing_pipeline(X, y, final_config)
+    # Redirect to robust version
+    return robust_biomedical_preprocessing_pipeline(X, y_train=y, modality_type=modality_type, config=config)
 
 def remove_highly_correlated_features(X, threshold=0.98):
     """
@@ -3319,10 +3188,32 @@ def robust_biomedical_preprocessing_pipeline(X_train, X_test=None, y_train=None,
             except Exception as e:
                 logging.warning(f"Outlier detection failed: {e}")
         
-        # STEP 4c: Robust scaling (NEW - addresses PCA high variance issues)
+        # STEP 4c: Enhanced log1p preprocessing for expression data (NEW - alternative to post-scaling clipping)
+        if final_config.get('use_log1p_preprocessing', False):
+            try:
+                logging.info("Step 4c-pre: Applying log1p transformation to raw expression data...")
+                
+                # Apply log1p transformation before scaling for expression data
+                X_train = ModalityAwareScaler.apply_log1p_transformation(X_train, modality_type)
+                if X_test is not None:
+                    X_test = ModalityAwareScaler.apply_log1p_transformation(X_test, modality_type)
+                
+                preprocessing_report['log1p_preprocessing'] = {
+                    'applied': True,
+                    'modality_type': modality_type
+                }
+                
+            except Exception as e:
+                logging.warning(f"Log1p preprocessing failed: {e}")
+                preprocessing_report['log1p_preprocessing'] = {
+                    'applied': False,
+                    'error': str(e)
+                }
+        
+        # STEP 4d: Robust scaling (NEW - addresses PCA high variance issues)
         if final_config.get('apply_scaling_before_pca', True):
             try:
-                logging.info("Step 4c: Applying robust scaling...")
+                logging.info("Step 4d: Applying robust scaling...")
                 X_train, X_test, scaler, scaling_report = robust_data_scaling(
                     X_train, X_test, final_config, modality_type
                 )
@@ -4523,14 +4414,28 @@ def robust_data_scaling(X_train, X_test=None, config=None, modality_type='unknow
         if X_test is not None:
             X_test_scaled = scaler.transform(X_test)
         
-        # Apply outlier clipping if enabled
-        if clip_outliers and clip_range is not None:
-            clip_min, clip_max = clip_range
-            X_train_scaled = np.clip(X_train_scaled, clip_min, clip_max)
+        # Apply enhanced modality-specific outlier clipping if enabled
+        if clip_outliers:
+            # Use enhanced clipping that adapts to modality type
+            X_train_scaled = ModalityAwareScaler.apply_expression_outlier_clipping(
+                X_train_scaled, modality_type, use_adaptive_clipping=True
+            )
             if X_test_scaled is not None:
-                X_test_scaled = np.clip(X_test_scaled, clip_min, clip_max)
+                X_test_scaled = ModalityAwareScaler.apply_expression_outlier_clipping(
+                    X_test_scaled, modality_type, use_adaptive_clipping=True
+                )
             scaling_report['outlier_clipping_applied'] = True
-            scaling_report['clip_range'] = clip_range
+            scaling_report['adaptive_clipping_used'] = True
+            
+            # Determine the clip range that was used for reporting
+            modality_lower = modality_type.lower()
+            if modality_lower in ["gene_expression", "gene", "expression", "exp"]:
+                used_clip_range = (-5.0, 5.0)
+            elif modality_lower in ["mirna", "miRNA"]:
+                used_clip_range = (-4.0, 4.0)
+            else:
+                used_clip_range = (-6.0, 6.0)
+            scaling_report['clip_range'] = used_clip_range
         
         # Calculate scaling statistics
         if hasattr(scaler, 'center_'):

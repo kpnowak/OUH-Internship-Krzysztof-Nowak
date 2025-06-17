@@ -46,7 +46,7 @@ This multi-modal approach captures different layers of biological information, p
 
 ## Enhanced Pipeline Features
 
-### 🚀 **Advanced Fusion Strategies**
+###  **Advanced Fusion Strategies**
 - **Attention-Weighted Fusion**: Sample-specific weighting with neural attention mechanisms (default)
 - **Learnable Weighted Fusion**: Performance-based modality weighting with cross-validation
 - **Late Fusion Stacking**: Meta-learner approach for complex modality interactions
@@ -58,7 +58,7 @@ This multi-modal approach captures different layers of biological information, p
 - **Methylation**: Mean imputation for low-missingness data + conservative scaling
 - **Advanced Sparsity Handling**: Log1p transformations, outlier capping, variance-based filtering
 
-### 📊 **Missing Data Intelligence**
+###  **Missing Data Intelligence**
 - **Missing Data Indicators**: Binary features capturing missingness patterns (threshold: 5%)
 - **Adaptive Imputation**: Automatic strategy selection based on data characteristics
 - **Robust Missing Modality Simulation**: Real-world missing data scenarios (0%, 20%, 50%)
@@ -481,12 +481,12 @@ python setup_and_info/test_installation.py
 ```
 
 This script verifies:
-- ✅ Python version compatibility (3.8+)
-- ✅ All core dependencies
-- ✅ module imports
-- ✅ Basic functionality
-- ✅ Command-line interface
-- ⚠️ Optional dependencies (warnings if missing)
+-  Python version compatibility (3.8+)
+-  All core dependencies
+-  module imports
+-  Basic functionality
+-  Command-line interface
+-  Optional dependencies (warnings if missing)
 
 #### Quick Verification
 ```bash
@@ -669,27 +669,27 @@ OUH-Internship-Krzysztof-Nowak/
 ## Recent Pipeline Enhancements
 
 ### Version 2.1 - Enhanced Missing Data Intelligence
-- ✅ **Missing Data Indicators**: Binary features capturing informative missingness patterns
-- ✅ **Modality-Specific Imputation**: Gene expression (biological KNN), miRNA (zero-inflated), methylation (mean)
-- ✅ **Adaptive Strategy Selection**: Automatic imputation method selection based on data characteristics
+-  **Missing Data Indicators**: Binary features capturing informative missingness patterns
+-  **Modality-Specific Imputation**: Gene expression (biological KNN), miRNA (zero-inflated), methylation (mean)
+-  **Adaptive Strategy Selection**: Automatic imputation method selection based on data characteristics
 
 ### Version 2.0 - Advanced Fusion Strategies  
-- ✅ **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific modality weighting
-- ✅ **Learnable Weighted Fusion**: Performance-based modality importance with cross-validation
-- ✅ **Late Fusion Stacking**: Meta-learner approach using per-modality predictions
-- ✅ **Strategic Optimization**: Attention-weighted fusion now default for 0% missing data scenarios
+-  **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific modality weighting
+-  **Learnable Weighted Fusion**: Performance-based modality importance with cross-validation
+-  **Late Fusion Stacking**: Meta-learner approach using per-modality predictions
+-  **Strategic Optimization**: Attention-weighted fusion now default for 0% missing data scenarios
 
 ### Version 1.9 - Enhanced Preprocessing Pipeline
-- ✅ **Numerical Stability Checks**: Automatic detection and removal of problematic features
-- ✅ **Advanced Sparsity Handling**: Log1p transformations, outlier capping, variance-based filtering
-- ✅ **Smart Skewness Correction**: Box-Cox/Yeo-Johnson transformations with intelligent selection
-- ✅ **Robust Scaling**: Modality-aware scaling with outlier clipping and quantile normalization
+-  **Numerical Stability Checks**: Automatic detection and removal of problematic features
+-  **Advanced Sparsity Handling**: Log1p transformations, outlier capping, variance-based filtering
+-  **Smart Skewness Correction**: Box-Cox/Yeo-Johnson transformations with intelligent selection
+-  **Robust Scaling**: Modality-aware scaling with outlier clipping and quantile normalization
 
 ### Version 1.8 - Performance Optimizations
-- ✅ **Enhanced Feature Selection**: Aggressive MAD thresholds (0.05), correlation removal (0.90)
-- ✅ **Stricter Regularization**: ElasticNet alpha range (0.1-0.5) for better generalization
-- ✅ **Memory Optimization**: Intelligent caching and parallel processing for 60GB RAM systems
-- ✅ **Computational Efficiency**: Reduced pipeline execution time by ~40% through optimizations
+-  **Enhanced Feature Selection**: Aggressive MAD thresholds (0.05), correlation removal (0.90)
+-  **Stricter Regularization**: ElasticNet alpha range (0.1-0.5) for better generalization
+-  **Memory Optimization**: Intelligent caching and parallel processing for 60GB RAM systems
+-  **Computational Efficiency**: Reduced pipeline execution time by ~40% through optimizations
 
 ## Contributing
 

@@ -29,7 +29,6 @@ from preprocessing import (
     custom_parse_outcome, 
     normalize_sample_ids, 
     advanced_feature_filtering,
-    biomedical_preprocessing_pipeline,
     robust_biomedical_preprocessing_pipeline,
     log_transform_data,
     quantile_normalize_data,
@@ -134,10 +133,12 @@ class DataOrientationValidator:
             n_features, n_samples = df.shape
         
         # Final validation checks
-        if n_samples < 5:
+        if n_samples < 2:
             raise DataOrientationValidationError(f"Insufficient samples for {modality_name}: {n_samples}")
+        elif n_samples < 5:
+            logger.warning(f"Very few samples for {modality_name}: {n_samples} (minimum for robust analysis)")
         
-        if n_features < 10:
+        if n_features < 5:
             logger.warning(f"Very few features for {modality_name}: {n_features}")
         
         # Log final validated dimensions
@@ -2212,7 +2213,11 @@ def load_and_preprocess_data(dataset_name: str, task_type: str,
                            apply_advanced_filtering: bool = True,
                            apply_biomedical_preprocessing: bool = True) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
     """
-    Load and preprocess multi-modal data with biomedical-specific preprocessing.
+    DEPRECATED: Use load_and_preprocess_data_enhanced instead.
+    
+    This function is kept for backward compatibility only.
+    For new code, use load_and_preprocess_data_enhanced which provides
+    the 4-phase enhanced preprocessing pipeline.
     
     Args:
         dataset_name: Name of the dataset
@@ -2223,95 +2228,19 @@ def load_and_preprocess_data(dataset_name: str, task_type: str,
     Returns:
         Tuple of (data_dict, target_array)
     """
-    logger.info(f"Loading dataset: {dataset_name} for {task_type}")
+    import warnings
+    warnings.warn(
+        "load_and_preprocess_data is deprecated. Use load_and_preprocess_data_enhanced instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     
-    # Load raw data
-    data_dict, target = load_multimodal_data(dataset_name, task_type)
+    # Redirect to enhanced version
+    processed_modalities, y_aligned, sample_ids, report = load_and_preprocess_data_enhanced(
+        dataset_name, task_type, enable_all_improvements=apply_biomedical_preprocessing
+    )
     
-    if data_dict is None or target is None:
-        logger.error(f"Failed to load data for {dataset_name}")
-        return None, None
-    
-    # Log initial data characteristics
-    for modality, data in data_dict.items():
-        logger.info(f"{modality} data shape: {data.shape}")
-        sparsity = np.mean(data == 0) if hasattr(data, 'shape') else 0
-        logger.info(f"{modality} sparsity: {sparsity:.2%}")
-    
-    # Apply biomedical preprocessing if enabled
-    if apply_biomedical_preprocessing:
-        logger.info("Applying biomedical preprocessing pipeline")
-        
-        processed_data_dict = {}
-        for modality, data in data_dict.items():
-            logger.info(f"Processing {modality} data")
-            
-            # Convert to numpy array if needed
-            if hasattr(data, 'values'):
-                data = data.values
-            
-            # Apply robust biomedical preprocessing with aggressive dimensionality reduction
-            # Determine modality type for proper configuration
-            modality_type = modality.lower().replace(' ', '_')
-            processed_data, transformers, preprocessing_report = robust_biomedical_preprocessing_pipeline(
-                data, modality_type=modality_type
-            )
-            processed_data_dict[modality] = processed_data
-            
-            logger.info(f"{modality} processed shape: {processed_data.shape}")
-            
-            # Log preprocessing improvements
-            if 'aggressive_dimensionality_reduction' in preprocessing_report:
-                reduction_info = preprocessing_report['aggressive_dimensionality_reduction']
-                logger.info(f"  Dimensionality reduction: {reduction_info['initial_features']} -> {reduction_info['final_features']} features ({reduction_info['reduction_ratio']:.1%} reduction)")
-            
-            if 'sparsity_handling' in preprocessing_report:
-                sparsity_info = preprocessing_report['sparsity_handling']
-                logger.info(f"  Sparsity: {sparsity_info.get('initial_sparsity', 0):.2%} -> {sparsity_info.get('final_sparsity', 0):.2%}")
-            
-            if 'numerical_stability' in preprocessing_report:
-                stability_info = preprocessing_report['numerical_stability']
-                if stability_info.get('problematic_features_removed', 0) > 0:
-                    logger.info(f"  Numerical stability: removed {stability_info['problematic_features_removed']} problematic features")
-        
-        data_dict = processed_data_dict
-    
-    # Apply advanced filtering if enabled
-    if apply_advanced_filtering:
-        logger.info("Applying advanced feature filtering")
-        
-        filtered_data_dict = {}
-        for modality, data in data_dict.items():
-            logger.info(f"Filtering {modality} data")
-            
-            # Convert to DataFrame for filtering
-            if isinstance(data, np.ndarray):
-                df = pd.DataFrame(data)
-            else:
-                df = data
-            
-            # Apply advanced filtering
-            filtered_df = advanced_feature_filtering(df)
-            filtered_data_dict[modality] = filtered_df.values if hasattr(filtered_df, 'values') else filtered_df
-            
-            logger.info(f"{modality} filtered shape: {filtered_data_dict[modality].shape}")
-        
-        data_dict = filtered_data_dict
-    
-    # Final data validation
-    for modality, data in data_dict.items():
-        if data.shape[1] == 0:
-            logger.warning(f"{modality} has no features after preprocessing")
-            continue
-        
-        # Check for infinite or NaN values
-        if np.any(np.isnan(data)) or np.any(np.isinf(data)):
-            logger.warning(f"{modality} contains NaN or infinite values, cleaning...")
-            data = np.nan_to_num(data, nan=0.0, posinf=1e6, neginf=-1e6)
-            data_dict[modality] = data
-    
-    logger.info(f"Data preprocessing complete for {dataset_name}")
-    return data_dict, target
+    return processed_modalities, y_aligned
 
 def load_and_preprocess_data_enhanced(
     dataset_name, 
@@ -2360,19 +2289,57 @@ def load_and_preprocess_data_enhanced(
         X = modality_df.T.values  # modality_df is features x samples
         modality_data_dict[modality_name] = (X, common_ids)
     
-    # Apply enhanced comprehensive preprocessing
+    # Apply 4-phase enhanced preprocessing pipeline
     if enable_all_improvements:
-        processed_modalities, y_aligned = enhanced_comprehensive_preprocessing_pipeline(
-            modality_data_dict=modality_data_dict,
-            y=y_series.values,
-            fusion_method="fusion_weighted_concat",
-            task_type=task_type,
-            dataset_name=dataset_name,
-            enable_missing_imputation=enable_missing_imputation,
-            enable_target_analysis=enable_target_analysis,
-            enable_mad_recalibration=enable_mad_recalibration,
-            enable_target_aware_selection=enable_target_aware_selection
-        )
+        try:
+            from enhanced_pipeline_integration import run_enhanced_preprocessing_pipeline
+            
+            # Determine optimal fusion method based on task type
+            fusion_method = "snf" if task_type == "classification" else "weighted_concat"
+            
+            processed_modalities, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipeline(
+                modality_data_dict=modality_data_dict,
+                y=y_series.values,
+                fusion_method=fusion_method,
+                task_type=task_type,
+                dataset_name=dataset_name,
+                enable_early_quality_check=True,
+                enable_fusion_aware_order=True,
+                enable_centralized_missing_data=True,
+                enable_coordinated_validation=True
+            )
+            
+            logger.info(f"4-Phase pipeline completed for {dataset_name}")
+            logger.info(f"Quality Score: {pipeline_metadata.get('quality_score', 'N/A')}")
+            
+        except Exception as e:
+            logger.warning(f"4-Phase pipeline failed for {dataset_name}: {e}")
+            logger.info("Falling back to robust biomedical preprocessing")
+            
+            # Fallback to robust biomedical preprocessing
+            from preprocessing import robust_biomedical_preprocessing_pipeline
+            
+            processed_modalities = {}
+            for modality_name, (X, sample_ids) in modality_data_dict.items():
+                # Determine modality type
+                if 'exp' in modality_name.lower():
+                    modality_type = 'gene_expression'
+                elif 'mirna' in modality_name.lower():
+                    modality_type = 'mirna'
+                elif 'methy' in modality_name.lower():
+                    modality_type = 'methylation'
+                else:
+                    modality_type = 'unknown'
+                
+                # Apply robust preprocessing
+                X_processed, transformers, report = robust_biomedical_preprocessing_pipeline(
+                    X, modality_type=modality_type
+                )
+                processed_modalities[modality_name] = X_processed
+            
+            # Align targets
+            n_samples = list(processed_modalities.values())[0].shape[0]
+            y_aligned = y_series.values[:n_samples] if len(y_series.values) >= n_samples else y_series.values
         
         # Create report
         report = {

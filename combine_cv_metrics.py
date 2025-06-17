@@ -75,8 +75,8 @@ if __name__ == "__main__":
     # Combine the files
     try:
         combined_df = combine_cv_metrics(selection_file, extraction_file, output_file)
-        print("\n✅ Successfully combined CV metrics files!")
+        print("\n Successfully combined CV metrics files!")
         
     except Exception as e:
-        print(f"❌ Error combining files: {str(e)}")
+        print(f" Error combining files: {str(e)}")
         exit(1) 

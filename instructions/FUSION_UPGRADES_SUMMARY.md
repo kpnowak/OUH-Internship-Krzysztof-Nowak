@@ -153,9 +153,9 @@ The fusion upgrades implementation successfully adds two powerful fusion strateg
 2. **LateFusionStacking**: Handles modality dominance through ensemble meta-learning
 
 Both strategies are:
-- ✅ **Fully integrated** with existing pipeline
-- ✅ **Configurable** via CLI and config files
-- ✅ **Robust** with comprehensive error handling
-- ✅ **Tested** with comprehensive test suite
+-  **Fully integrated** with existing pipeline
+-  **Configurable** via CLI and config files
+-  **Robust** with comprehensive error handling
+-  **Tested** with comprehensive test suite
 
 **Usage**: Simply add `--fusion-upgrades` to any CLI command to enable the new fusion strategies.

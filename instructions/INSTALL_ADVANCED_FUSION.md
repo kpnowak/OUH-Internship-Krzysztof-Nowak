@@ -41,17 +41,17 @@ python -c "from mklaren.kernel.kernel import exponential_kernel; print('Mklaren 
 ### Issue 1: "SNFpy library not available"
 
 **Cause:** Incorrect import statement in code
-**Solution:** ✅ **FIXED** - The code has been updated to import `snf` instead of `snfpy`
+**Solution:**  **FIXED** - The code has been updated to import `snf` instead of `snfpy`
 
 ### Issue 2: Oct2Py Import Interference
 
 **Cause:** Oct2Py's lazy import checks can interfere with other packages
-**Solution:** ✅ **FIXED** - Import SNF before any oct2py-related modules (implemented in the code)
+**Solution:**  **FIXED** - Import SNF before any oct2py-related modules (implemented in the code)
 
 ### Issue 3: "Mklaren not available" despite installation
 
 **Cause:** Mklaren has optional dependencies that may not be available
-**Solution:** ✅ **FIXED** - The code now uses a fallback implementation when full Mklaren functionality is not available
+**Solution:**  **FIXED** - The code now uses a fallback implementation when full Mklaren functionality is not available
 
 **What was fixed:**
 - Mklaren tries to import an `align` module that may not be compatible

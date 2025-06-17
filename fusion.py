@@ -464,7 +464,12 @@ class LateFusionFallback:
                 # Create appropriate model for this modality
                 if self.is_regression:
                     if modality.shape[1] > 100:  # High-dimensional
-                        model = LinearRegression()
+                        from sklearn.compose import TransformedTargetRegressor
+                        from sklearn.preprocessing import PowerTransformer
+                        model = TransformedTargetRegressor(
+                            regressor=LinearRegression(),
+                            transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+                        )
                     else:
                         model = RandomForestRegressor(
                             n_estimators=50, max_depth=5, 
@@ -2060,10 +2065,15 @@ class LateFusionStacking:
             from sklearn.ensemble import RandomForestRegressor
             from sklearn.linear_model import ElasticNet
             from sklearn.svm import SVR
+            from sklearn.compose import TransformedTargetRegressor
+            from sklearn.preprocessing import PowerTransformer
             
             return {
                 'rf': RandomForestRegressor(n_estimators=100, random_state=self.random_state),
-                'elastic': ElasticNet(alpha=0.3, l1_ratio=0.5, random_state=self.random_state),  # OPTIMIZED: Stricter alpha
+                'elastic': TransformedTargetRegressor(
+                    regressor=ElasticNet(alpha=0.3, l1_ratio=0.5, random_state=self.random_state),
+                    transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+                ),
                 'svr': SVR(kernel='rbf', C=1.0)
             }
         else:
@@ -2081,7 +2091,12 @@ class LateFusionStacking:
         """Get the meta-learner model."""
         if self.is_regression:
             from sklearn.linear_model import ElasticNet
-            return ElasticNet(alpha=0.3, l1_ratio=0.5, random_state=self.random_state)  # OPTIMIZED: Stricter alpha
+            from sklearn.compose import TransformedTargetRegressor
+            from sklearn.preprocessing import PowerTransformer
+            return TransformedTargetRegressor(
+                regressor=ElasticNet(alpha=0.3, l1_ratio=0.5, random_state=self.random_state),
+                transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+            )
         else:
             from sklearn.linear_model import LogisticRegression
             return LogisticRegression(random_state=self.random_state, max_iter=1000)
@@ -2588,7 +2603,12 @@ class LateFusionStacking:
             logger.error("Meta-learner is None, creating fallback meta-learner")
             if self.is_regression:
                 from sklearn.linear_model import LinearRegression
-                self.meta_learner_ = LinearRegression()
+                from sklearn.compose import TransformedTargetRegressor
+                from sklearn.preprocessing import PowerTransformer
+                self.meta_learner_ = TransformedTargetRegressor(
+                    regressor=LinearRegression(),
+                    transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+                )
             else:
                 from sklearn.linear_model import LogisticRegression
                 self.meta_learner_ = LogisticRegression(random_state=self.random_state, max_iter=1000)

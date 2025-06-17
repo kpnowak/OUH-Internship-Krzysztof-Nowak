@@ -39,7 +39,7 @@ def test_dataset_preprocessing(dataset_name, task_type):
     
     try:
         # Import required modules
-        logger.info("✅ All imports successful")
+        logger.info(" All imports successful")
         
         logger.info(f"Loading and preprocessing {dataset_name} for {task_type} with enhanced pipeline")
         
@@ -111,7 +111,7 @@ def test_dataset_preprocessing(dataset_name, task_type):
                 'modality_shapes': {mod: X.shape for mod, X in processed_modalities.items()}
             }
             
-            logger.info(f"✅ Preprocessing successful:")
+            logger.info(f" Preprocessing successful:")
             logger.info(f"   Samples: {len(y_aligned)}")
             logger.info(f"   Modalities: {len(processed_modalities)}")
             logger.info(f"   Total features: {total_features}")
@@ -133,7 +133,7 @@ def test_dataset_preprocessing(dataset_name, task_type):
                     test_results['errors'].append(f"{modality}: Sample misalignment {X.shape[0]} != {len(y_aligned)}")
                     validation_passed = False
                     
-                logger.info(f"   {modality}: {X.shape} - {'✅' if X.shape[0] == len(y_aligned) else '❌'}")
+                logger.info(f"   {modality}: {X.shape} - {'' if X.shape[0] == len(y_aligned) else ''}")
             
             # Test target validation if this is regression
             if task_type == "regression":
@@ -171,7 +171,7 @@ def test_dataset_preprocessing(dataset_name, task_type):
                         'is_valid': cv_validation['is_valid'],
                         'warnings': len(cv_validation['warnings'])
                     }
-                    logger.info(f"   CV validation: {'✅' if cv_validation['is_valid'] else '⚠️'} ({len(cv_validation['warnings'])} warnings)")
+                    logger.info(f"   CV validation: {'' if cv_validation['is_valid'] else ''} ({len(cv_validation['warnings'])} warnings)")
                 else:
                     logger.info("   CV validation: Skipped (insufficient samples)")
                     
@@ -179,18 +179,18 @@ def test_dataset_preprocessing(dataset_name, task_type):
                 test_results['errors'].append(f"CV validation failed: {e}")
             
             if validation_passed:
-                logger.info("✅ Data validation passed")
+                logger.info(" Data validation passed")
             else:
-                logger.warning("⚠️ Data validation issues detected")
+                logger.warning(" Data validation issues detected")
                 
         else:
             test_results['errors'].append("Preprocessing returned empty results")
-            logger.error("❌ Preprocessing returned empty results")
+            logger.error(" Preprocessing returned empty results")
             
     except Exception as e:
         error_msg = f"Dataset processing failed: {str(e)}"
         test_results['errors'].append(error_msg)
-        logger.error(f"❌ {error_msg}")
+        logger.error(f" {error_msg}")
         logger.debug(f"Traceback: {traceback.format_exc()}")
     
     return test_results
@@ -224,7 +224,7 @@ def test_improvement_classes():
         analysis = RegressionTargetAnalyzer.analyze_target_distribution(y_test, "TestDataset")
         assert 'basic_stats' in analysis
         test_results['target_analyzer'] = True
-        logger.info("✅ RegressionTargetAnalyzer working")
+        logger.info(" RegressionTargetAnalyzer working")
         
         # Test 2: Missing Imputer
         logger.info("Testing MissingModalityImputer...")
@@ -236,7 +236,7 @@ def test_improvement_classes():
         assert 'missing_rate' in pattern_analysis
         logger.info(f"Missing data analysis: {pattern_analysis['complete_cases']}/{pattern_analysis['total_samples']} complete cases ({pattern_analysis['missing_rate']:.1%} missing)")
         test_results['missing_imputer'] = True
-        logger.info("✅ MissingModalityImputer working")
+        logger.info(" MissingModalityImputer working")
         
         # Test 3: MAD Recalibrator
         logger.info("Testing MADThresholdRecalibrator...")
@@ -246,7 +246,7 @@ def test_improvement_classes():
         logger.info(f"exp MAD threshold recalibrated: {1e-6:.2e} -> {threshold:.2e}")
         logger.info(f"  Will remove {int(0.1 * X_test.shape[1])} features (10.0% of valid features)")
         test_results['mad_recalibrator'] = True
-        logger.info("✅ MADThresholdRecalibrator working")
+        logger.info(" MADThresholdRecalibrator working")
         
         # Test 4: Target-Feature Analyzer
         logger.info("Testing TargetFeatureRelationshipAnalyzer...")
@@ -263,7 +263,7 @@ def test_improvement_classes():
         logger.info(f"  Top feature importance: {np.max(importance_scores):.3f}")
         logger.info(f"  Bottom feature importance: {np.min(importance_scores):.3f}")
         test_results['target_feature_analyzer'] = True
-        logger.info("✅ TargetFeatureRelationshipAnalyzer working")
+        logger.info(" TargetFeatureRelationshipAnalyzer working")
         
         # Test 5: CV Validator
         logger.info("Testing CrossValidationTargetValidator...")
@@ -277,10 +277,10 @@ def test_improvement_classes():
         )
         assert is_valid == True
         test_results['cv_validator'] = True
-        logger.info("✅ CrossValidationTargetValidator working")
+        logger.info(" CrossValidationTargetValidator working")
         
     except Exception as e:
-        logger.error(f"❌ Improvement class testing failed: {e}")
+        logger.error(f" Improvement class testing failed: {e}")
         logger.debug(f"Traceback: {traceback.format_exc()}")
     
     return test_results
@@ -324,7 +324,7 @@ def run_comprehensive_test():
     logger.info(f"\n📋 IMPROVEMENT CLASSES TEST RESULTS:")
     classes_passed = 0
     for class_name, passed in class_test_results.items():
-        status = "✅ PASS" if passed else "❌ FAIL"
+        status = " PASS" if passed else " FAIL"
         logger.info(f"   {status} {class_name}")
         if passed:
             classes_passed += 1
@@ -332,18 +332,18 @@ def run_comprehensive_test():
     logger.info(f"\nClasses: {classes_passed}/{len(class_test_results)} passed ({100*classes_passed/len(class_test_results):.1f}%)")
     
     # Dataset preprocessing summary
-    logger.info(f"\n📊 DATASET PREPROCESSING TEST RESULTS:")
+    logger.info(f"\n DATASET PREPROCESSING TEST RESULTS:")
     datasets_passed = 0
     for dataset_name in ALL_DATASETS:
         result = dataset_results[dataset_name]
         if result['preprocessing_success']:
-            status = "✅ PASS"
+            status = " PASS"
             task_info = f"[{result['task_type'].upper()}]"
             stats = result['final_stats']
             details = f"({stats['n_samples']} samples, {stats['n_modalities']} modalities, {stats['total_features']} features)"
             datasets_passed += 1
         else:
-            status = "❌ FAIL"
+            status = " FAIL"
             task_info = f"[{result['task_type'].upper()}]"
             error_summary = result['errors'][0] if result['errors'] else "Unknown error"
             details = f"- {error_summary}"
@@ -355,7 +355,7 @@ def run_comprehensive_test():
     # Error analysis for failed datasets
     failed_datasets = [name for name, result in dataset_results.items() if not result['preprocessing_success']]
     if failed_datasets:
-        logger.info(f"\n❌ FAILED DATASETS ERROR ANALYSIS:")
+        logger.info(f"\n FAILED DATASETS ERROR ANALYSIS:")
         for dataset_name in failed_datasets:
             result = dataset_results[dataset_name]
             logger.info(f"   {dataset_name}:")
@@ -368,10 +368,10 @@ def run_comprehensive_test():
     total_passed = classes_passed + datasets_passed
     
     if total_passed >= total_tests * 0.7:  # 70% threshold
-        overall_status = "✅ OVERALL RESULT: GOOD"
+        overall_status = " OVERALL RESULT: GOOD"
         status_detail = f"   {total_passed}/{total_tests} tests passing (above 70% threshold)"
     else:
-        overall_status = "⚠️ OVERALL RESULT: NEEDS ATTENTION"
+        overall_status = " OVERALL RESULT: NEEDS ATTENTION"
         status_detail = f"   {len(failed_datasets)} datasets failing (below 70% threshold)"
     
     logger.info(overall_status)
@@ -397,8 +397,8 @@ if __name__ == "__main__":
     success = run_comprehensive_test()
     
     if success:
-        logger.info("\n✅ ALL TESTS PASSED")
+        logger.info("\n ALL TESTS PASSED")
         sys.exit(0)
     else:
-        logger.info("\n❌ SOME TESTS FAILED - SEE DETAILED RESULTS ABOVE")
+        logger.info("\n SOME TESTS FAILED - SEE DETAILED RESULTS ABOVE")
         sys.exit(1) 

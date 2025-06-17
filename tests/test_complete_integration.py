@@ -311,19 +311,19 @@ def test_complete_integration_with_real_data():
                     break
                     
                 except Exception as e:
-                    print(f"  ⚠️ {dataset} test failed: {str(e)}")
+                    print(f"   {dataset} test failed: {str(e)}")
             else:
                 print(f"  ℹ️ {dataset} data not found, skipping")
         else:
             print("  ℹ️ No real datasets available for integration testing")
             
     except Exception as e:
-        print(f"  ⚠️ Integration test with real data failed: {str(e)}")
+        print(f"   Integration test with real data failed: {str(e)}")
         print("  ℹ️ This is expected if no real data is available")
 
 def run_all_tests():
     """Run all priority fix tests"""
-    print("🚀 STARTING COMPREHENSIVE INTEGRATION TESTS")
+    print(" STARTING COMPREHENSIVE INTEGRATION TESTS")
     print("Testing all 6 priority fixes for main pipeline integration...")
     
     try:
@@ -337,19 +337,19 @@ def run_all_tests():
         
         print("\n" + "="*70)
         print("🎉 ALL PRIORITY FIXES INTEGRATION TESTS PASSED!")
-        print("✅ Priority 1: Data Orientation Validation - WORKING")
-        print("✅ Priority 2: Modality-Specific Scaling - WORKING") 
-        print("✅ Priority 3: Adaptive Feature Selection - WORKING")
-        print("✅ Priority 4: Sample Intersection Management - WORKING")
-        print("✅ Priority 5: Enhanced Validation and Logging - WORKING")
-        print("✅ Priority 6: Fusion Method Standardization - WORKING")
+        print(" Priority 1: Data Orientation Validation - WORKING")
+        print(" Priority 2: Modality-Specific Scaling - WORKING") 
+        print(" Priority 3: Adaptive Feature Selection - WORKING")
+        print(" Priority 4: Sample Intersection Management - WORKING")
+        print(" Priority 5: Enhanced Validation and Logging - WORKING")
+        print(" Priority 6: Fusion Method Standardization - WORKING")
         print("="*70)
-        print("🚀 MAIN PIPELINE IS READY FOR PRODUCTION!")
+        print(" MAIN PIPELINE IS READY FOR PRODUCTION!")
         
         return True
         
     except Exception as e:
-        print(f"\n❌ TEST FAILED: {str(e)}")
+        print(f"\n TEST FAILED: {str(e)}")
         import traceback
         print(f"Traceback:\n{traceback.format_exc()}")
         return False

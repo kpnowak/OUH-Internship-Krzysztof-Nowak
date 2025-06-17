@@ -70,12 +70,12 @@ as it does not implement a 'get_params' method.
 ```
 
 **Comprehensive Test Results:**
-- ✅ **SparsePLS cloning**: Successfully clones with all parameters
-- ✅ **PLSDiscriminantAnalysis cloning**: Successfully clones with all parameters  
-- ✅ **Cross-validation compatibility**: Works in CV pipelines (tested with 2-fold CV)
-- ✅ **Basic functionality**: Fit and transform operations work correctly
-- ✅ **Large component models**: PLS-DA-128 works without errors
-- ✅ **Real-world scenario**: Tested with Colon-like dataset (200×1000 features)
+-  **SparsePLS cloning**: Successfully clones with all parameters
+-  **PLSDiscriminantAnalysis cloning**: Successfully clones with all parameters  
+-  **Cross-validation compatibility**: Works in CV pipelines (tested with 2-fold CV)
+-  **Basic functionality**: Fit and transform operations work correctly
+-  **Large component models**: PLS-DA-128 works without errors
+-  **Real-world scenario**: Tested with Colon-like dataset (200×1000 features)
 
 ## Benefits
 
@@ -87,8 +87,8 @@ as it does not implement a 'get_params' method.
 Both SparsePLS and PLSDiscriminantAnalysis scikit-learn compatibility issues have been completely resolved! 🎉
 
 **Impact on Genomic Analysis Pipeline:**
-- ✅ **AML dataset**: SparsePLS-128 models now work correctly
-- ✅ **Colon dataset**: PLS-DA-128 models now work correctly  
-- ✅ **All cancer types**: Both models available for multi-modal analysis
-- ✅ **Cross-validation**: No more cloning errors across all datasets
-- ✅ **Missing data scenarios**: Compatible with 0.0%, 0.2%, 0.5% missing data levels 
+-  **AML dataset**: SparsePLS-128 models now work correctly
+-  **Colon dataset**: PLS-DA-128 models now work correctly  
+-  **All cancer types**: Both models available for multi-modal analysis
+-  **Cross-validation**: No more cloning errors across all datasets
+-  **Missing data scenarios**: Compatible with 0.0%, 0.2%, 0.5% missing data levels 

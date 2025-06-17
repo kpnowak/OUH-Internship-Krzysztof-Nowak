@@ -211,14 +211,14 @@ Overall: 6/6 tests passed
 ```
 
 ### Key Test Validations:
-- ✅ Configuration loaded with all required keys
-- ✅ AML log1p transformation is invertible
-- ✅ Sarcoma sqrt transformation is invertible  
-- ✅ TransformedTargetRegressor created successfully
-- ✅ All improved models (XGBoost, LightGBM, RobustGradientBoosting) created
-- ✅ Huber loss configured correctly
-- ✅ Integration with train_regression_model works
-- ✅ Target transformations and robust loss applied
+-  Configuration loaded with all required keys
+-  AML log1p transformation is invertible
+-  Sarcoma sqrt transformation is invertible  
+-  TransformedTargetRegressor created successfully
+-  All improved models (XGBoost, LightGBM, RobustGradientBoosting) created
+-  Huber loss configured correctly
+-  Integration with train_regression_model works
+-  Target transformations and robust loss applied
 
 ## Usage Instructions
 

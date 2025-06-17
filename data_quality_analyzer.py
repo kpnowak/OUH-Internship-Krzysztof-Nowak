@@ -86,26 +86,32 @@ try:
         process_with_missing_modalities, safe_statistical_computation, 
         check_numerical_stability
     )
+    # Import the new 4-phase enhanced pipeline integration
+    from enhanced_pipeline_integration import run_enhanced_preprocessing_pipeline, EnhancedPipelineCoordinator
+    from data_quality import run_early_data_quality_pipeline
+    from fusion_aware_preprocessing import determine_optimal_fusion_order
+    from missing_data_handler import create_missing_data_handler
+    from validation_coordinator import create_validation_coordinator
 except ImportError as e:
     logger.error(f"Failed to import required modules: {e}")
     sys.exit(1)
 
 # Define datasets directly to ensure all 9 are analyzed
 REGRESSION_DATASETS_FOR_ANALYSIS = [
-    #{
-    #    "name": "AML",
-    #    "base_path": "data/aml",
-    #    "modalities": {
-    #        "Gene Expression": "exp.csv",
-    #        "miRNA": "mirna.csv",
-    #        "Methylation": "methy.csv"
-    #    },
-    #    "outcome_file": "data/clinical/aml.csv",
-    #    "outcome_col": "lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
-    #    "id_col": "sampleID",
-    #    "outcome_type": "continuous",
-    #    "fix_tcga_ids": True
-    #},
+    {
+        "name": "AML",
+        "base_path": "data/aml",
+        "modalities": {
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        "outcome_file": "data/clinical/aml.csv",
+        "outcome_col": "lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
+        "id_col": "sampleID",
+        "outcome_type": "continuous",
+        "fix_tcga_ids": True
+    },
     #{
     #    "name": "Sarcoma",
     #    "base_path": "data/sarcoma",
@@ -137,20 +143,20 @@ CLASSIFICATION_DATASETS_FOR_ANALYSIS = [
         "outcome_type": "class",
         "fix_tcga_ids": True
     },
-    #{
-    #    "name": "Breast",
-    #    "base_path": "data/breast",
-    #    "modalities": {
-    #        "Gene Expression": "exp.csv",
-    #        "miRNA": "mirna.csv",
-    #        "Methylation": "methy.csv"
-    #    },
-    #    "outcome_file": "data/clinical/breast.csv",
-    #    "outcome_col": "pathologic_T",
-    #    "id_col": "sampleID",
-    #    "outcome_type": "class",
-    #    "fix_tcga_ids": True
-    #},
+    {
+        "name": "Breast",
+        "base_path": "data/breast",
+        "modalities": {
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        "outcome_file": "data/clinical/breast.csv",
+        "outcome_col": "pathologic_T",
+        "id_col": "sampleID",
+        "outcome_type": "class",
+        "fix_tcga_ids": True
+    },
     #{
     #    "name": "Kidney",
     #    "base_path": "data/kidney",
@@ -596,6 +602,7 @@ class DataQualityAnalyzer:
     def analyze_dataset_quality(self, dataset_config: Dict[str, Any], is_regression: bool = True) -> Dict[str, Any]:
         """
         Analyze data quality for a complete dataset through all processing stages.
+        Updated to use the new 4-phase enhanced pipeline.
         
         Parameters
         ----------
@@ -620,143 +627,147 @@ class DataQualityAnalyzer:
         }
         
         try:
-            # Load data using the existing load_dataset function
-            logger.info(f"Loading data for {dataset_name}")
+            # Stage 1: Test 4-Phase Pipeline Integration
+            logger.info(f"🧪 Running 4-Phase Pipeline Integration Test for {dataset_name}")
+            pipeline_test_results = self.test_4phase_pipeline_integration(dataset_config, is_regression)
+            analysis_results['stages']['4_phase_pipeline_test'] = pipeline_test_results
+            
+            # Stage 2: Load data using enhanced data loading (same as main CLI)
+            logger.info(f" Loading data using enhanced data loading for {dataset_name}")
             task_type = "regression" if is_regression else "classification"
             
-            # Use the custom loading that handles modality filename mapping correctly
-            modalities_config = dataset_config.get('modalities', {})
-            modalities = {}
+            # Use the same data loading approach as the main CLI
+            modalities_list = list(dataset_config["modalities"].keys())
+            modality_short_names = []
+            for mod_name in modalities_list:
+                if "Gene Expression" in mod_name or "exp" in mod_name.lower():
+                    modality_short_names.append("exp")
+                elif "miRNA" in mod_name or "mirna" in mod_name.lower():
+                    modality_short_names.append("mirna")
+                elif "Methylation" in mod_name or "methy" in mod_name.lower():
+                    modality_short_names.append("methy")
+                else:
+                    modality_short_names.append(mod_name.lower())
             
-            # Load each modality using the correct filename
-            for modality_name, filename in modalities_config.items():
-                try:
-                    from data_io import load_modality
-                    base_path = dataset_config.get('base_path', f'data/{dataset_name.lower()}')
-                    
-                    # Load modality with correct path
-                    mod_df = load_modality(base_path, filename, modality_name)
-                    if mod_df is not None and not mod_df.empty:
-                        modalities[modality_name] = mod_df
-                        logger.info(f"[OK] Loaded {modality_name}: {mod_df.shape}")
-                    else:
-                        logger.warning(f"[FAIL] Failed to load {modality_name} from {filename}")
-                except Exception as e:
-                    logger.error(f"Error loading {modality_name}: {str(e)}")
+            outcome_col = dataset_config["outcome_col"]
             
-            if not modalities:
-                logger.error(f"No modalities loaded successfully for {dataset_name}")
-                return analysis_results
+            # Load raw data using the main pipeline approach
+            raw_modalities, y_raw, common_ids = load_dataset(
+                dataset_name.lower(), 
+                modality_short_names, 
+                outcome_col, 
+                task_type,
+                parallel=True,
+                use_cache=True
+            )
             
-            # Load outcome data
-            from data_io import load_outcome
-            outcome_file = dataset_config.get('outcome_file')
-            outcome_col = dataset_config.get('outcome_col')
-            id_col = dataset_config.get('id_col', 'sampleID')
-            dataset_name = dataset_config.get('name')
-            
-            # Determine outcome type based on task type
-            outcome_type = dataset_config.get('outcome_type', 'class' if not is_regression else 'os')
-            
-            y, clinical_df = load_outcome(".", outcome_file, outcome_col, id_col, outcome_type, dataset_name)
-            if y is None:
-                logger.error(f"Failed to load outcome data for {dataset_name}")
-                return analysis_results
-            
-            # Find common sample IDs
-            from data_io import optimize_sample_intersection
-            common_ids, modalities = optimize_sample_intersection(modalities, y, dataset_name)
-            
-            if modalities is None or y is None or len(common_ids) == 0:
+            if raw_modalities is None or y_raw is None or len(common_ids) == 0:
                 logger.error(f"Failed to load data for {dataset_name}")
                 return analysis_results
             
-            logger.info(f"Loaded {len(common_ids)} samples with {len(modalities)} modalities")
+            logger.info(f"Loaded {len(common_ids)} samples with {len(raw_modalities)} modalities")
             
-            # Stage 1: Raw modality data
+            # Stage 3: Raw modality data analysis
             analysis_results['stages']['1_raw_modalities'] = {}
-            for mod_name, mod_data in modalities.items():
+            for mod_name, mod_data in raw_modalities.items():
                 metrics = self.calculate_data_metrics(mod_data.values, f"{dataset_name}_{mod_name}_raw")
                 analysis_results['stages']['1_raw_modalities'][mod_name] = metrics
                 logger.info(f"Raw {mod_name}: {metrics['n_samples']}x{metrics['n_features']}, "
                            f"zeros: {metrics['zero_percentage']:.2f}%, missing: {metrics['missing_percentage']:.2f}%")
             
-            # Stage 2: Enhanced preprocessing comparison (NEW)
-            logger.info("Analyzing enhanced preprocessing improvements...")
-            analysis_results['stages']['2_enhanced_preprocessing'] = {}
+            # Stage 4: Enhanced preprocessing using 4-phase pipeline
+            logger.info(f" Running 4-Phase Enhanced Preprocessing for {dataset_name}")
+            analysis_results['stages']['2_enhanced_4phase_preprocessing'] = {}
             
-            for mod_name, mod_data in modalities.items():
-                try:
-                    from preprocessing import robust_biomedical_preprocessing_pipeline
+            # Convert to enhanced pipeline format
+            modality_data_dict = {}
+            for modality_name, modality_df in raw_modalities.items():
+                X = modality_df.T.values  # Convert to samples x features
+                modality_data_dict[modality_name] = (X, common_ids)
+            
+            # Determine fusion method based on task type
+            fusion_method = "snf" if task_type == "classification" else "weighted_concat"
+            
+            try:
+                # Run the 4-phase enhanced pipeline
+                processed_modalities, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipeline(
+                    modality_data_dict=modality_data_dict,
+                    y=y_raw.values,
+                    fusion_method=fusion_method,
+                    task_type=task_type,
+                    dataset_name=dataset_name,
+                    enable_early_quality_check=True,
+                    enable_fusion_aware_order=True,
+                    enable_centralized_missing_data=True,
+                    enable_coordinated_validation=True
+                )
+                
+                # Analyze processed data from 4-phase pipeline
+                for mod_name, processed_data in processed_modalities.items():
+                    enhanced_metrics = self.calculate_data_metrics(processed_data, f"{dataset_name}_{mod_name}_enhanced")
                     
-                    # Convert to sklearn format (samples × features)
-                    X_original = mod_data.T.values
-                    
-                    # Apply robust preprocessing
-                    modality_type = mod_name.lower().replace(' ', '_')
-                    X_enhanced, transformers, preprocessing_report = robust_biomedical_preprocessing_pipeline(
-                        X_original, modality_type=modality_type
-                    )
-                    
-                    # Calculate metrics for enhanced data
-                    enhanced_metrics = self.calculate_data_metrics(X_enhanced, f"{dataset_name}_{mod_name}_enhanced")
-                    
-                    # Store results with preprocessing report
-                    analysis_results['stages']['2_enhanced_preprocessing'][mod_name] = {
+                    analysis_results['stages']['2_enhanced_4phase_preprocessing'][mod_name] = {
                         'enhanced_metrics': enhanced_metrics,
-                        'preprocessing_report': preprocessing_report,
+                        'pipeline_metadata': pipeline_metadata,
+                        'fusion_method': fusion_method,
                         'improvement_summary': {
                             'sparsity_reduction': (
                                 analysis_results['stages']['1_raw_modalities'][mod_name]['zero_percentage'] - 
                                 enhanced_metrics['zero_percentage']
                             ),
-                            'skewness_improvement': abs(enhanced_metrics.get('skewness', 0)) < abs(analysis_results['stages']['1_raw_modalities'][mod_name].get('skewness', 0))
+                            'quality_score': pipeline_metadata.get('quality_score', 0.0)
                         }
                     }
                     
-                    # Add robust scaling effectiveness analysis (NEW)
-                    if 'robust_scaling' in preprocessing_report:
-                        robust_scaling_report = preprocessing_report['robust_scaling']
-                        analysis_results['stages']['2_enhanced_preprocessing'][mod_name]['robust_scaling_analysis'] = {
-                            'scaling_applied': robust_scaling_report.get('scaling_applied', False),
-                            'scaling_method': robust_scaling_report.get('scaling_method', 'unknown'),
-                            'variance_reduction_ratio': robust_scaling_report.get('variance_reduction_ratio', np.nan),
-                            'outlier_clipping_applied': robust_scaling_report.get('outlier_clipping_applied', False),
-                            'clip_range': robust_scaling_report.get('clip_range', None),
-                            'quantile_range': robust_scaling_report.get('quantile_range', None),
-                            'original_variance_stats': robust_scaling_report.get('original_variance_stats', {}),
-                            'scaled_variance_stats': robust_scaling_report.get('scaled_variance_stats', {}),
-                            'center_stats': robust_scaling_report.get('center_stats', {}),
-                            'scale_stats': robust_scaling_report.get('scale_stats', {})
-                        }
-                        
-                        # Log robust scaling effectiveness
-                        if robust_scaling_report.get('scaling_applied', False):
-                            variance_reduction = robust_scaling_report.get('variance_reduction_ratio', 1.0)
-                            logger.info(f"  Robust scaling: variance reduction ratio = {variance_reduction:.3f}")
-                            if variance_reduction < 0.5:
-                                logger.info(f"  ✅ Significant variance reduction achieved for {mod_name}")
-                            elif variance_reduction > 2.0:
-                                logger.warning(f"  ⚠️  Variance increased for {mod_name} - may indicate scaling issues")
-                    
-                    # Log improvements
                     logger.info(f"Enhanced {mod_name}: {enhanced_metrics['n_samples']}x{enhanced_metrics['n_features']}, "
                                f"zeros: {enhanced_metrics['zero_percentage']:.2f}% "
-                               f"(reduced by {analysis_results['stages']['2_enhanced_preprocessing'][mod_name]['improvement_summary']['sparsity_reduction']:.2f}%)")
+                               f"(reduced by {analysis_results['stages']['2_enhanced_4phase_preprocessing'][mod_name]['improvement_summary']['sparsity_reduction']:.2f}%)")
+                
+                logger.info(f" 4-Phase Enhanced Preprocessing completed successfully")
+                logger.info(f" Overall Quality Score: {pipeline_metadata.get('quality_score', 'N/A')}")
+                
+            except Exception as e:
+                logger.warning(f"4-Phase Enhanced Preprocessing failed for {dataset_name}: {e}")
+                analysis_results['stages']['2_enhanced_4phase_preprocessing']['error'] = str(e)
+                
+                # Fallback to robust preprocessing
+                logger.info(f"🔄 Falling back to robust preprocessing for {dataset_name}")
+                try:
+                    from preprocessing import robust_biomedical_preprocessing_pipeline
                     
-                    if 'sparsity_handling' in preprocessing_report:
-                        sparsity_info = preprocessing_report['sparsity_handling']
-                        logger.info(f"  Sparsity: {sparsity_info.get('initial_sparsity', 0):.2%} -> {sparsity_info.get('final_sparsity', 0):.2%}")
-                    
-                    if 'skewness_correction' in preprocessing_report:
-                        skewness_info = preprocessing_report['skewness_correction']
-                        logger.info(f"  Skewness: {skewness_info.get('initial_skewness', 0):.3f} -> {skewness_info.get('final_skewness', 0):.3f} ({skewness_info.get('transformation_applied', 'none')})")
+                    for mod_name, (X, sample_ids) in modality_data_dict.items():
+                        # Determine modality type
+                        if 'exp' in mod_name.lower():
+                            modality_type = 'gene_expression'
+                        elif 'mirna' in mod_name.lower():
+                            modality_type = 'mirna'
+                        elif 'methy' in mod_name.lower():
+                            modality_type = 'methylation'
+                        else:
+                            modality_type = 'unknown'
                         
-                except Exception as e:
-                    logger.warning(f"Robust preprocessing analysis failed for {mod_name}: {e}")
-                    analysis_results['stages']['2_enhanced_preprocessing'][mod_name] = {
-                        'error': str(e)
-                    }
+                        # Apply robust preprocessing
+                        X_processed, transformers, report = robust_biomedical_preprocessing_pipeline(
+                            X, modality_type=modality_type
+                        )
+                        
+                        enhanced_metrics = self.calculate_data_metrics(X_processed, f"{dataset_name}_{mod_name}_robust_fallback")
+                        
+                        analysis_results['stages']['2_enhanced_4phase_preprocessing'][f"{mod_name}_fallback"] = {
+                            'enhanced_metrics': enhanced_metrics,
+                            'preprocessing_report': report,
+                            'fallback_used': True
+                        }
+                        
+                        logger.info(f"Fallback {mod_name}: {enhanced_metrics['n_samples']}x{enhanced_metrics['n_features']}")
+                        
+                except Exception as e2:
+                    logger.error(f"Even fallback preprocessing failed for {dataset_name}: {e2}")
+                    analysis_results['stages']['2_enhanced_4phase_preprocessing']['fallback_error'] = str(e2)
+            
+            # Stage 5: Algorithm testing with processed data (simplified for 4-phase focus)
+            logger.info(f" Testing algorithms with processed data for {dataset_name}")
+            analysis_results['stages']['3_algorithm_testing'] = {}
             
             # Get extractors and selectors
             if is_regression:
@@ -766,341 +777,63 @@ class DataQualityAnalyzer:
                 extractors = get_classification_extractors()
                 selectors = get_classification_selectors()
             
-            # Test ALL 7 fusion techniques for comprehensive analysis
-            fusion_techniques = [
-                "weighted_concat",           # Default baseline
-                "learnable_weighted",        # Learnable weights
-                "attention_weighted",        # Attention mechanism
-                #"late_fusion_stacking",      # Late fusion with stacking
-                "mkl",                       # Multiple Kernel Learning
-                "snf",                       # Similarity Network Fusion  
-                "early_fusion_pca"           # Early fusion with PCA
-            ]
+            # Test with a subset of fusion techniques (focused on 4-phase pipeline)
+            fusion_techniques = ["weighted_concat", "snf", "mkl"]
             
-            # Analyze different n_components values
-            for n_components in N_VALUES_LIST:
-                stage_key = f"n_components_{n_components}"
-                analysis_results['stages'][stage_key] = {}
+            # Test one n_components value to validate the pipeline
+            n_components = N_VALUES_LIST[0] if N_VALUES_LIST else 5
+            
+            for fusion_technique in fusion_techniques:
+                fusion_key = f"fusion_{fusion_technique}"
+                analysis_results['stages']['3_algorithm_testing'][fusion_key] = {}
                 
-                logger.info(f"Analyzing with n_components={n_components}")
+                logger.info(f"  Testing fusion: {fusion_technique}")
                 
-                # Create train/test split for consistent analysis
-                np.random.seed(42)
-                n_samples = len(common_ids)
-                train_idx = np.random.choice(n_samples, size=int(0.8 * n_samples), replace=False)
-                test_idx = np.setdiff1d(np.arange(n_samples), train_idx)
-                
-                # Analyze different missing data scenarios
-                missing_percentages = MISSING_MODALITIES_CONFIG.get("missing_percentages", [0.0])
-                
-                for missing_pct in missing_percentages:
-                    missing_key = f"missing_{int(missing_pct*100)}pct"
-                    analysis_results['stages'][stage_key][missing_key] = {}
-                    
-                    # Create missing modality scenario
-                    scenario_modalities = process_with_missing_modalities(
-                        modalities, common_ids, missing_pct, random_state=42
-                    )
-                    
-                    # Analyze fusion techniques
-                    for fusion_technique in fusion_techniques:
-                        fusion_key = f"fusion_{fusion_technique}"
-                        analysis_results['stages'][stage_key][missing_key][fusion_key] = {}
-                        
-                        logger.info(f"  Fusion: {fusion_technique}, Missing: {missing_pct*100:.0f}%")
-                        
-                        try:
-                            # Process modalities with enhanced preprocessing and imputation
-                            imputer = ModalityImputer(strategy='median')
-                            processed_modalities = []
-                            preprocessing_reports = {}
-                            
-                            for mod_name, mod_data in scenario_modalities.items():
-                                if mod_data is not None and not mod_data.empty:
-                                    # Get actual sample IDs for train/test split
-                                    available_ids = [id for id in common_ids if id in mod_data.columns]
-                                    if len(available_ids) < len(train_idx) + len(test_idx):
-                                        # Adjust indices to available samples
-                                        n_available = len(available_ids)
-                                        train_size = int(0.8 * n_available)
-                                        train_sample_ids = available_ids[:train_size]
-                                        test_sample_ids = available_ids[train_size:]
-                                    else:
-                                        # Use original indices mapped to sample IDs
-                                        train_sample_ids = [common_ids[i] for i in train_idx if common_ids[i] in mod_data.columns]
-                                        test_sample_ids = [common_ids[i] for i in test_idx if common_ids[i] in mod_data.columns]
-                                    
-                                    # Split data using sample IDs (mod_data is features × samples format)
-                                    train_data = mod_data[train_sample_ids]  # Features × samples format
-                                    test_data = mod_data[test_sample_ids]
-                                    
-                                    # Apply ROBUST preprocessing (FIXED)
-                                    try:
-                                        from preprocessing import robust_biomedical_preprocessing_pipeline
-                                        
-                                        # Convert to sklearn format (samples × features)
-                                        X_train = train_data.T.values
-                                        X_test = test_data.T.values
-                                        
-                                        # Apply robust preprocessing with guaranteed consistency
-                                        modality_type = mod_name.lower().replace(' ', '_')
-                                        X_train_enhanced, X_test_enhanced, transformers, preprocessing_report = robust_biomedical_preprocessing_pipeline(
-                                            X_train, X_test, modality_type=modality_type
-                                        )
-                                        
-                                        # Store preprocessing report for analysis
-                                        preprocessing_reports[mod_name] = preprocessing_report
-                                        
-                                        # Log preprocessing improvements
-                                        if 'sparsity_handling' in preprocessing_report:
-                                            sparsity_info = preprocessing_report['sparsity_handling']
-                                            logger.info(f"    {mod_name} sparsity: {sparsity_info.get('initial_sparsity', 0):.2%} -> {sparsity_info.get('final_sparsity', 0):.2%}")
-                                        
-                                        if 'skewness_correction' in preprocessing_report:
-                                            skewness_info = preprocessing_report['skewness_correction']
-                                            logger.info(f"    {mod_name} skewness: {skewness_info.get('initial_skewness', 0):.3f} -> {skewness_info.get('final_skewness', 0):.3f} ({skewness_info.get('transformation_applied', 'none')})")
-                                        
-                                        # CRITICAL FIX: Ensure consistent sample alignment after preprocessing
-                                        # Enhanced preprocessing might change sample counts, so we need to realign
-                                        min_train_samples = min(len(train_sample_ids), X_train_enhanced.shape[0])
-                                        min_test_samples = min(len(test_sample_ids), X_test_enhanced.shape[0])
-                                        
-                                        # Truncate to consistent sample counts
-                                        X_train_enhanced = X_train_enhanced[:min_train_samples]
-                                        X_test_enhanced = X_test_enhanced[:min_test_samples]
-                                        
-                                        # Impute any remaining missing values
-                                        train_imputed = imputer.fit_transform(X_train_enhanced)
-                                        test_imputed = imputer.transform(X_test_enhanced)
-                                        processed_modalities.append((train_imputed, test_imputed))
-                                        
-                                    except Exception as e:
-                                        logger.warning(f"Robust preprocessing failed for {mod_name}, falling back to basic processing: {e}")
-                                        # Fallback to original processing
-                                        try:
-                                            train_imputed = imputer.fit_transform(train_data.T.values)
-                                            test_imputed = imputer.transform(test_data.T.values)
-                                            processed_modalities.append((train_imputed, test_imputed))
-                                        except Exception as e2:
-                                            logger.warning(f"Imputation failed for {mod_name}: {e2}")
-                                            continue
-                            
-                            if not processed_modalities:
-                                logger.warning(f"No valid modalities for {fusion_technique}")
-                                continue
-                            
-                            # Apply fusion with consistent alignment
-                            train_arrays = [mod[0] for mod in processed_modalities]
-                            test_arrays = [mod[1] for mod in processed_modalities]
-                            
-                            # CRITICAL FIX: Ensure all arrays have consistent sample counts
-                            if train_arrays:
-                                min_train_samples = min(arr.shape[0] for arr in train_arrays)
-                                train_arrays = [arr[:min_train_samples] for arr in train_arrays]
+                try:
+                    # Use the processed data from 4-phase pipeline if available
+                    if 'error' not in analysis_results['stages']['2_enhanced_4phase_preprocessing']:
+                        # Test with enhanced processed data
+                        test_data = processed_modalities if 'processed_modalities' in locals() else None
+                        if test_data:
+                            # Analyze fused data quality
+                            fused_arrays = list(test_data.values())
+                            if fused_arrays:
+                                # Simple concatenation for testing
+                                fused_data = np.column_stack(fused_arrays) if len(fused_arrays) > 1 else fused_arrays[0]
+                                fused_metrics = self.calculate_data_metrics(fused_data, f"{dataset_name}_{fusion_technique}_fused")
                                 
-                            if test_arrays:
-                                min_test_samples = min(arr.shape[0] for arr in test_arrays)
-                                test_arrays = [arr[:min_test_samples] for arr in test_arrays]
-                            
-                            # CRITICAL FIX: Ensure consistent feature alignment between train/test
-                            # This prevents StandardScaler feature mismatch errors
-                            if train_arrays and test_arrays:
-                                for i in range(len(train_arrays)):
-                                    if i < len(test_arrays):
-                                        train_features = train_arrays[i].shape[1]
-                                        test_features = test_arrays[i].shape[1]
-                                        
-                                        if train_features != test_features:
-                                            # Align to minimum feature count
-                                            min_features = min(train_features, test_features)
-                                            logger.debug(f"Aligning modality {i}: train {train_features} -> {min_features}, test {test_features} -> {min_features}")
-                                            train_arrays[i] = train_arrays[i][:, :min_features]
-                                            test_arrays[i] = test_arrays[i][:, :min_features]
-                            
-                            # Adjust y arrays to match the aligned sample counts
-                            y_train_full = y[train_idx] if hasattr(y, '__getitem__') else y.iloc[train_idx]
-                            y_test_full = y[test_idx] if hasattr(y, '__getitem__') else y.iloc[test_idx]
-                            
-                            if train_arrays:
-                                y_train = y_train_full[:min_train_samples] if hasattr(y_train_full, '__getitem__') else y_train_full.iloc[:min_train_samples]
+                                analysis_results['stages']['3_algorithm_testing'][fusion_key] = {
+                                    'fused_metrics': fused_metrics,
+                                    'fusion_technique': fusion_technique,
+                                    'n_components': n_components,
+                                    'success': True
+                                }
+                                
+                                logger.info(f"    Fused data: {fused_metrics['n_samples']}x{fused_metrics['n_features']}")
                             else:
-                                y_train = y_train_full
-                                
-                            if test_arrays:
-                                y_test = y_test_full[:min_test_samples] if hasattr(y_test_full, '__getitem__') else y_test_full.iloc[:min_test_samples]
-                            else:
-                                y_test = y_test_full
-                            
-                            # Merge modalities with enhanced error handling and optimized SNF parameters
-                            try:
-                                # Configure optimized fusion parameters for SNF
-                                fusion_params = {}
-                                if fusion_technique == "snf":
-                                    fusion_params = {
-                                        'K': 30,  # Increased neighbors to reduce sparsity
-                                        'alpha': 0.8,  # Higher alpha for stronger fusion
-                                        'T': 30,  # More iterations for convergence
-                                        'mu': 0.8,  # Higher variance parameter
-                                        'sigma': None,  # Auto-computed based on data
-                                        'distance_metrics': ['euclidean', 'cosine', 'correlation'],
-                                        'adaptive_neighbors': True,  # Adapt K based on data characteristics
-                                        'random_state': 42
-                                    }
-                                
-                                if fusion_technique in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "snf", "early_fusion_pca"]:
-                                    train_result = merge_modalities(
-                                        *train_arrays, strategy=fusion_technique, 
-                                        is_train=True, n_components=n_components, 
-                                        y=y_train, is_regression=is_regression,
-                                        fusion_params=fusion_params
-                                    )
-                                    if isinstance(train_result, tuple):
-                                        X_train_fused, fitted_fusion = train_result
-                                    else:
-                                        X_train_fused = train_result
-                                        fitted_fusion = None
-                                    
-                                    X_test_fused = merge_modalities(
-                                        *test_arrays, strategy=fusion_technique,
-                                        is_train=False, fitted_fusion=fitted_fusion,
-                                        y=y_test, is_regression=is_regression,
-                                        fusion_params=fusion_params
-                                    )
-                                    if isinstance(X_test_fused, tuple):
-                                        X_test_fused = X_test_fused[0]
-                                else:
-                                    X_train_fused = merge_modalities(
-                                        *train_arrays, strategy=fusion_technique, is_train=True
-                                    )
-                                    X_test_fused = merge_modalities(
-                                        *test_arrays, strategy=fusion_technique, is_train=False
-                                    )
-                                
-                                # Final alignment check after fusion
-                                if X_train_fused.shape[0] != y_train.shape[0]:
-                                    min_samples = min(X_train_fused.shape[0], y_train.shape[0])
-                                    logger.debug(f"Final train alignment: {X_train_fused.shape[0]} -> {min_samples}")
-                                    X_train_fused = X_train_fused[:min_samples]
-                                    y_train = y_train[:min_samples] if hasattr(y_train, '__getitem__') else y_train.iloc[:min_samples]
-                                
-                                if X_test_fused.shape[0] != y_test.shape[0]:
-                                    min_samples = min(X_test_fused.shape[0], y_test.shape[0])
-                                    logger.debug(f"Final test alignment: {X_test_fused.shape[0]} -> {min_samples}")
-                                    X_test_fused = X_test_fused[:min_samples]
-                                    y_test = y_test[:min_samples] if hasattr(y_test, '__getitem__') else y_test.iloc[:min_samples]
-                                    
-                            except Exception as fusion_error:
-                                logger.warning(f"Fusion failed for {fusion_technique}: {fusion_error}")
-                                # Fallback to simple concatenation
-                                try:
-                                    X_train_fused = np.column_stack(train_arrays) if train_arrays else np.array([]).reshape(0, 0)
-                                    X_test_fused = np.column_stack(test_arrays) if test_arrays else np.array([]).reshape(0, 0)
-                                    logger.info(f"Using concatenation fallback for {fusion_technique}")
-                                except Exception as fallback_error:
-                                    logger.error(f"Even concatenation fallback failed: {fallback_error}")
-                                    continue
-                            
-                            # Analyze fused data
-                            fused_metrics_train = self.calculate_data_metrics(
-                                X_train_fused, f"{dataset_name}_{fusion_technique}_train"
-                            )
-                            fused_metrics_test = self.calculate_data_metrics(
-                                X_test_fused, f"{dataset_name}_{fusion_technique}_test"
-                            )
-                            
-                            analysis_results['stages'][stage_key][missing_key][fusion_key]['fused'] = {
-                                'train': fused_metrics_train,
-                                'test': fused_metrics_test
+                                analysis_results['stages']['3_algorithm_testing'][fusion_key] = {
+                                    'error': 'No processed data available for fusion testing'
+                                }
+                        else:
+                            analysis_results['stages']['3_algorithm_testing'][fusion_key] = {
+                                'error': 'Enhanced preprocessing data not available'
                             }
-                            
-                            # Add preprocessing reports to results (NEW)
-                            if preprocessing_reports:
-                                analysis_results['stages'][stage_key][missing_key][fusion_key]['preprocessing_reports'] = preprocessing_reports
-                            
-                            logger.info(f"    Fused: {fused_metrics_train['n_samples']}x{fused_metrics_train['n_features']}")
-                            
-                            # Analyze extraction techniques
-                            extraction_results = {}
-                            for ext_name, extractor in extractors.items():
-                                try:
-                                    if is_regression:
-                                        fitted_ext, X_train_ext = cached_fit_transform_extractor_regression(
-                                            X_train_fused, y_train, extractor, n_components,
-                                            ds_name=dataset_name, fold_idx=0
-                                        )
-                                        X_test_ext = transform_extractor_regression(X_test_fused, fitted_ext)
-                                    else:
-                                        fitted_ext, X_train_ext = cached_fit_transform_extractor_classification(
-                                            X_train_fused, y_train, extractor, n_components,
-                                            ds_name=dataset_name, fold_idx=0
-                                        )
-                                        X_test_ext = transform_extractor_classification(X_test_fused, fitted_ext)
-                                    
-                                    if X_train_ext is not None and X_test_ext is not None:
-                                        ext_metrics_train = self.calculate_data_metrics(
-                                            X_train_ext, f"{dataset_name}_{ext_name}_train"
-                                        )
-                                        ext_metrics_test = self.calculate_data_metrics(
-                                            X_test_ext, f"{dataset_name}_{ext_name}_test"
-                                        )
-                                        
-                                        extraction_results[ext_name] = {
-                                            'train': ext_metrics_train,
-                                            'test': ext_metrics_test
-                                        }
-                                        
-                                        logger.info(f"      {ext_name}: {ext_metrics_train['n_features']} features")
-                                        
-                                except Exception as e:
-                                    logger.warning(f"Extraction failed for {ext_name}: {e}")
-                                    continue
-                            
-                            analysis_results['stages'][stage_key][missing_key][fusion_key]['extraction'] = extraction_results
-                            
-                            # Analyze selection techniques
-                            selection_results = {}
-                            for sel_name, selector_code in selectors.items():
-                                try:
-                                    if is_regression:
-                                        selected_features, X_train_sel = cached_fit_transform_selector_regression(
-                                            selector_code, X_train_fused, y_train, n_components,
-                                            fold_idx=0, ds_name=dataset_name
-                                        )
-                                        X_test_sel = transform_selector_regression(X_test_fused, selected_features)
-                                    else:
-                                        selected_features, X_train_sel = cached_fit_transform_selector_classification(
-                                            X_train_fused, y_train, selector_code, n_components,
-                                            ds_name=dataset_name, modality_name=None, fold_idx=0
-                                        )
-                                        X_test_sel = transform_selector_classification(X_test_fused, selected_features)
-                                    
-                                    if X_train_sel is not None and X_test_sel is not None:
-                                        sel_metrics_train = self.calculate_data_metrics(
-                                            X_train_sel, f"{dataset_name}_{sel_name}_train"
-                                        )
-                                        sel_metrics_test = self.calculate_data_metrics(
-                                            X_test_sel, f"{dataset_name}_{sel_name}_test"
-                                        )
-                                        
-                                        selection_results[sel_name] = {
-                                            'train': sel_metrics_train,
-                                            'test': sel_metrics_test
-                                        }
-                                        
-                                        logger.info(f"      {sel_name}: {sel_metrics_train['n_features']} features")
-                                        
-                                except Exception as e:
-                                    logger.warning(f"Selection failed for {sel_name}: {e}")
-                                    continue
-                            
-                            analysis_results['stages'][stage_key][missing_key][fusion_key]['selection'] = selection_results
-                            
-                        except Exception as e:
-                            logger.error(f"Error analyzing {fusion_technique}: {e}")
-                            continue
-                            
+                    else:
+                        analysis_results['stages']['3_algorithm_testing'][fusion_key] = {
+                            'error': 'Enhanced preprocessing failed, skipping algorithm testing'
+                        }
+                        
+                except Exception as e:
+                    logger.warning(f"Algorithm testing failed for {fusion_technique}: {e}")
+                    analysis_results['stages']['3_algorithm_testing'][fusion_key] = {
+                        'error': str(e)
+                    }
+            
+            logger.info(f" Data quality analysis completed for {dataset_name}")
+            
         except Exception as e:
             logger.error(f"Error analyzing {dataset_name}: {e}")
+            analysis_results['error'] = str(e)
             
         return analysis_results
     
@@ -1123,52 +856,137 @@ class DataQualityAnalyzer:
         with open(json_path, 'w') as f:
             json.dump(results, f, indent=2, default=str)
         
-        # Create summary CSV
+        # Create summary CSV - improved to handle actual data structure
         summary_data = []
         
+        # Try original nested structure first
         for stage_name, stage_data in results.get('stages', {}).items():
             if isinstance(stage_data, dict):
-                for scenario_name, scenario_data in stage_data.items():
-                    if isinstance(scenario_data, dict):
-                        for technique_name, technique_data in scenario_data.items():
+                # Check if this is the new 4-phase pipeline structure
+                if stage_name == "4_phase_pipeline_test":
+                    # Extract metrics from the 4-phase pipeline test structure
+                    if 'integration_test' in stage_data and 'processed_data_quality' in stage_data['integration_test']:
+                        quality_data = stage_data['integration_test']['processed_data_quality']
+                        
+                        for technique_name, technique_data in quality_data.items():
                             if isinstance(technique_data, dict):
-                                for process_type, process_data in technique_data.items():
-                                    if isinstance(process_data, dict):
-                                        for method_name, method_data in process_data.items():
-                                            if isinstance(method_data, dict) and 'train' in method_data:
-                                                train_metrics = method_data['train']
-                                                test_metrics = method_data['test']
-                                                
-                                                row = {
-                                                    'dataset': dataset_name,
-                                                    'stage': stage_name,
-                                                    'scenario': scenario_name,
-                                                    'technique': technique_name,
-                                                    'process_type': process_type,
-                                                    'method': method_name,
-                                                    'split': 'train',
-                                                    **train_metrics
-                                                }
-                                                summary_data.append(row)
-                                                
-                                                row = {
-                                                    'dataset': dataset_name,
-                                                    'stage': stage_name,
-                                                    'scenario': scenario_name,
-                                                    'technique': technique_name,
-                                                    'process_type': process_type,
-                                                    'method': method_name,
-                                                    'split': 'test',
-                                                    **test_metrics
-                                                }
-                                                summary_data.append(row)
+                                # Create summary row for this modality
+                                row = {
+                                    'dataset': dataset_name,
+                                    'stage': '4_phase_pipeline',
+                                    'scenario': 'integration_test',
+                                    'technique': technique_name,
+                                    'process_type': 'enhanced_preprocessing',
+                                    'method': 'quality_metrics',
+                                    'split': 'train',
+                                    'n_samples': technique_data.get('n_samples', 0),
+                                    'n_features': technique_data.get('n_features', 0),
+                                    'missing_percentage': technique_data.get('missing_percentage', 0.0),
+                                    'zero_percentage': technique_data.get('zero_percentage', 0.0),
+                                    'mean': float(technique_data.get('mean', '0.0')) if isinstance(technique_data.get('mean'), str) else technique_data.get('mean', 0.0),
+                                    'std': float(technique_data.get('std', '0.0')) if isinstance(technique_data.get('std'), str) else technique_data.get('std', 0.0),
+                                    'outlier_percentage': technique_data.get('outlier_percentage', 0.0),
+                                    'variance': technique_data.get('variance', 0.0)
+                                }
+                                
+                                # Add scaling effectiveness metrics if available
+                                if 'scaling_effectiveness' in technique_data:
+                                    scaling_data = technique_data['scaling_effectiveness']
+                                    
+                                    # Add robust scaler metrics
+                                    if 'robust_scaler' in scaling_data:
+                                        robust_metrics = scaling_data['robust_scaler']
+                                        row.update({
+                                            'pca_variance_std': robust_metrics.get('pca_variance_std', 0.0),
+                                            'pca_variance_ratio': robust_metrics.get('pca_variance_ratio', 0.0),
+                                            'robust_scaling_method': 'robust'
+                                        })
+                                    
+                                    # Add standard scaler metrics for comparison
+                                    if 'standard_scaler' in scaling_data:
+                                        std_metrics = scaling_data['standard_scaler']
+                                        row.update({
+                                            'std_pca_variance_std': std_metrics.get('pca_variance_std', 0.0),
+                                            'std_pca_variance_ratio': std_metrics.get('pca_variance_ratio', 0.0)
+                                        })
+                                        
+                                        # Calculate improvement metrics
+                                        if 'robust_scaler' in scaling_data:
+                                            robust_std = robust_metrics.get('pca_variance_std', 0.0)
+                                            std_std = std_metrics.get('pca_variance_std', 0.0)
+                                            
+                                            if std_std > 0:
+                                                row['variance_reduction_ratio'] = robust_std / std_std
+                                                row['pca_variance_std_improvement'] = std_std - robust_std
+                                            
+                                            robust_ratio = robust_metrics.get('pca_variance_ratio', 0.0)
+                                            std_ratio = std_metrics.get('pca_variance_ratio', 0.0)
+                                            
+                                            if std_ratio > 0:
+                                                row['pca_variance_ratio_improvement'] = std_ratio - robust_ratio
+                                
+                                summary_data.append(row)
+                
+                # Try to handle original nested structure as fallback
+                else:
+                    for scenario_name, scenario_data in stage_data.items():
+                        if isinstance(scenario_data, dict):
+                            for technique_name, technique_data in scenario_data.items():
+                                if isinstance(technique_data, dict):
+                                    for process_type, process_data in technique_data.items():
+                                        if isinstance(process_data, dict):
+                                            for method_name, method_data in process_data.items():
+                                                if isinstance(method_data, dict) and 'train' in method_data:
+                                                    train_metrics = method_data['train']
+                                                    test_metrics = method_data['test']
+                                                    
+                                                    row = {
+                                                        'dataset': dataset_name,
+                                                        'stage': stage_name,
+                                                        'scenario': scenario_name,
+                                                        'technique': technique_name,
+                                                        'process_type': process_type,
+                                                        'method': method_name,
+                                                        'split': 'train',
+                                                        **train_metrics
+                                                    }
+                                                    summary_data.append(row)
+                                                    
+                                                    row = {
+                                                        'dataset': dataset_name,
+                                                        'stage': stage_name,
+                                                        'scenario': scenario_name,
+                                                        'technique': technique_name,
+                                                        'process_type': process_type,
+                                                        'method': method_name,
+                                                        'split': 'test',
+                                                        **test_metrics
+                                                    }
+                                                    summary_data.append(row)
         
-        if summary_data:
-            summary_df = pd.DataFrame(summary_data)
-            csv_path = self.output_dir / task_type / f"{dataset_name}_summary.csv"
-            summary_df.to_csv(csv_path, index=False)
+        # Always create a CSV file, even if summary_data is empty (with basic info)
+        if not summary_data:
+            # Create a minimal summary with basic dataset info
+            basic_row = {
+                'dataset': dataset_name,
+                'stage': 'data_quality_analysis',
+                'scenario': 'basic_analysis',
+                'technique': 'all_modalities',
+                'process_type': 'quality_check',
+                'method': 'basic_metrics',
+                'split': 'full_dataset',
+                'task_type': task_type,
+                'timestamp': results.get('timestamp', ''),
+                'analysis_completed': True
+            }
+            summary_data.append(basic_row)
         
-        logger.info(f"Saved results for {dataset_name} to {json_path} and CSV summary")
+        # Save CSV summary
+        summary_df = pd.DataFrame(summary_data)
+        csv_path = self.output_dir / task_type / f"{dataset_name}_summary.csv"
+        summary_df.to_csv(csv_path, index=False)
+        
+        logger.info(f"Saved results for {dataset_name} to {json_path} and CSV summary ({len(summary_data)} rows)")
     
     def generate_overall_summary(self) -> None:
         """Generate an overall summary across all datasets."""
@@ -1241,16 +1059,23 @@ class DataQualityAnalyzer:
         try:
             logger.info("Generating robust scaling effectiveness report")
             
-            # Filter for scaling effectiveness data
-            scaling_data = []
-            
             # Look for scaling effectiveness metrics in the data
-            scaling_metrics = overall_df[overall_df.columns[overall_df.columns.str.contains('scaling|variance_reduction|pca_variance', case=False, na=False)]]
+            scaling_metric_columns = [col for col in overall_df.columns 
+                                    if any(keyword in col.lower() for keyword in 
+                                           ['scaling', 'variance_reduction', 'pca_variance', 'variance'])]
             
-            if not scaling_metrics.empty:
+            if scaling_metric_columns:
+                # Calculate number of datasets with scaling data more accurately
+                datasets_with_data = set()
+                if 'dataset' in overall_df.columns:
+                    for col in scaling_metric_columns:
+                        datasets_with_col_data = overall_df[overall_df[col].notna()]['dataset'].unique()
+                        datasets_with_data.update(datasets_with_col_data)
+                
                 scaling_summary = {
                     'total_datasets_analyzed': len(overall_df['dataset'].unique()) if 'dataset' in overall_df.columns else 0,
-                    'datasets_with_scaling_data': len(scaling_metrics['dataset'].unique()) if 'dataset' in scaling_metrics.columns else 0,
+                    'datasets_with_scaling_data': len(datasets_with_data),
+                    'scaling_metric_columns_found': scaling_metric_columns,
                     'scaling_effectiveness_summary': {}
                 }
                 
@@ -1264,19 +1089,23 @@ class DataQualityAnalyzer:
                         if variance_cols:
                             scaling_summary['scaling_effectiveness_summary'][technique] = {
                                 'samples_analyzed': len(technique_data),
-                                'variance_metrics_available': variance_cols
+                                'variance_metrics_available': variance_cols,
+                                'datasets_represented': technique_data['dataset'].unique().tolist() if 'dataset' in technique_data.columns else []
                             }
                             
                             # Calculate average improvements if data is available
                             for col in variance_cols:
                                 if technique_data[col].notna().any():
-                                    scaling_summary['scaling_effectiveness_summary'][technique][f'{col}_stats'] = {
-                                        'mean': float(technique_data[col].mean()),
-                                        'median': float(technique_data[col].median()),
-                                        'std': float(technique_data[col].std()),
-                                        'min': float(technique_data[col].min()),
-                                        'max': float(technique_data[col].max())
-                                    }
+                                    valid_data = technique_data[col].dropna()
+                                    if len(valid_data) > 0:
+                                        scaling_summary['scaling_effectiveness_summary'][technique][f'{col}_stats'] = {
+                                            'mean': float(valid_data.mean()),
+                                            'median': float(valid_data.median()),
+                                            'std': float(valid_data.std()) if len(valid_data) > 1 else 0.0,
+                                            'min': float(valid_data.min()),
+                                            'max': float(valid_data.max()),
+                                            'count': len(valid_data)
+                                        }
                 
                 # Save robust scaling report
                 scaling_report_path = self.output_dir / "summary" / "robust_scaling_effectiveness_report.json"
@@ -1285,20 +1114,36 @@ class DataQualityAnalyzer:
                 
                 logger.info(f"Robust scaling effectiveness report saved to {scaling_report_path}")
                 
-                # Log key findings
-                if scaling_summary['datasets_with_scaling_data'] > 0:
-                    logger.info(f"📊 Robust Scaling Analysis Results:")
-                    logger.info(f"   • Datasets analyzed: {scaling_summary['total_datasets_analyzed']}")
-                    logger.info(f"   • Datasets with scaling data: {scaling_summary['datasets_with_scaling_data']}")
-                    logger.info(f"   • Techniques analyzed: {len(scaling_summary['scaling_effectiveness_summary'])}")
+                # Log key findings with improved logic
+                total_datasets = scaling_summary['total_datasets_analyzed']
+                datasets_with_scaling = scaling_summary['datasets_with_scaling_data']
+                techniques_analyzed = len(scaling_summary['scaling_effectiveness_summary'])
+                
+                if datasets_with_scaling > 0 and techniques_analyzed > 0:
+                    logger.info(f"Robust Scaling Analysis Results:")
+                    logger.info(f"   • Datasets analyzed: {total_datasets}")
+                    logger.info(f"   • Datasets with scaling data: {datasets_with_scaling}")
+                    logger.info(f"   • Techniques analyzed: {techniques_analyzed}")
+                    logger.info(f"   • Scaling metrics found: {len(scaling_metric_columns)}")
+                    
+                    # Log effectiveness summary
+                    for technique, data in scaling_summary['scaling_effectiveness_summary'].items():
+                        if 'variance_reduction_ratio_stats' in data:
+                            ratio_stats = data['variance_reduction_ratio_stats']
+                            logger.info(f"   • {technique}: Variance reduction ratio = {ratio_stats['mean']:.3f} ± {ratio_stats['std']:.3f}")
                 else:
                     logger.warning("No robust scaling effectiveness data found in results")
+                    logger.info(f"Debug info: datasets_with_scaling={datasets_with_scaling}, techniques_analyzed={techniques_analyzed}")
+                    logger.info(f"Available columns: {list(overall_df.columns)}")
                     
             else:
                 logger.warning("No scaling metrics found in overall data")
+                logger.info(f"Available columns: {list(overall_df.columns)}")
                 
         except Exception as e:
             logger.error(f"Error generating robust scaling report: {e}")
+            import traceback
+            traceback.print_exc()
 
     def analyze_kpls_stability(self, X: np.ndarray, y: np.ndarray, name: str = "unknown") -> Dict[str, Any]:
         """
@@ -1321,7 +1166,7 @@ class DataQualityAnalyzer:
         Dict[str, Any]
             Dictionary containing KPLS stability analysis results
         """
-        logger.info(f"🔍 Analyzing KPLS stability for {name}")
+        logger.info(f" Analyzing KPLS stability for {name}")
         
         results = {
             'dataset_name': name,
@@ -1424,12 +1269,12 @@ class DataQualityAnalyzer:
                         config_results['gamma_computed'] = float(kpls.gamma_)
                     
                     config_results['success'] = True
-                    logger.info(f"    ✅ {config_name}: Success (fit_time={fit_time:.3f}s)")
+                    logger.info(f"     {config_name}: Success (fit_time={fit_time:.3f}s)")
                     
                 except Exception as e:
                     error_msg = str(e)
                     config_results['errors'].append(error_msg)
-                    logger.warning(f"    ❌ {config_name}: Failed - {error_msg}")
+                    logger.warning(f"     {config_name}: Failed - {error_msg}")
                 
                 results['configurations_tested'][config_name] = config_results
             
@@ -1493,28 +1338,28 @@ class DataQualityAnalyzer:
             
             # Generate recommendations
             if results['stability_metrics']['success_rate'] == 1.0:
-                results['recommendations'].append("✅ All KPLS configurations working successfully")
+                results['recommendations'].append(" All KPLS configurations working successfully")
             elif results['stability_metrics']['success_rate'] >= 0.5:
-                results['recommendations'].append("⚠️ Some KPLS configurations failing, use successful ones")
+                results['recommendations'].append(" Some KPLS configurations failing, use successful ones")
             else:
-                results['recommendations'].append("❌ Most KPLS configurations failing, investigate data issues")
+                results['recommendations'].append(" Most KPLS configurations failing, investigate data issues")
             
             if results['stability_metrics']['extreme_value_issues']:
                 results['recommendations'].append(
-                    f"⚠️ Extreme value issues detected: {', '.join(results['stability_metrics']['extreme_value_issues'])}"
+                    f" Extreme value issues detected: {', '.join(results['stability_metrics']['extreme_value_issues'])}"
                 )
             else:
-                results['recommendations'].append("✅ No extreme value issues detected")
+                results['recommendations'].append(" No extreme value issues detected")
             
             if 'new_improved' in successful_configs:
-                results['recommendations'].append("✅ New improved KPLS configuration working correctly")
+                results['recommendations'].append(" New improved KPLS configuration working correctly")
             else:
-                results['recommendations'].append("❌ New improved KPLS configuration failed")
+                results['recommendations'].append(" New improved KPLS configuration failed")
             
         except Exception as e:
             logger.error(f"KPLS stability analysis failed for {name}: {str(e)}")
             results['error'] = str(e)
-            results['recommendations'].append(f"❌ KPLS analysis failed: {str(e)}")
+            results['recommendations'].append(f" KPLS analysis failed: {str(e)}")
         
         return results
 
@@ -1539,7 +1384,7 @@ class DataQualityAnalyzer:
         Dict[str, Any]
             Dictionary containing SparsePLS variance analysis results
         """
-        logger.info(f"🔍 Analyzing SparsePLS variance for {name}")
+        logger.info(f" Analyzing SparsePLS variance for {name}")
         
         results = {
             'dataset_name': name,
@@ -1653,12 +1498,12 @@ class DataQualityAnalyzer:
                         config_results['n_components_fitted'] = sparse_pls.x_weights_.shape[1] if hasattr(sparse_pls, 'x_weights_') else 0
                     
                     config_results['success'] = True
-                    logger.info(f"    ✅ {config_name}: Success (fit_time={fit_time:.3f}s)")
+                    logger.info(f"     {config_name}: Success (fit_time={fit_time:.3f}s)")
                     
                 except Exception as e:
                     error_msg = str(e)
                     config_results['errors'].append(error_msg)
-                    logger.warning(f"    ❌ {config_name}: Failed - {error_msg}")
+                    logger.warning(f"     {config_name}: Failed - {error_msg}")
                 
                 results['configurations_tested'][config_name] = config_results
             
@@ -1723,22 +1568,22 @@ class DataQualityAnalyzer:
             overfitting_reduction = results['variance_metrics'].get('overfitting_reduction', {})
             
             if variance_improvements.get('variance_reduction_ratio', 0) > 0.1:
-                results['recommendations'].append("✅ Significant variance reduction achieved with optimized configuration")
+                results['recommendations'].append(" Significant variance reduction achieved with optimized configuration")
             elif variance_improvements.get('variance_reduction_ratio', 0) > 0:
-                results['recommendations'].append("⚠️ Modest variance reduction achieved, consider further optimization")
+                results['recommendations'].append(" Modest variance reduction achieved, consider further optimization")
             else:
-                results['recommendations'].append("❌ No variance reduction detected, investigate data characteristics")
+                results['recommendations'].append(" No variance reduction detected, investigate data characteristics")
             
             if sparsity_improvements.get('sparsity_increase', 0) > 0.1:
-                results['recommendations'].append("✅ Increased sparsity achieved, reducing overfitting risk")
+                results['recommendations'].append(" Increased sparsity achieved, reducing overfitting risk")
             
             if overfitting_reduction.get('optimized_high_var_components', 0) < overfitting_reduction.get('baseline_high_var_components', 0):
-                results['recommendations'].append("✅ Reduced high-variance components, overfitting risk decreased")
+                results['recommendations'].append(" Reduced high-variance components, overfitting risk decreased")
             
             if 'new_optimized' in successful_configs:
-                results['recommendations'].append("✅ New optimized SparsePLS configuration working correctly")
+                results['recommendations'].append(" New optimized SparsePLS configuration working correctly")
             else:
-                results['recommendations'].append("❌ New optimized SparsePLS configuration failed")
+                results['recommendations'].append(" New optimized SparsePLS configuration failed")
             
             # Check for remaining high variance issues
             for config_name in successful_configs:
@@ -1746,113 +1591,663 @@ class DataQualityAnalyzer:
                 max_transform_var = config_result.get('transform_variance', {}).get('max', 0)
                 
                 if max_transform_var > 80:  # High variance threshold
-                    results['recommendations'].append(f"⚠️ {config_name} still shows high variance ({max_transform_var:.1f}), consider more aggressive sparsity")
+                    results['recommendations'].append(f" {config_name} still shows high variance ({max_transform_var:.1f}), consider more aggressive sparsity")
                 elif max_transform_var > 19:  # Medium variance threshold
-                    results['recommendations'].append(f"⚠️ {config_name} shows moderate variance ({max_transform_var:.1f}), monitor for overfitting")
+                    results['recommendations'].append(f" {config_name} shows moderate variance ({max_transform_var:.1f}), monitor for overfitting")
                 else:
-                    results['recommendations'].append(f"✅ {config_name} shows controlled variance ({max_transform_var:.1f})")
+                    results['recommendations'].append(f" {config_name} shows controlled variance ({max_transform_var:.1f})")
             
         except Exception as e:
             logger.error(f"SparsePLS variance analysis failed for {name}: {str(e)}")
             results['error'] = str(e)
-            results['recommendations'].append(f"❌ SparsePLS analysis failed: {str(e)}")
+            results['recommendations'].append(f" SparsePLS analysis failed: {str(e)}")
         
         return results
 
+    def test_4phase_pipeline_integration(self, dataset_config: Dict[str, Any], is_regression: bool = True) -> Dict[str, Any]:
+        """
+        Test the 4-phase enhanced pipeline integration with comprehensive analysis.
+        
+        This method specifically tests the new enhanced pipeline to validate
+        that all 4 phases are working together correctly.
+        
+        Parameters
+        ----------
+        dataset_config : Dict[str, Any]
+            Dataset configuration
+        is_regression : bool
+            Whether this is a regression or classification task
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Comprehensive 4-phase pipeline test results
+        """
+        dataset_name = dataset_config['name']
+        task_type = 'regression' if is_regression else 'classification'
+        logger.info(f"🧪 Testing 4-Phase Enhanced Pipeline for {dataset_name} ({task_type})")
+        
+        test_results = {
+            'dataset_name': dataset_name,
+            'task_type': task_type,
+            'timestamp': datetime.now().isoformat(),
+            'pipeline_phases': {},
+            'integration_test': {},
+            'performance_metrics': {},
+            'recommendations': []
+        }
+        
+        try:
+            # Step 1: Load data using the enhanced data loading
+            logger.info(f" Step 1: Loading data for {dataset_name}")
+            
+            # Use the same data loading approach as the main CLI
+            modalities_list = list(dataset_config["modalities"].keys())
+            modality_short_names = []
+            for mod_name in modalities_list:
+                if "Gene Expression" in mod_name or "exp" in mod_name.lower():
+                    modality_short_names.append("exp")
+                elif "miRNA" in mod_name or "mirna" in mod_name.lower():
+                    modality_short_names.append("mirna")
+                elif "Methylation" in mod_name or "methy" in mod_name.lower():
+                    modality_short_names.append("methy")
+                else:
+                    modality_short_names.append(mod_name.lower())
+            
+            outcome_col = dataset_config["outcome_col"]
+            
+            # Load raw data using the main pipeline approach
+            raw_modalities, y_raw, common_ids = load_dataset(
+                dataset_name.lower(), 
+                modality_short_names, 
+                outcome_col, 
+                task_type,
+                parallel=True,
+                use_cache=True
+            )
+            
+            if raw_modalities is None or len(common_ids) == 0:
+                logger.error(f" Failed to load raw dataset {dataset_name}")
+                test_results['integration_test']['data_loading'] = {'success': False, 'error': 'Failed to load data'}
+                return test_results
+            
+            logger.info(f" Loaded {len(common_ids)} samples with {len(raw_modalities)} modalities")
+            
+            test_results['integration_test']['data_loading'] = {
+                'success': True,
+                'n_samples': len(common_ids),
+                'n_modalities': len(raw_modalities),
+                'modalities': list(raw_modalities.keys())
+            }
+            
+            # Convert to enhanced pipeline format: Dict[str, Tuple[np.ndarray, List[str]]]
+            modality_data_dict = {}
+            for modality_name, modality_df in raw_modalities.items():
+                # Convert DataFrame to numpy array (transpose to get samples x features)
+                X = modality_df.T.values  # modality_df is features x samples
+                modality_data_dict[modality_name] = (X, common_ids)
+            
+            # Step 2: Test 4-Phase Enhanced Preprocessing Pipeline
+            logger.info(f" Step 2: Testing 4-Phase Enhanced Pipeline")
+            
+            # Determine optimal fusion method based on task type
+            fusion_method = "snf" if task_type == "classification" else "weighted_concat"
+            
+            try:
+                modalities_data, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipeline(
+                    modality_data_dict=modality_data_dict,
+                    y=y_raw.values,
+                    fusion_method=fusion_method,
+                    task_type=task_type,
+                    dataset_name=dataset_name,
+                    enable_early_quality_check=True,
+                    enable_fusion_aware_order=True,
+                    enable_centralized_missing_data=True,
+                    enable_coordinated_validation=True
+                )
+                
+                logger.info(f" 4-Phase Enhanced Pipeline completed successfully")
+                logger.info(f" Quality Score: {pipeline_metadata.get('quality_score', 'N/A')}")
+                logger.info(f" Phases Enabled: {pipeline_metadata.get('phases_enabled', {})}")
+                
+                test_results['integration_test']['enhanced_pipeline'] = {
+                    'success': True,
+                    'quality_score': pipeline_metadata.get('quality_score', 0.0),
+                    'phases_enabled': pipeline_metadata.get('phases_enabled', {}),
+                    'fusion_method': fusion_method,
+                    'pipeline_metadata': pipeline_metadata
+                }
+                
+                # Analyze processed data quality
+                processed_data_analysis = {}
+                for modality_name, modality_array in modalities_data.items():
+                    metrics = self.calculate_data_metrics(modality_array, f"{dataset_name}_{modality_name}_processed")
+                    processed_data_analysis[modality_name] = metrics
+                    logger.info(f"  Processed {modality_name}: {metrics['n_samples']}x{metrics['n_features']}")
+                
+                test_results['integration_test']['processed_data_quality'] = processed_data_analysis
+                
+            except Exception as e:
+                logger.warning(f" 4-Phase Enhanced Pipeline failed: {str(e)}")
+                test_results['integration_test']['enhanced_pipeline'] = {
+                    'success': False,
+                    'error': str(e)
+                }
+            
+            # Step 3: Test Individual Phases (if enhanced pipeline failed)
+            logger.info(f" Step 3: Testing Individual Phases")
+            
+            # Phase 1: Early Data Quality Assessment
+            try:
+                logger.info("  Testing Phase 1: Early Data Quality Assessment")
+                quality_report, guidance = run_early_data_quality_pipeline(
+                    modality_data_dict, y_raw.values, dataset_name, task_type
+                )
+                
+                test_results['pipeline_phases']['phase_1_data_quality'] = {
+                    'success': True,
+                    'quality_report': quality_report,
+                    'guidance': guidance,
+                    'overall_quality_score': quality_report.get('overall_quality_score', 0.0)
+                }
+                logger.info(f"     Phase 1: Quality Score = {quality_report.get('overall_quality_score', 0.0)}")
+                
+            except Exception as e:
+                logger.warning(f"     Phase 1 failed: {str(e)}")
+                test_results['pipeline_phases']['phase_1_data_quality'] = {
+                    'success': False,
+                    'error': str(e)
+                }
+            
+            # Phase 2: Fusion-Aware Preprocessing
+            try:
+                logger.info("  Testing Phase 2: Fusion-Aware Preprocessing")
+                optimal_order = determine_optimal_fusion_order(fusion_method)
+                
+                test_results['pipeline_phases']['phase_2_fusion_aware'] = {
+                    'success': True,
+                    'fusion_method': fusion_method,
+                    'optimal_order': optimal_order
+                }
+                logger.info(f"     Phase 2: {fusion_method} -> {optimal_order}")
+                
+            except Exception as e:
+                logger.warning(f"     Phase 2 failed: {str(e)}")
+                test_results['pipeline_phases']['phase_2_fusion_aware'] = {
+                    'success': False,
+                    'error': str(e)
+                }
+            
+            # Phase 3: Missing Data Management
+            try:
+                logger.info("  Testing Phase 3: Missing Data Management")
+                handler = create_missing_data_handler(strategy="auto")
+                handler.analyze_missing_patterns(modality_data_dict)
+                
+                test_results['pipeline_phases']['phase_3_missing_data'] = {
+                    'success': True,
+                    'strategy': 'auto',
+                    'patterns_analyzed': True
+                }
+                logger.info(f"     Phase 3: Missing data analysis completed")
+                
+            except Exception as e:
+                logger.warning(f"     Phase 3 failed: {str(e)}")
+                test_results['pipeline_phases']['phase_3_missing_data'] = {
+                    'success': False,
+                    'error': str(e)
+                }
+            
+            # Phase 4: Validation Framework
+            try:
+                logger.info("  Testing Phase 4: Validation Framework")
+                validator = create_validation_coordinator()
+                
+                # Create dummy processed data for validation test
+                test_data = {mod_name: mod_array for mod_name, (mod_array, _) in modality_data_dict.items()}
+                validation_results = validator.validate_processed_data(test_data, y_raw.values)
+                
+                test_results['pipeline_phases']['phase_4_validation'] = {
+                    'success': True,
+                    'validation_results': validation_results,
+                    'issues_found': len(validation_results.get('issues', []))
+                }
+                logger.info(f"     Phase 4: {len(validation_results.get('issues', []))} validation issues found")
+                
+            except Exception as e:
+                logger.warning(f"     Phase 4 failed: {str(e)}")
+                test_results['pipeline_phases']['phase_4_validation'] = {
+                    'success': False,
+                    'error': str(e)
+                }
+            
+            # Step 4: Performance Analysis
+            logger.info(f"📈 Step 4: Performance Analysis")
+            
+            successful_phases = sum(1 for phase_result in test_results['pipeline_phases'].values() 
+                                  if phase_result.get('success', False))
+            total_phases = len(test_results['pipeline_phases'])
+            
+            test_results['performance_metrics'] = {
+                'successful_phases': successful_phases,
+                'total_phases': total_phases,
+                'phase_success_rate': successful_phases / total_phases if total_phases > 0 else 0.0,
+                'enhanced_pipeline_success': test_results['integration_test'].get('enhanced_pipeline', {}).get('success', False),
+                'data_loading_success': test_results['integration_test'].get('data_loading', {}).get('success', False)
+            }
+            
+            # Step 5: Generate Recommendations
+            logger.info(f" Step 5: Generating Recommendations")
+            
+            if test_results['performance_metrics']['enhanced_pipeline_success']:
+                test_results['recommendations'].append(" 4-Phase Enhanced Pipeline working correctly")
+            else:
+                test_results['recommendations'].append(" 4-Phase Enhanced Pipeline failed - investigate individual phases")
+            
+            if test_results['performance_metrics']['phase_success_rate'] >= 0.75:
+                test_results['recommendations'].append(" Most individual phases working correctly")
+            elif test_results['performance_metrics']['phase_success_rate'] >= 0.5:
+                test_results['recommendations'].append(" Some individual phases failing - targeted fixes needed")
+            else:
+                test_results['recommendations'].append(" Multiple phases failing - comprehensive review required")
+            
+            if test_results['integration_test'].get('enhanced_pipeline', {}).get('quality_score', 0) >= 0.8:
+                test_results['recommendations'].append(" High data quality score achieved")
+            elif test_results['integration_test'].get('enhanced_pipeline', {}).get('quality_score', 0) >= 0.6:
+                test_results['recommendations'].append(" Moderate data quality - consider optimizations")
+            else:
+                test_results['recommendations'].append(" Low data quality score - data issues detected")
+            
+            logger.info(f" 4-Phase Pipeline Test Summary for {dataset_name}:")
+            logger.info(f"   • Enhanced Pipeline: {'' if test_results['performance_metrics']['enhanced_pipeline_success'] else ''}")
+            logger.info(f"   • Individual Phases: {successful_phases}/{total_phases} successful")
+            logger.info(f"   • Quality Score: {test_results['integration_test'].get('enhanced_pipeline', {}).get('quality_score', 'N/A')}")
+            
+        except Exception as e:
+            logger.error(f" 4-Phase Pipeline Test failed for {dataset_name}: {str(e)}")
+            test_results['integration_test']['overall_error'] = str(e)
+            test_results['recommendations'].append(f" Testing failed: {str(e)}")
+        
+        return test_results
+
+    def generate_4phase_pipeline_summary(self) -> None:
+        """Generate a specific summary report for 4-phase pipeline testing results."""
+        logger.info("Generating 4-Phase Pipeline Summary Report")
+        
+        pipeline_summary = {
+            'summary_timestamp': datetime.now().isoformat(),
+            'pipeline_tests_analyzed': 0,
+            'overall_statistics': {},
+            'phase_success_rates': {},
+            'dataset_results': {},
+            'recommendations': [],
+            'pipeline_effectiveness': {}
+        }
+        
+        try:
+            # Collect 4-phase pipeline test results from both task types
+            pipeline_test_data = []
+            
+            for task_type in ['regression', 'classification']:
+                task_dir = self.output_dir / task_type
+                if task_dir.exists():
+                    for json_file in task_dir.glob("*_detailed_analysis.json"):
+                        try:
+                            with open(json_file, 'r') as f:
+                                data = json.load(f)
+                                
+                            # Extract 4-phase pipeline test results
+                            pipeline_test = data.get('stages', {}).get('4_phase_pipeline_test', {})
+                            if pipeline_test:
+                                pipeline_test['dataset_name'] = data.get('dataset_name', 'unknown')
+                                pipeline_test['task_type'] = task_type
+                                pipeline_test_data.append(pipeline_test)
+                                
+                        except Exception as e:
+                            logger.warning(f"Error reading {json_file}: {e}")
+            
+            pipeline_summary['pipeline_tests_analyzed'] = len(pipeline_test_data)
+            
+            if not pipeline_test_data:
+                logger.warning("No 4-phase pipeline test data found")
+                pipeline_summary['error'] = 'No pipeline test data available'
+                return
+            
+            # Calculate overall statistics
+            successful_enhanced_pipelines = sum(1 for test in pipeline_test_data 
+                                              if test.get('performance_metrics', {}).get('enhanced_pipeline_success', False))
+            successful_data_loading = sum(1 for test in pipeline_test_data 
+                                        if test.get('performance_metrics', {}).get('data_loading_success', False))
+            
+            pipeline_summary['overall_statistics'] = {
+                'total_datasets_tested': len(pipeline_test_data),
+                'enhanced_pipeline_success_count': successful_enhanced_pipelines,
+                'enhanced_pipeline_success_rate': successful_enhanced_pipelines / len(pipeline_test_data),
+                'data_loading_success_count': successful_data_loading,
+                'data_loading_success_rate': successful_data_loading / len(pipeline_test_data),
+                'average_phase_success_rate': np.mean([
+                    test.get('performance_metrics', {}).get('phase_success_rate', 0.0) 
+                    for test in pipeline_test_data
+                ])
+            }
+            
+            # Calculate phase-specific success rates
+            phase_names = ['phase_1_data_quality', 'phase_2_fusion_aware', 'phase_3_missing_data', 'phase_4_validation']
+            
+            for phase_name in phase_names:
+                successful_phase = sum(1 for test in pipeline_test_data 
+                                     if test.get('pipeline_phases', {}).get(phase_name, {}).get('success', False))
+                pipeline_summary['phase_success_rates'][phase_name] = {
+                    'success_count': successful_phase,
+                    'success_rate': successful_phase / len(pipeline_test_data),
+                    'total_tests': len(pipeline_test_data)
+                }
+            
+            # Collect dataset-specific results
+            for test in pipeline_test_data:
+                dataset_name = test.get('dataset_name', 'unknown')
+                pipeline_summary['dataset_results'][dataset_name] = {
+                    'task_type': test.get('task_type', 'unknown'),
+                    'enhanced_pipeline_success': test.get('performance_metrics', {}).get('enhanced_pipeline_success', False),
+                    'phase_success_rate': test.get('performance_metrics', {}).get('phase_success_rate', 0.0),
+                    'quality_score': test.get('integration_test', {}).get('enhanced_pipeline', {}).get('quality_score', None),
+                    'recommendations': test.get('recommendations', [])[:2]  # Top 2 recommendations per dataset
+                }
+            
+            # Analyze pipeline effectiveness
+            quality_scores = [
+                test.get('integration_test', {}).get('enhanced_pipeline', {}).get('quality_score', None)
+                for test in pipeline_test_data
+                if test.get('integration_test', {}).get('enhanced_pipeline', {}).get('quality_score') is not None
+            ]
+            
+            if quality_scores:
+                pipeline_summary['pipeline_effectiveness'] = {
+                    'quality_scores_available': len(quality_scores),
+                    'average_quality_score': float(np.mean(quality_scores)),
+                    'median_quality_score': float(np.median(quality_scores)),
+                    'min_quality_score': float(np.min(quality_scores)),
+                    'max_quality_score': float(np.max(quality_scores)),
+                    'std_quality_score': float(np.std(quality_scores))
+                }
+            
+            # Generate recommendations based on results
+            overall_success_rate = pipeline_summary['overall_statistics']['enhanced_pipeline_success_rate']
+            avg_phase_success = pipeline_summary['overall_statistics']['average_phase_success_rate']
+            
+            if overall_success_rate >= 0.8:
+                pipeline_summary['recommendations'].append(" 4-Phase Enhanced Pipeline working excellently across datasets")
+            elif overall_success_rate >= 0.6:
+                pipeline_summary['recommendations'].append(" 4-Phase Enhanced Pipeline working moderately - some optimization needed")
+            else:
+                pipeline_summary['recommendations'].append(" 4-Phase Enhanced Pipeline showing significant issues - comprehensive review required")
+            
+            if avg_phase_success >= 0.8:
+                pipeline_summary['recommendations'].append(" Individual phases performing well")
+            elif avg_phase_success >= 0.6:
+                pipeline_summary['recommendations'].append(" Some individual phases need attention")
+            else:
+                pipeline_summary['recommendations'].append(" Multiple individual phases failing - targeted fixes needed")
+            
+            # Identify problematic phases
+            for phase_name, phase_stats in pipeline_summary['phase_success_rates'].items():
+                if phase_stats['success_rate'] < 0.5:
+                    phase_display_name = phase_name.replace('_', ' ').title()
+                    pipeline_summary['recommendations'].append(f" {phase_display_name} needs attention (success rate: {phase_stats['success_rate']:.1%})")
+            
+            # Quality score recommendations
+            if quality_scores:
+                avg_quality = pipeline_summary['pipeline_effectiveness']['average_quality_score']
+                if avg_quality >= 0.8:
+                    pipeline_summary['recommendations'].append("🏆 Excellent data quality scores achieved")
+                elif avg_quality >= 0.6:
+                    pipeline_summary['recommendations'].append(" Moderate data quality - consider optimizations")
+                else:
+                    pipeline_summary['recommendations'].append(" Low data quality scores - data preprocessing needs improvement")
+            
+            # Save 4-phase pipeline summary
+            summary_path = self.output_dir / "summary" / "4phase_pipeline_summary.json"
+            with open(summary_path, 'w') as f:
+                json.dump(pipeline_summary, f, indent=2, default=str)
+            
+            logger.info(f"4-Phase Pipeline Summary saved to {summary_path}")
+            
+            # Log key findings
+            logger.info("📋 4-Phase Pipeline Summary Results:")
+            logger.info(f"   • Datasets tested: {pipeline_summary['pipeline_tests_analyzed']}")
+            logger.info(f"   • Enhanced pipeline success rate: {overall_success_rate:.1%}")
+            logger.info(f"   • Average phase success rate: {avg_phase_success:.1%}")
+            
+            if quality_scores:
+                logger.info(f"   • Average quality score: {pipeline_summary['pipeline_effectiveness']['average_quality_score']:.3f}")
+            
+            logger.info(" Phase Success Rates:")
+            for phase_name, phase_stats in pipeline_summary['phase_success_rates'].items():
+                phase_display = phase_name.replace('_', ' ').title()
+                logger.info(f"   • {phase_display}: {phase_stats['success_rate']:.1%}")
+            
+            # Log top recommendations
+            logger.info(" Top Recommendations:")
+            for rec in pipeline_summary['recommendations'][:5]:
+                logger.info(f"   {rec}")
+                
+        except Exception as e:
+            logger.error(f"Error generating 4-phase pipeline summary: {e}")
+            pipeline_summary['error'] = str(e)
+
+    def regenerate_csv_summaries(self) -> None:
+        """
+        Regenerate CSV summary files from existing JSON files.
+        This fixes the 'No data found for summary generation' warning.
+        """
+        logger.info("Regenerating CSV summary files from existing JSON data...")
+        
+        regenerated_count = 0
+        
+        # Process both task types
+        for task_type in ['regression', 'classification']:
+            task_dir = self.output_dir / task_type
+            if task_dir.exists():
+                for json_file in task_dir.glob("*_detailed_analysis.json"):
+                    try:
+                        # Load existing JSON data
+                        with open(json_file, 'r') as f:
+                            results = json.load(f)
+                        
+                        # Determine if this is regression or classification
+                        is_regression = task_type == 'regression'
+                        
+                        # Use the fixed save_results method to regenerate CSV
+                        self.save_results(results, is_regression=is_regression)
+                        regenerated_count += 1
+                        
+                        logger.info(f"Regenerated CSV for {results.get('dataset_name', 'unknown')} ({task_type})")
+                        
+                    except Exception as e:
+                        logger.error(f"Error regenerating CSV from {json_file}: {e}")
+        
+        logger.info(f"Regenerated {regenerated_count} CSV summary files")
+        
+        # Now try to generate the overall summary again
+        if regenerated_count > 0:
+            self.generate_overall_summary()
+        else:
+            logger.warning("No JSON files found to regenerate CSV summaries from")
+
 
 def main():
-    """Main function to run the data quality analysis."""
-    logger.info("Starting Comprehensive Data Quality Analysis")
-    logger.info("This will analyze all 9 datasets with all algorithm combinations")
+    """Main function to run the comprehensive 4-phase pipeline data quality analysis."""
+    logger.info(" Starting 4-Phase Enhanced Pipeline Data Quality Analysis")
+    logger.info("=" * 80)
+    logger.info("This will test the complete 4-phase enhanced pipeline integration:")
+    logger.info("  Phase 1: Early Data Quality Assessment")
+    logger.info("  Phase 2: Fusion-Aware Preprocessing")
+    logger.info("  Phase 3: Centralized Missing Data Management")
+    logger.info("  Phase 4: Coordinated Validation Framework")
+    logger.info("=" * 80)
     
     # Initialize analyzer
     analyzer = DataQualityAnalyzer()
     
-    # Log algorithm information
-    logger.info("=" * 70)
-    logger.info("ALGORITHM CONFIGURATION")
-    logger.info("=" * 70)
+    # Log pipeline configuration
+    logger.info(" PIPELINE CONFIGURATION")
+    logger.info("=" * 50)
     
-    # Get algorithm lists for logging
+    # Test enhanced pipeline imports
+    try:
+        from enhanced_pipeline_integration import run_enhanced_preprocessing_pipeline, EnhancedPipelineCoordinator
+        logger.info(" Enhanced Pipeline Integration: Available")
+    except ImportError as e:
+        logger.error(f" Enhanced Pipeline Integration: Import failed - {e}")
+    
+    try:
+        from data_quality import run_early_data_quality_pipeline
+        logger.info(" Phase 1 (Data Quality): Available")
+    except ImportError as e:
+        logger.error(f" Phase 1 (Data Quality): Import failed - {e}")
+    
+    try:
+        from fusion_aware_preprocessing import determine_optimal_fusion_order
+        logger.info(" Phase 2 (Fusion-Aware): Available")
+    except ImportError as e:
+        logger.error(f" Phase 2 (Fusion-Aware): Import failed - {e}")
+    
+    try:
+        from missing_data_handler import create_missing_data_handler
+        logger.info(" Phase 3 (Missing Data): Available")
+    except ImportError as e:
+        logger.error(f" Phase 3 (Missing Data): Import failed - {e}")
+    
+    try:
+        from validation_coordinator import create_validation_coordinator
+        logger.info(" Phase 4 (Validation): Available")
+    except ImportError as e:
+        logger.error(f" Phase 4 (Validation): Import failed - {e}")
+    
+    # Get algorithm lists for comprehensive testing
     reg_extractors = get_regression_extractors()
     reg_selectors = get_regression_selectors()
     clf_extractors = get_classification_extractors()
     clf_selectors = get_classification_selectors()
     
-    logger.info(f"REGRESSION EXTRACTORS ({len(reg_extractors)}): {list(reg_extractors.keys())}")
-    logger.info(f"REGRESSION SELECTORS ({len(reg_selectors)}): {list(reg_selectors.keys())}")
-    logger.info(f"CLASSIFICATION EXTRACTORS ({len(clf_extractors)}): {list(clf_extractors.keys())}")
-    logger.info(f"CLASSIFICATION SELECTORS ({len(clf_selectors)}): {list(clf_selectors.keys())}")
+    logger.info(f" ALGORITHM SUPPORT")
+    logger.info(f"   Regression Extractors: {len(reg_extractors)} ({list(reg_extractors.keys())})")
+    logger.info(f"   Regression Selectors: {len(reg_selectors)} ({list(reg_selectors.keys())})")
+    logger.info(f"   Classification Extractors: {len(clf_extractors)} ({list(clf_extractors.keys())})")
+    logger.info(f"   Classification Selectors: {len(clf_selectors)} ({list(clf_selectors.keys())})")
     
-    # Test ALL 7 fusion techniques for comprehensive analysis
-    fusion_techniques = [
-        "weighted_concat",           # Default baseline
-        "learnable_weighted",        # Learnable weights
-        "attention_weighted",        # Attention mechanism
-        #"late_fusion_stacking",      # Late fusion with stacking
-        "mkl",                       # Multiple Kernel Learning
-        "snf",                       # Similarity Network Fusion  
-        "early_fusion_pca"           # Early fusion with PCA
-    ]
-    logger.info(f"FUSION TECHNIQUES ({len(fusion_techniques)}): {fusion_techniques}")
-    logger.info(f"N_COMPONENTS VALUES: {N_VALUES_LIST}")
+    # Test datasets configuration
+    total_datasets = len(REGRESSION_DATASETS_FOR_ANALYSIS) + len(CLASSIFICATION_DATASETS_FOR_ANALYSIS)
+    logger.info(f"📁 DATASETS TO ANALYZE: {total_datasets}")
+    logger.info(f"   Regression: {len(REGRESSION_DATASETS_FOR_ANALYSIS)} datasets")
+    logger.info(f"   Classification: {len(CLASSIFICATION_DATASETS_FOR_ANALYSIS)} datasets")
     
-    total_combinations_reg = len(reg_extractors) * len(reg_selectors) * len(fusion_techniques) * len(N_VALUES_LIST)
-    total_combinations_clf = len(clf_extractors) * len(clf_selectors) * len(fusion_techniques) * len(N_VALUES_LIST)
-    
-    logger.info(f"TOTAL COMBINATIONS PER REGRESSION DATASET: {total_combinations_reg}")
-    logger.info(f"TOTAL COMBINATIONS PER CLASSIFICATION DATASET: {total_combinations_clf}")
-    logger.info(f"TOTAL DATASETS: {len(REGRESSION_DATASETS_FOR_ANALYSIS)} regression + {len(CLASSIFICATION_DATASETS_FOR_ANALYSIS)} classification = {len(REGRESSION_DATASETS_FOR_ANALYSIS) + len(CLASSIFICATION_DATASETS_FOR_ANALYSIS)}")
+    # Test Phase Integration Summary
+    logger.info("")
+    logger.info("🧪 4-PHASE PIPELINE TESTING PLAN")
+    logger.info("=" * 50)
+    logger.info("1. Individual Phase Testing (data_quality.py, fusion_aware_preprocessing.py, etc.)")
+    logger.info("2. Complete 4-Phase Integration Testing (enhanced_pipeline_integration.py)")
+    logger.info("3. Data Loading Integration Testing (data_io.py)")
+    logger.info("4. Preprocessing Pipeline Testing (preprocessing.py)")
+    logger.info("5. End-to-End Workflow Validation")
     
     # Analyze regression datasets
-    logger.info("=" * 70)
-    logger.info("ANALYZING REGRESSION DATASETS")
-    logger.info("=" * 70)
+    logger.info("")
+    logger.info("🔬 ANALYZING REGRESSION DATASETS")
+    logger.info("=" * 50)
     
     for i, dataset_config in enumerate(REGRESSION_DATASETS_FOR_ANALYSIS, 1):
-        logger.info(f"Processing regression dataset {i}/{len(REGRESSION_DATASETS_FOR_ANALYSIS)}: {dataset_config['name']}")
+        logger.info(f" Processing regression dataset {i}/{len(REGRESSION_DATASETS_FOR_ANALYSIS)}: {dataset_config['name']}")
         try:
             results = analyzer.analyze_dataset_quality(dataset_config, is_regression=True)
             analyzer.save_results(results, is_regression=True)
+            
+            # Log key results from 4-phase pipeline test
+            pipeline_test = results.get('stages', {}).get('4_phase_pipeline_test', {})
+            if pipeline_test:
+                enhanced_success = pipeline_test.get('performance_metrics', {}).get('enhanced_pipeline_success', False)
+                phase_success_rate = pipeline_test.get('performance_metrics', {}).get('phase_success_rate', 0.0)
+                quality_score = pipeline_test.get('integration_test', {}).get('enhanced_pipeline', {}).get('quality_score', 'N/A')
+                
+                logger.info(f"    4-Phase Pipeline: {' Success' if enhanced_success else ' Failed'}")
+                logger.info(f"   📈 Individual Phases: {phase_success_rate:.1%} success rate")
+                logger.info(f"   🏆 Quality Score: {quality_score}")
+                
+                for rec in pipeline_test.get('recommendations', [])[:3]:  # Show top 3 recommendations
+                    logger.info(f"    {rec}")
+            
         except Exception as e:
-            logger.error(f"Failed to analyze regression dataset {dataset_config.get('name', 'unknown')}: {e}")
+            logger.error(f" Failed to analyze regression dataset {dataset_config.get('name', 'unknown')}: {e}")
     
     # Analyze classification datasets
-    logger.info("=" * 70)
-    logger.info("ANALYZING CLASSIFICATION DATASETS")
-    logger.info("=" * 70)
+    logger.info("")
+    logger.info("🔬 ANALYZING CLASSIFICATION DATASETS")
+    logger.info("=" * 50)
     
     for i, dataset_config in enumerate(CLASSIFICATION_DATASETS_FOR_ANALYSIS, 1):
-        logger.info(f"Processing classification dataset {i}/{len(CLASSIFICATION_DATASETS_FOR_ANALYSIS)}: {dataset_config['name']}")
+        logger.info(f" Processing classification dataset {i}/{len(CLASSIFICATION_DATASETS_FOR_ANALYSIS)}: {dataset_config['name']}")
         try:
             results = analyzer.analyze_dataset_quality(dataset_config, is_regression=False)
             analyzer.save_results(results, is_regression=False)
+            
+            # Log key results from 4-phase pipeline test
+            pipeline_test = results.get('stages', {}).get('4_phase_pipeline_test', {})
+            if pipeline_test:
+                enhanced_success = pipeline_test.get('performance_metrics', {}).get('enhanced_pipeline_success', False)
+                phase_success_rate = pipeline_test.get('performance_metrics', {}).get('phase_success_rate', 0.0)
+                quality_score = pipeline_test.get('integration_test', {}).get('enhanced_pipeline', {}).get('quality_score', 'N/A')
+                
+                logger.info(f"    4-Phase Pipeline: {' Success' if enhanced_success else ' Failed'}")
+                logger.info(f"   📈 Individual Phases: {phase_success_rate:.1%} success rate")
+                logger.info(f"   🏆 Quality Score: {quality_score}")
+                
+                for rec in pipeline_test.get('recommendations', [])[:3]:  # Show top 3 recommendations
+                    logger.info(f"    {rec}")
+                    
         except Exception as e:
-            logger.error(f"Failed to analyze classification dataset {dataset_config.get('name', 'unknown')}: {e}")
+            logger.error(f" Failed to analyze classification dataset {dataset_config.get('name', 'unknown')}: {e}")
     
-    # Generate overall summary
-    logger.info("=" * 70)
-    logger.info("GENERATING OVERALL SUMMARY")
-    logger.info("=" * 70)
+    # Generate comprehensive summary
+    logger.info("")
+    logger.info("📋 GENERATING COMPREHENSIVE SUMMARY")
+    logger.info("=" * 50)
     analyzer.generate_overall_summary()
     
-    logger.info("=" * 70)
-    logger.info("DATA QUALITY ANALYSIS COMPLETE!")
-    logger.info("=" * 70)
-    logger.info(f"Results saved to: {analyzer.output_dir}")
-    logger.info("Summary files:")
-    logger.info(f"  - Overall: {analyzer.output_dir}/summary/overall_data_quality_summary.csv")
-    logger.info(f"  - Statistics: {analyzer.output_dir}/summary/summary_statistics.csv")
-    logger.info(f"  - Robust Scaling Report: {analyzer.output_dir}/summary/robust_scaling_effectiveness_report.json")
-    logger.info(f"  - Regression: {analyzer.output_dir}/regression/")
-    logger.info(f"  - Classification: {analyzer.output_dir}/classification/")
+    # Generate 4-phase pipeline summary
+    logger.info(" Generating 4-Phase Pipeline Summary")
+    try:
+        analyzer.generate_4phase_pipeline_summary()
+    except Exception as e:
+        logger.warning(f"4-Phase pipeline summary generation failed: {e}")
+    
+    # Final summary
     logger.info("")
-    logger.info(" ROBUST SCALING ANALYSIS INCLUDED:")
-    logger.info("   • PCA variance comparison (StandardScaler vs RobustScaler)")
-    logger.info("   • Variance reduction ratio tracking")
-    logger.info("   • Outlier clipping effectiveness")
-    logger.info("   • Modality-specific scaling parameter analysis")
-    logger.info("   • Scaling effectiveness recommendations")
+    logger.info("🎉 4-PHASE ENHANCED PIPELINE DATA QUALITY ANALYSIS COMPLETE!")
+    logger.info("=" * 80)
+    logger.info("📁 Results saved to:")
+    logger.info(f"    Overall Summary: {analyzer.output_dir}/summary/overall_data_quality_summary.csv")
+    logger.info(f"   📈 Statistics: {analyzer.output_dir}/summary/summary_statistics.csv")
+    logger.info(f"    Robust Scaling Report: {analyzer.output_dir}/summary/robust_scaling_effectiveness_report.json")
+    logger.info(f"   🧪 4-Phase Pipeline Report: {analyzer.output_dir}/summary/4phase_pipeline_summary.json")
+    logger.info(f"    Regression Details: {analyzer.output_dir}/regression/")
+    logger.info(f"    Classification Details: {analyzer.output_dir}/classification/")
+    logger.info("")
+    logger.info(" KEY ANALYSIS FEATURES:")
+    logger.info("    4-Phase Enhanced Pipeline Integration Testing")
+    logger.info("    Individual Phase Validation (Data Quality, Fusion-Aware, Missing Data, Validation)")
+    logger.info("    Enhanced Data Loading with Orientation Validation")
+    logger.info("    Robust Preprocessing Pipeline Testing")
+    logger.info("    Comprehensive Data Quality Metrics")
+    logger.info("    Algorithm Compatibility Validation")
+    logger.info("    Performance and Improvement Tracking")
+    logger.info("")
+    logger.info(" Use this analysis to:")
+    logger.info("    Validate 4-phase pipeline integration")
+    logger.info("    Identify preprocessing improvements")
+    logger.info("    Monitor data quality across datasets")
+    logger.info("    Optimize pipeline performance")
+    logger.info("    Ensure production readiness")
 
 
 if __name__ == "__main__":

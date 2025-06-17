@@ -64,9 +64,9 @@ integration_techniques = ["weighted_concat"]  # Only use working method
 ## Risk Assessment
 
 ### Low Risk Changes:
-✅ **Disabling broken methods**: No downside, only removes failures  
-✅ **Increasing feature retention**: More information is better for genomic data  
-✅ **Robust scaling**: Standard practice for multi-modal data  
+ **Disabling broken methods**: No downside, only removes failures  
+ **Increasing feature retention**: More information is better for genomic data  
+ **Robust scaling**: Standard practice for multi-modal data  
 
 ### Monitoring Points:
 - Watch for memory usage with larger feature sets

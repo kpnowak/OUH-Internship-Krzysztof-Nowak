@@ -186,7 +186,7 @@ def main():
     if all(results):
         print("🎉 All tests passed! Implementation is working correctly.")
     else:
-        print("⚠️  Some tests failed. Check the implementation.")
+        print("  Some tests failed. Check the implementation.")
 
 if __name__ == "__main__":
     main() 

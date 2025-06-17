@@ -176,11 +176,11 @@ print("Optimal threshold:", threshold_analysis['optimal_threshold'])
 5. **Edge cases** (single-value features, all-NaN features)
 
 ### Expected Test Results
-- ✅ Zero NaN values in statistical outputs
-- ✅ Appropriate variance thresholds selected automatically
-- ✅ Problematic features identified and removed
-- ✅ Stable features pass all numerical checks
-- ✅ Preprocessing completes successfully on all data types
+-  Zero NaN values in statistical outputs
+-  Appropriate variance thresholds selected automatically
+-  Problematic features identified and removed
+-  Stable features pass all numerical checks
+-  Preprocessing completes successfully on all data types
 
 ## Technical Details
 

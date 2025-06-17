@@ -31,7 +31,7 @@ def test_sarcoma_loading():
                 break
         
         if not sarcoma_config:
-            logger.error("❌ Sarcoma dataset not found in REGRESSION_DATASETS")
+            logger.error(" Sarcoma dataset not found in REGRESSION_DATASETS")
             return False
         
         logger.info("Testing Sarcoma dataset loading...")
@@ -46,25 +46,25 @@ def test_sarcoma_loading():
         )
         
         if modalities and len(common_ids) > 0:
-            logger.info(f"✅ Sarcoma loading successful: {len(common_ids)} samples, {list(modalities.keys())} modalities")
+            logger.info(f" Sarcoma loading successful: {len(common_ids)} samples, {list(modalities.keys())} modalities")
             
             # Check that y is numeric
             import numpy as np
             if np.issubdtype(y.dtype, np.number):
-                logger.info(f"✅ Outcome data is properly numeric: dtype={y.dtype}")
+                logger.info(f" Outcome data is properly numeric: dtype={y.dtype}")
                 logger.info(f"   - Mean: {y.mean():.3f}")
                 logger.info(f"   - Std: {y.std():.3f}")
                 logger.info(f"   - Range: [{y.min():.3f}, {y.max():.3f}]")
                 return True
             else:
-                logger.error(f"❌ Outcome data is not numeric: dtype={y.dtype}")
+                logger.error(f" Outcome data is not numeric: dtype={y.dtype}")
                 return False
         else:
-            logger.warning("❌ Sarcoma loading returned empty results")
+            logger.warning(" Sarcoma loading returned empty results")
             return False
             
     except Exception as e:
-        logger.error(f"❌ Sarcoma loading failed: {str(e)}")
+        logger.error(f" Sarcoma loading failed: {str(e)}")
         import traceback
         traceback.print_exc()
         return False
@@ -83,7 +83,7 @@ def test_sarcoma_cli_processing():
                 break
         
         if not sarcoma_config:
-            logger.error("❌ Sarcoma dataset not found in REGRESSION_DATASETS")
+            logger.error(" Sarcoma dataset not found in REGRESSION_DATASETS")
             return False
         
         logger.info("Testing Sarcoma dataset processing through CLI...")
@@ -92,7 +92,7 @@ def test_sarcoma_cli_processing():
         result = process_dataset(sarcoma_config, is_regression=True)
         
         if result:
-            logger.info(f"✅ Sarcoma CLI processing successful")
+            logger.info(f" Sarcoma CLI processing successful")
             logger.info(f"   - Dataset name: {result['name']}")
             logger.info(f"   - Modalities: {list(result['modalities'].keys())}")
             logger.info(f"   - Common IDs: {len(result['common_ids'])}")
@@ -101,17 +101,17 @@ def test_sarcoma_cli_processing():
             # Check that y_aligned is numeric
             import numpy as np
             if np.issubdtype(result['y_aligned'].dtype, np.number):
-                logger.info(f"✅ CLI target data is properly numeric")
+                logger.info(f" CLI target data is properly numeric")
                 return True
             else:
-                logger.error(f"❌ CLI target data is not numeric: {result['y_aligned'].dtype}")
+                logger.error(f" CLI target data is not numeric: {result['y_aligned'].dtype}")
                 return False
         else:
-            logger.error("❌ Sarcoma CLI processing returned None")
+            logger.error(" Sarcoma CLI processing returned None")
             return False
             
     except Exception as e:
-        logger.error(f"❌ Sarcoma CLI processing failed: {str(e)}")
+        logger.error(f" Sarcoma CLI processing failed: {str(e)}")
         import traceback
         traceback.print_exc()
         return False
@@ -135,11 +135,11 @@ def main():
         try:
             if test_func():
                 passed += 1
-                logger.info(f"✅ {test_name} PASSED")
+                logger.info(f" {test_name} PASSED")
             else:
-                logger.error(f"❌ {test_name} FAILED")
+                logger.error(f" {test_name} FAILED")
         except Exception as e:
-            logger.error(f"❌ {test_name} FAILED with exception: {str(e)}")
+            logger.error(f" {test_name} FAILED with exception: {str(e)}")
     
     logger.info("\n" + "=" * 60)
     logger.info(f"SARCOMA TEST RESULTS: {passed}/{total} tests passed")
@@ -147,7 +147,7 @@ def main():
     if passed == total:
         logger.info("🎉 ALL SARCOMA TESTS PASSED - Fixes are working correctly!")
     else:
-        logger.warning(f"⚠️  {total - passed} Sarcoma tests failed - Some issues may remain")
+        logger.warning(f"  {total - passed} Sarcoma tests failed - Some issues may remain")
     
     logger.info("=" * 60)
     

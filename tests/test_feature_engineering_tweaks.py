@@ -429,7 +429,7 @@ def main():
         print("  - Sparse PLS-DA (32 components) for better MCC in classification")
         print("  - Kernel PCA RBF (64 components) for higher R² in regression")
     else:
-        print("⚠️  Some tests failed. Please check the implementation.")
+        print("  Some tests failed. Please check the implementation.")
     
     return passed == len(results)
 

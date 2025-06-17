@@ -85,20 +85,20 @@ def test_max_value_extraction():
             
             # Handle NaN comparison
             if pd.isna(expected) and pd.isna(result):
-                logger.info(f"✅ Test {i}: {description} - PASSED")
+                logger.info(f" Test {i}: {description} - PASSED")
                 passed += 1
             elif expected == result:
-                logger.info(f"✅ Test {i}: {description} - PASSED")
+                logger.info(f" Test {i}: {description} - PASSED")
                 passed += 1
             else:
-                logger.error(f"❌ Test {i}: {description} - FAILED")
+                logger.error(f" Test {i}: {description} - FAILED")
                 logger.error(f"   Input: {input_val}")
                 logger.error(f"   Expected: {expected}")
                 logger.error(f"   Got: {result}")
                 failed += 1
                 
         except Exception as e:
-            logger.error(f"❌ Test {i}: {description} - ERROR: {str(e)}")
+            logger.error(f" Test {i}: {description} - ERROR: {str(e)}")
             failed += 1
     
     logger.info(f"\n=== TEST RESULTS ===")
@@ -110,7 +110,7 @@ def test_max_value_extraction():
         logger.info("🎉 ALL TESTS PASSED!")
         return True
     else:
-        logger.error(f"❌ {failed} tests failed")
+        logger.error(f" {failed} tests failed")
         return False
 
 def test_sarcoma_specific_values():
@@ -217,10 +217,10 @@ def test_sarcoma_specific_values():
         
         for i, (original, expected, result) in enumerate(zip(sarcoma_values, expected_max_values, results)):
             if abs(result - expected) < 0.001:  # Allow for floating point precision
-                logger.info(f"✅ {original} -> {result} (expected {expected})")
+                logger.info(f" {original} -> {result} (expected {expected})")
                 passed += 1
             else:
-                logger.error(f"❌ {original} -> {result} (expected {expected})")
+                logger.error(f" {original} -> {result} (expected {expected})")
                 failed += 1
         
         logger.info(f"\nSarcoma-specific tests: {passed} passed, {failed} failed")
@@ -247,7 +247,7 @@ def main():
         logger.info("🎉 ALL TESTS PASSED - Maximum value extraction is working correctly!")
         return True
     else:
-        logger.error("❌ Some tests failed - Please check the implementation")
+        logger.error(" Some tests failed - Please check the implementation")
         return False
 
 if __name__ == "__main__":

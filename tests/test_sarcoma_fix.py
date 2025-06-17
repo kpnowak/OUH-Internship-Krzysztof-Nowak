@@ -41,7 +41,7 @@ def test_sarcoma_loading():
             task_type='regression'
         )
         
-        print(f"\n✅ SUCCESS: Dataset loaded successfully!")
+        print(f"\n SUCCESS: Dataset loaded successfully!")
         print(f"   - Number of samples: {len(common_ids)}")
         print(f"   - Modalities loaded: {list(modalities.keys())}")
         print(f"   - Outcome data type: {y.dtype}")
@@ -55,7 +55,7 @@ def test_sarcoma_loading():
         return True
         
     except Exception as e:
-        print(f"\n❌ ERROR: {e}")
+        print(f"\n ERROR: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -122,5 +122,5 @@ if __name__ == "__main__":
     if success:
         print("🎉 ALL TESTS PASSED - Sarcoma fix is working correctly!")
     else:
-        print("❌ TESTS FAILED - There may be an issue with the fix")
+        print(" TESTS FAILED - There may be an issue with the fix")
     print("=" * 60) 

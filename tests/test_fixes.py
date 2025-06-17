@@ -22,7 +22,7 @@ def test_config_loading():
     try:
         from config import REGRESSION_DATASETS, CLASSIFICATION_DATASETS, WARNING_SUPPRESSION_CONFIG
         
-        logger.info("✅ Configuration loaded successfully")
+        logger.info(" Configuration loaded successfully")
         logger.info(f"   - Regression datasets: {len(REGRESSION_DATASETS)}")
         logger.info(f"   - Classification datasets: {len(CLASSIFICATION_DATASETS)}")
         logger.info(f"   - Warning suppression enabled: {WARNING_SUPPRESSION_CONFIG.get('suppress_sklearn_warnings', False)}")
@@ -30,13 +30,13 @@ def test_config_loading():
         # Check if Sarcoma is now included
         reg_names = [ds['name'] for ds in REGRESSION_DATASETS]
         if 'Sarcoma' in reg_names:
-            logger.info("   - ✅ Sarcoma dataset is now included in regression datasets")
+            logger.info("   -  Sarcoma dataset is now included in regression datasets")
         else:
-            logger.warning("   - ❌ Sarcoma dataset is still missing from regression datasets")
+            logger.warning("   -  Sarcoma dataset is still missing from regression datasets")
         
         return True
     except Exception as e:
-        logger.error(f"❌ Configuration loading failed: {str(e)}")
+        logger.error(f" Configuration loading failed: {str(e)}")
         return False
 
 def test_data_loading():
@@ -54,14 +54,14 @@ def test_data_loading():
         )
         
         if modalities and len(common_ids) > 0:
-            logger.info(f"✅ Data loading successful: {len(common_ids)} samples, {list(modalities.keys())} modalities")
+            logger.info(f" Data loading successful: {len(common_ids)} samples, {list(modalities.keys())} modalities")
             return True
         else:
-            logger.warning("❌ Data loading returned empty results")
+            logger.warning(" Data loading returned empty results")
             return False
             
     except Exception as e:
-        logger.error(f"❌ Data loading failed: {str(e)}")
+        logger.error(f" Data loading failed: {str(e)}")
         return False
 
 def test_mad_analysis():
@@ -75,14 +75,14 @@ def test_mad_analysis():
         mad_value = calculate_mad(test_data, axis=1)
         
         if isinstance(mad_value, (int, float)) and mad_value >= 0:
-            logger.info(f"✅ MAD calculation successful: {mad_value:.6f}")
+            logger.info(f" MAD calculation successful: {mad_value:.6f}")
             return True
         else:
-            logger.warning(f"❌ MAD calculation returned unexpected value: {mad_value}")
+            logger.warning(f" MAD calculation returned unexpected value: {mad_value}")
             return False
             
     except Exception as e:
-        logger.error(f"❌ MAD calculation failed: {str(e)}")
+        logger.error(f" MAD calculation failed: {str(e)}")
         return False
 
 def main():
@@ -105,11 +105,11 @@ def main():
         try:
             if test_func():
                 passed += 1
-                logger.info(f"✅ {test_name} PASSED")
+                logger.info(f" {test_name} PASSED")
             else:
-                logger.error(f"❌ {test_name} FAILED")
+                logger.error(f" {test_name} FAILED")
         except Exception as e:
-            logger.error(f"❌ {test_name} FAILED with exception: {str(e)}")
+            logger.error(f" {test_name} FAILED with exception: {str(e)}")
     
     logger.info("\n" + "=" * 60)
     logger.info(f"TEST RESULTS: {passed}/{total} tests passed")
@@ -117,7 +117,7 @@ def main():
     if passed == total:
         logger.info("🎉 ALL TESTS PASSED - Fixes are working correctly!")
     else:
-        logger.warning(f"⚠️  {total - passed} tests failed - Some issues may remain")
+        logger.warning(f"  {total - passed} tests failed - Some issues may remain")
     
     logger.info("=" * 60)
     

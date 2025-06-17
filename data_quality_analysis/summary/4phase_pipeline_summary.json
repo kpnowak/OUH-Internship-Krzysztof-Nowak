@@ -1,0 +1,79 @@
+{
+  "summary_timestamp": "2025-06-17T18:37:35.414010",
+  "pipeline_tests_analyzed": 3,
+  "overall_statistics": {
+    "total_datasets_tested": 3,
+    "enhanced_pipeline_success_count": 3,
+    "enhanced_pipeline_success_rate": 1.0,
+    "data_loading_success_count": 3,
+    "data_loading_success_rate": 1.0,
+    "average_phase_success_rate": 1.0
+  },
+  "phase_success_rates": {
+    "phase_1_data_quality": {
+      "success_count": 3,
+      "success_rate": 1.0,
+      "total_tests": 3
+    },
+    "phase_2_fusion_aware": {
+      "success_count": 3,
+      "success_rate": 1.0,
+      "total_tests": 3
+    },
+    "phase_3_missing_data": {
+      "success_count": 3,
+      "success_rate": 1.0,
+      "total_tests": 3
+    },
+    "phase_4_validation": {
+      "success_count": 3,
+      "success_rate": 1.0,
+      "total_tests": 3
+    }
+  },
+  "dataset_results": {
+    "AML": {
+      "task_type": "regression",
+      "enhanced_pipeline_success": true,
+      "phase_success_rate": 1.0,
+      "quality_score": 0.8,
+      "recommendations": [
+        " 4-Phase Enhanced Pipeline working correctly",
+        " Most individual phases working correctly"
+      ]
+    },
+    "Breast": {
+      "task_type": "classification",
+      "enhanced_pipeline_success": true,
+      "phase_success_rate": 1.0,
+      "quality_score": 0.8,
+      "recommendations": [
+        " 4-Phase Enhanced Pipeline working correctly",
+        " Most individual phases working correctly"
+      ]
+    },
+    "Colon": {
+      "task_type": "classification",
+      "enhanced_pipeline_success": true,
+      "phase_success_rate": 1.0,
+      "quality_score": 0.8,
+      "recommendations": [
+        " 4-Phase Enhanced Pipeline working correctly",
+        " Most individual phases working correctly"
+      ]
+    }
+  },
+  "recommendations": [
+    " 4-Phase Enhanced Pipeline working excellently across datasets",
+    " Individual phases performing well",
+    "\ud83c\udfc6 Excellent data quality scores achieved"
+  ],
+  "pipeline_effectiveness": {
+    "quality_scores_available": 3,
+    "average_quality_score": 0.8000000000000002,
+    "median_quality_score": 0.8,
+    "min_quality_score": 0.8,
+    "max_quality_score": 0.8,
+    "std_quality_score": 1.1102230246251565e-16
+  }
+}

@@ -107,4 +107,4 @@ if __name__ == "__main__":
         logger.info("🎉 All tests passed!")
         logger.info("Usage: python cli.py --fusion-upgrades")
     else:
-        logger.error("❌ Some tests failed")
+        logger.error(" Some tests failed")

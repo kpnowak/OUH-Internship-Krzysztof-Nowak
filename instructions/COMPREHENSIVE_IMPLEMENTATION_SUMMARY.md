@@ -8,13 +8,13 @@ All 7 steps have been successfully implemented and tested:
 
 | Step | Feature | Status | Location |
 |------|---------|--------|----------|
-| 1 | Dynamic label re-mapping | ✅ Complete | `preprocessing.py` |
-| 2 | Dynamic splitter | ✅ Complete | `cv.py` |
-| 3 | Safe sampler | ✅ Complete | `samplers.py` |
-| 4 | Top-level sampler class | ✅ Complete | `cv.py` |
-| 5 | Fold guard | ✅ Complete | `cv.py` |
-| 6 | Target-transform registry | ✅ Complete | `models.py` |
-| 7 | Global evaluation sanity | ✅ Complete | `cv.py` |
+| 1 | Dynamic label re-mapping |  Complete | `preprocessing.py` |
+| 2 | Dynamic splitter |  Complete | `cv.py` |
+| 3 | Safe sampler |  Complete | `samplers.py` |
+| 4 | Top-level sampler class |  Complete | `cv.py` |
+| 5 | Fold guard |  Complete | `cv.py` |
+| 6 | Target-transform registry |  Complete | `models.py` |
+| 7 | Global evaluation sanity |  Complete | `cv.py` |
 
 ## Detailed Implementation
 

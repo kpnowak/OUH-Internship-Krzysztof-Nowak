@@ -33,11 +33,11 @@ class Colors:
 def print_status(message, status="INFO"):
     """Print colored status messages."""
     if status == "SUCCESS":
-        print(f"{Colors.GREEN}✅ {message}{Colors.END}")
+        print(f"{Colors.GREEN} {message}{Colors.END}")
     elif status == "ERROR":
-        print(f"{Colors.RED}❌ {message}{Colors.END}")
+        print(f"{Colors.RED} {message}{Colors.END}")
     elif status == "WARNING":
-        print(f"{Colors.YELLOW}⚠️  {message}{Colors.END}")
+        print(f"{Colors.YELLOW}  {message}{Colors.END}")
     elif status == "INFO":
         print(f"{Colors.BLUE}ℹ️  {message}{Colors.END}")
     else:

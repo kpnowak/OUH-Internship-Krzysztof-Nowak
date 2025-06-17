@@ -175,7 +175,7 @@ def main():
     if passed == len(results):
         print("🎉 All tests passed! Class imbalance fixes are working correctly.")
     else:
-        print("⚠️  Some tests failed. Please check the implementation.")
+        print("  Some tests failed. Please check the implementation.")
     
     return passed == len(results)
 

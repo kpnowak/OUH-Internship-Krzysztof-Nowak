@@ -67,10 +67,10 @@ Implemented intelligent warning logic that:
 ```
 
 ### Verification Results
-✅ **Multiple Model Instances Test**: Only 1 warning logged across 5 different model instances for the same dataset  
-✅ **Different Datasets Test**: Each dataset can warn independently with its own tracking key  
-✅ **Functionality Preserved**: All models train successfully without NaN values  
-✅ **Log Clarity**: Dramatic reduction in warning spam while maintaining important information  
+ **Multiple Model Instances Test**: Only 1 warning logged across 5 different model instances for the same dataset  
+ **Different Datasets Test**: Each dataset can warn independently with its own tracking key  
+ **Functionality Preserved**: All models train successfully without NaN values  
+ **Log Clarity**: Dramatic reduction in warning spam while maintaining important information  
 
 ## Impact
 - **Improved Log Readability**: Logs are now clean and focused on actionable issues

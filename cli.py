@@ -10,6 +10,7 @@ import argparse
 from typing import Dict, List, Optional, Any
 import logging
 import numpy as np
+import pandas as pd
 
 # Local imports
 from config import (
@@ -32,6 +33,8 @@ from logging_utils import (
     log_dataset_preparation, log_model_training_info, log_data_save_info, log_plot_save_info,
     log_timing_summary
 )
+# Import the enhanced 4-phase pipeline integration
+from enhanced_pipeline_integration import run_enhanced_preprocessing_pipeline
 
 # Remove any existing handlers
 for handler in logging.root.handlers[:]:
@@ -118,38 +121,117 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
         
 
         
-        # Call the enhanced preprocessing function that includes all 6 priority fixes
-        try:
-            modalities_data, y_aligned, common_ids = load_and_preprocess_data_enhanced(
-                ds_name.lower(), 
-                modality_short_names, 
-                outcome_col, 
-                task_type,
-                parallel=True,
-                use_cache=True
-            )
-            logger.info(f"Enhanced preprocessing completed successfully for {ds_name}")
-        except Exception as e:
-            logger.warning(f"Enhanced preprocessing failed for {ds_name}: {str(e)}")
-            logger.info(f"Falling back to standard preprocessing for {ds_name}")
-            # Fallback to standard preprocessing for backward compatibility
-            modalities_data, y_aligned, common_ids = load_dataset(
-                ds_name.lower(), 
-                modality_short_names, 
-                outcome_col, 
-                task_type,
-                parallel=True,
-                use_cache=True
-            )
+        # Load raw data first
+        raw_modalities, y_raw, common_ids = load_dataset(
+            ds_name.lower(), 
+            modality_short_names, 
+            outcome_col, 
+            task_type,
+            parallel=True,
+            use_cache=True
+        )
         
-        # Check if loading was successful
-        if modalities_data is None or len(common_ids) == 0:
+        if raw_modalities is None or len(common_ids) == 0:
+            logger.warning(f"Error: Failed to load raw dataset {ds_name}")
+            log_dataset_preparation(ds_name, {}, [], (), success=False)
+            return None
+        
+        # Convert to enhanced pipeline format: Dict[str, Tuple[np.ndarray, List[str]]]
+        modality_data_dict = {}
+        for modality_name, modality_df in raw_modalities.items():
+            # Convert DataFrame to numpy array (transpose to get samples x features)
+            X = modality_df.T.values  # modality_df is features x samples
+            modality_data_dict[modality_name] = (X, common_ids)
+        
+        # Apply the NEW 4-phase enhanced preprocessing pipeline
+        try:
+            # Determine optimal fusion method based on task type
+            fusion_method = "snf" if task_type == "classification" else "weighted_concat"
+            
+            modalities_data, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipeline(
+                modality_data_dict=modality_data_dict,
+                y=y_raw.values,
+                fusion_method=fusion_method,
+                task_type=task_type,
+                dataset_name=ds_name,
+                enable_early_quality_check=True,
+                enable_fusion_aware_order=True,
+                enable_centralized_missing_data=True,
+                enable_coordinated_validation=True
+            )
+            
+            logger.info(f" 4-Phase Enhanced Pipeline completed successfully for {ds_name}")
+            logger.info(f" Quality Score: {pipeline_metadata.get('quality_score', 'N/A')}")
+            logger.info(f" Phases Enabled: {pipeline_metadata.get('phases_enabled', {})}")
+            
+        except Exception as e:
+            logger.warning(f"4-Phase Enhanced Pipeline failed for {ds_name}: {str(e)}")
+            logger.info(f"Falling back to standard preprocessing for {ds_name}")
+            
+            # Fallback to robust biomedical preprocessing
+            try:
+                from preprocessing import robust_biomedical_preprocessing_pipeline
+                
+                processed_modalities = {}
+                for modality_name, (X, sample_ids) in modality_data_dict.items():
+                    # Determine modality type
+                    if 'exp' in modality_name.lower():
+                        modality_type = 'gene_expression'
+                    elif 'mirna' in modality_name.lower():
+                        modality_type = 'mirna'
+                    elif 'methy' in modality_name.lower():
+                        modality_type = 'methylation'
+                    else:
+                        modality_type = 'unknown'
+                    
+                    # Apply robust preprocessing
+                    X_processed, transformers, report = robust_biomedical_preprocessing_pipeline(
+                        X, modality_type=modality_type
+                    )
+                    processed_modalities[modality_name] = X_processed
+                    logger.info(f"Fallback preprocessing for {modality_name}: {X.shape} -> {X_processed.shape}")
+                
+                # Align targets
+                n_samples = list(processed_modalities.values())[0].shape[0]
+                y_aligned = y_aligned[:n_samples] if len(y_aligned) >= n_samples else y_aligned
+                modalities_data = processed_modalities
+                
+                logger.info(f"Fallback robust preprocessing completed for {ds_name}")
+            except Exception as e2:
+                logger.error(f"Both enhanced and fallback preprocessing failed for {ds_name}: {str(e2)}")
+                # Ultimate fallback to raw data
+                modalities_data = raw_modalities
+                y_aligned = y_raw.values
+        
+        # Check if loading was successful  
+        if modalities_data is None:
             logger.warning(f"Error: Failed to load dataset {ds_name}")
             log_dataset_preparation(ds_name, {}, [], (), success=False)
             return None
-            
-        # Data is already in the correct format
-        modalities = modalities_data
+        
+        # Convert processed data back to DataFrame format for compatibility
+        modalities = {}
+        if isinstance(modalities_data, dict):
+            for modality_name, processed_array in modalities_data.items():
+                # Convert back to DataFrame format (features x samples)
+                if isinstance(processed_array, np.ndarray):
+                    # Create feature names and sample IDs for the processed data
+                    n_samples, n_features = processed_array.shape
+                    feature_names = [f"feature_{i}" for i in range(n_features)]
+                    sample_ids = common_ids[:n_samples] if len(common_ids) >= n_samples else [f"sample_{i}" for i in range(n_samples)]
+                    
+                    # Create DataFrame (features x samples to match expected format)
+                    modalities[modality_name] = pd.DataFrame(
+                        processed_array.T,  # Transpose: samples x features -> features x samples
+                        index=feature_names,
+                        columns=sample_ids
+                    )
+                else:
+                    # Already in correct format
+                    modalities[modality_name] = processed_array
+        else:
+            logger.error(f"Unexpected modalities_data format: {type(modalities_data)}")
+            return None
         
         # Convert pandas Series to numpy array for compatibility with existing code
         if hasattr(y_aligned, 'values'):

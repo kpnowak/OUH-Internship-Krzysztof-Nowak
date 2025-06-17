@@ -218,8 +218,8 @@ print(f"Sparsity: {sparsity_report['initial_sparsity']:.1%} -> {sparsity_report[
 
 ### Expected Results
 ```
-🎯 Advanced sparse preprocessing: 43.9% -> 25.0% sparsity (18.9% improvement)
-✅ miRNA sparsity target achieved: 18.9% reduction (target: 15.0%)
+ Advanced sparse preprocessing: 43.9% -> 25.0% sparsity (18.9% improvement)
+ miRNA sparsity target achieved: 18.9% reduction (target: 15.0%)
 Features: 507 -> 234 (273 removed)
 ```
 

@@ -281,10 +281,10 @@ def main():
         
         logger.info("=" * 60)
         logger.info("🎉 ALL TESTS PASSED! Enhanced preprocessing pipeline is working correctly.")
-        logger.info("✅ All 6 priority fixes have been successfully implemented and validated.")
+        logger.info(" All 6 priority fixes have been successfully implemented and validated.")
         
     except Exception as e:
-        logger.error(f"❌ Test failed: {e}")
+        logger.error(f" Test failed: {e}")
         raise
 
 if __name__ == "__main__":

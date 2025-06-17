@@ -2616,88 +2616,6 @@ def transform_selector_classification(X, selected_features):
     except Exception as e:
         logger.warning(f"Transform selector classification failed: {str(e)}")
         return None
-# Cache configuration
-CACHE_CONFIG = {
-    "selector_regression": {"maxsize": 64, "maxmemory_mb": 500},
-    "selector_classification": {"maxsize": 64, "maxmemory_mb": 500},
-    "extractor_regression": {"maxsize": 64, "maxmemory_mb": 500},
-    "extractor_classification": {"maxsize": 64, "maxmemory_mb": 500}
-}
-
-def validate_and_fix_shape_mismatch(X, y, name="data", fold_idx=None, allow_truncation=True):
-    """Validate and fix shape mismatches between X and y."""
-    if X is None or y is None:
-        return None, None
-    if X.shape[0] != len(y):
-        if allow_truncation:
-            min_samples = min(X.shape[0], len(y))
-            logger.warning(f"Shape mismatch in {name}: X={X.shape}, y={len(y)}, truncating to {min_samples}")
-            return X[:min_samples], y[:min_samples]
-        else:
-            logger.error(f"Shape mismatch in {name}: X={X.shape}, y={len(y)}, truncation disabled")
-            return None, None
-    return X, y
-
-def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_name=None, fold_idx=0):
-    """Cached version of fit_transform for regression extractors."""
-    extractor_name = extractor.__class__.__name__
-    key = _generate_cache_key(ds_name, fold_idx, extractor_name, "ext_reg", n_components, X.shape if X is not None else None)
-    cached_result = _extractor_cache["ext_reg"].get(key)
-    if cached_result is not None:
-        return cached_result
-    try:
-        X_arr = np.asarray(X)
-        y_arr = np.asarray(y) if y is not None else None
-        X_arr = np.nan_to_num(X_arr, nan=0.0)
-        if y_arr is not None:
-            X_arr, y_arr = validate_and_fix_shape_mismatch(X_arr, y_arr, name=f"{ds_name if ds_name else 'unknown'} regression extractor data", fold_idx=fold_idx, allow_truncation=False)
-            if X_arr is None or y_arr is None:
-                logger.warning(f"Data alignment failure in extractor for {ds_name}")
-                return None, None
-        if hasattr(extractor, "n_components"):
-            max_components = min(X_arr.shape[0], X_arr.shape[1])
-            effective_components = min(n_components, max_components)
-            extractor.n_components = effective_components
-        if y_arr is not None and hasattr(extractor, "fit") and "y" in extractor.fit.__code__.co_varnames:
-            fitted_extractor = copy.deepcopy(extractor)
-            fitted_extractor.fit(X_arr, y_arr)
-            X_transformed = fitted_extractor.transform(X_arr)
-        else:
-            fitted_extractor = copy.deepcopy(extractor)
-            fitted_extractor.fit(X_arr)
-            X_transformed = fitted_extractor.transform(X_arr)
-        result = (fitted_extractor, X_transformed)
-        _extractor_cache["ext_reg"].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, "nbytes") else X_transformed.size * 8)
-        return result
-    except Exception as e:
-        logger.warning(f"Extractor regression failed for {ds_name}: {str(e)}")
-        return None, None
-
-
-
-def transform_extractor_regression(X, fitted_extractor):
-    """Transform data using a fitted regression extractor."""
-    try:
-        if fitted_extractor is None:
-            return None
-        X_arr = np.asarray(X)
-        X_arr = np.nan_to_num(X_arr, nan=0.0)
-        return fitted_extractor.transform(X_arr)
-    except Exception as e:
-        logger.warning(f"Transform extractor regression failed: {str(e)}")
-        return None
-
-def transform_extractor_classification(X, fitted_extractor):
-    """Transform data using a fitted classification extractor."""
-    try:
-        if fitted_extractor is None:
-            return None
-        X_arr = np.asarray(X)
-        X_arr = np.nan_to_num(X_arr, nan=0.0)
-        return fitted_extractor.transform(X_arr)
-    except Exception as e:
-        logger.warning(f"Transform extractor classification failed: {str(e)}")
-        return None
 
 def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, ds_name=None, modality_name=None, fold_idx=0):
     """Cached version of fit_transform for classification selectors."""
@@ -2839,9 +2757,18 @@ def build_model(name, task):
     model object
         Configured model instance
     """
+    from sklearn.compose import TransformedTargetRegressor
+    from sklearn.preprocessing import PowerTransformer
+    
     _MODEL = {
-        "LinearRegression": lambda: LinearRegression(),
-        "ElasticNet": lambda: ElasticNet(random_state=42, max_iter=2000),
+        "LinearRegression": lambda: TransformedTargetRegressor(
+            regressor=LinearRegression(),
+            transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+        ),
+        "ElasticNet": lambda: TransformedTargetRegressor(
+            regressor=ElasticNet(random_state=42, max_iter=2000),
+            transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+        ),
         "RandomForestRegressor": lambda: RandomForestRegressor(
             random_state=42,
             n_jobs=-1,

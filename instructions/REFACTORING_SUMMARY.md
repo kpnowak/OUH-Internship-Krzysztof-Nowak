@@ -126,13 +126,13 @@ The refactoring maintains full backward compatibility while improving the archit
 
 ## Impact Assessment
 
-### ✅ **Positive Impacts**
+###  **Positive Impacts**
 - **Performance**: Eliminated redundant validation
 - **Reliability**: Better error detection with more context
 - **Maintainability**: Cleaner separation of concerns
 - **Debugging**: More informative error messages
 
-### ⚠️ **Potential Risks**
+###  **Potential Risks**
 - **Import Dependencies**: Some files now import from `data_io` instead of `preprocessing`
 - **Error Handling**: Changed error timing (now during loading instead of preprocessing)
 

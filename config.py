@@ -220,6 +220,9 @@ ENHANCED_PREPROCESSING_CONFIGS = {
         "apply_scaling_before_pca": True,
         "clip_outliers_after_scaling": True,
         "outlier_clip_range": (-5.0, 5.0),  # Standard range for gene expression
+        # NEW: Enhanced outlier handling options for extreme expression values
+        "use_log1p_preprocessing": False,    # Alternative: apply log1p to raw counts before scaling
+        "adaptive_outlier_clipping": True,   # Use modality-specific clipping ranges
         # Final quantile normalization for gene expression
         "final_quantile_normalization": False,   # Optional: can be enabled for gene expression
         "quantile_n_quantiles": 1000,           # Full quantiles for gene expression

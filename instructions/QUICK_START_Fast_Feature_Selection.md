@@ -2,7 +2,7 @@
 
 ## TL;DR - Replace MRMR with Fast Alternatives
 
-### 🚀 Immediate Speed Boost
+###  Immediate Speed Boost
 
 Replace your current MRMR selectors with these fast alternatives:
 
@@ -18,7 +18,7 @@ Replace your current MRMR selectors with these fast alternatives:
 "CorrelationFS": "correlation_reg"        # 600x faster, good baseline
 ```
 
-### 📊 Performance Comparison
+###  Performance Comparison
 
 | Method | Speed vs MRMR | Performance | Best For |
 |--------|---------------|-------------|----------|
@@ -82,7 +82,7 @@ selector = FastFeatureSelector(method="rf_importance", n_features=50)
 X_selected = selector.fit_transform(X_train, y_train, is_regression=False)
 ```
 
-## 🎯 Recommendations by Use Case
+##  Recommendations by Use Case
 
 ### 🥇 **First Time Users**
 **Use**: `VarianceFTest` (`variance_f_test_reg/clf`)
@@ -108,7 +108,7 @@ X_selected = selector.fit_transform(X_train, y_train, is_regression=False)
 - Common in gene expression data
 - 25x faster than MRMR
 
-### 🎯 **Production Systems**
+###  **Production Systems**
 **Use**: `CombinedFast` (`combined_fast_reg/clf`)
 - Multi-step selection for best results
 - Robust across different data types
@@ -155,7 +155,7 @@ FAST_FEATURE_SELECTION_CONFIG = {
 }
 ```
 
-## ⚠️ Migration Checklist
+##  Migration Checklist
 
 - [ ] **Backup**: Save your current configuration
 - [ ] **Test**: Run benchmark on small dataset first
@@ -182,11 +182,11 @@ A: Keep both in your selector dictionary - the fast methods are additional optio
 
 After switching from MRMR to fast alternatives:
 
-- ✅ **10-600x faster** feature selection
-- ✅ **Similar or better** model performance  
-- ✅ **Reduced memory** usage
-- ✅ **More experiments** possible in same time
-- ✅ **Faster iteration** on your research
+-  **10-600x faster** feature selection
+-  **Similar or better** model performance  
+-  **Reduced memory** usage
+-  **More experiments** possible in same time
+-  **Faster iteration** on your research
 
 ---
 

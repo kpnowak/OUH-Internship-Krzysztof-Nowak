@@ -139,7 +139,7 @@ if fusion_technique == "snf":
 Default SNF sparsity:    83.24%
 Optimized SNF sparsity:  47.18%
 Sparsity reduction:      36.06 percentage points
-✅ SUCCESS: Optimized SNF significantly reduced sparsity!
+ SUCCESS: Optimized SNF significantly reduced sparsity!
 ```
 
 ### Real-world Validation

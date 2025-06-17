@@ -277,7 +277,7 @@ def run_all_tests():
         logger.info("🎉 All tests passed! Biomedical improvements are working correctly.")
         return True
     else:
-        logger.warning(f"⚠️  {total - passed} tests failed. Please review the issues.")
+        logger.warning(f"  {total - passed} tests failed. Please review the issues.")
         return False
 
 if __name__ == "__main__":

@@ -271,11 +271,11 @@ if metrics['balance_applied']:
 
 The implementation provides a comprehensive solution to the class imbalance problem with:
 
-- ✅ **Three-pronged approach** as specified in requirements
-- ✅ **Automatic integration** with existing CV pipeline  
-- ✅ **Configurable parameters** for fine-tuning
-- ✅ **Graceful fallbacks** for missing dependencies
-- ✅ **Comprehensive testing** with verified improvements
-- ✅ **Expected MCC improvements** from ≈0.02 to 0.23+
+-  **Three-pronged approach** as specified in requirements
+-  **Automatic integration** with existing CV pipeline  
+-  **Configurable parameters** for fine-tuning
+-  **Graceful fallbacks** for missing dependencies
+-  **Comprehensive testing** with verified improvements
+-  **Expected MCC improvements** from ≈0.02 to 0.23+
 
 The fixes should significantly improve performance on imbalanced datasets like the Colon example while maintaining compatibility with the existing genomic analysis pipeline. 

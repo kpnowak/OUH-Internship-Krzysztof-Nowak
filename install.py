@@ -29,11 +29,11 @@ class Colors:
 def print_status(message, status="INFO"):
     """Print colored status messages."""
     if status == "SUCCESS":
-        print(f"{Colors.GREEN}✅ {message}{Colors.END}")
+        print(f"{Colors.GREEN} {message}{Colors.END}")
     elif status == "ERROR":
-        print(f"{Colors.RED}❌ {message}{Colors.END}")
+        print(f"{Colors.RED} {message}{Colors.END}")
     elif status == "WARNING":
-        print(f"{Colors.YELLOW}⚠️  {message}{Colors.END}")
+        print(f"{Colors.YELLOW}  {message}{Colors.END}")
     elif status == "INFO":
         print(f"{Colors.BLUE}ℹ️  {message}{Colors.END}")
     else:
@@ -71,7 +71,7 @@ def get_installation_choice():
     print("   - Essential packages for running the pipeline")
     print("   - Recommended for production use")
     print()
-    print("2. 📊 Visualization Installation (Core + enhanced plotting)")
+    print("2.  Visualization Installation (Core + enhanced plotting)")
     print("   - Includes scikit-posthocs for MAD analysis diagrams")
     print("   - Recommended for research and analysis")
     print()
@@ -79,7 +79,7 @@ def get_installation_choice():
     print("   - Includes testing, formatting, and linting tools")
     print("   - Recommended for contributors and developers")
     print()
-    print("4. 🚀 Full Installation (All dependencies)")
+    print("4.  Full Installation (All dependencies)")
     print("   - Everything included")
     print("   - Recommended for comprehensive usage")
     print()

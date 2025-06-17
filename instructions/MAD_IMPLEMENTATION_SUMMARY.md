@@ -4,7 +4,7 @@
 
 Successfully replaced variance-based feature selection with MAD (Median Absolute Deviation) throughout the preprocessing pipeline. MAD is more robust to outliers and provides better feature selection for genomic data.
 
-## 🎯 Why MAD is Superior to Variance
+##  Why MAD is Superior to Variance
 
 ### 1. **Outlier Robustness**
 - **Variance**: Uses squared deviations from the mean -> heavily influenced by outliers
@@ -66,7 +66,7 @@ Successfully replaced variance-based feature selection with MAD (Median Absolute
 - **AFTER**: Removes feature with lower MAD
 - **BENEFIT**: Keeps more biologically meaningful features
 
-## 📊 Configuration Updates
+##  Configuration Updates
 
 ### config.py Changes
 ```python
@@ -79,7 +79,7 @@ Successfully replaced variance-based feature selection with MAD (Median Absolute
 "remove_low_mad": True,       # Enable MAD-based filtering
 ```
 
-## 🚀 Performance Benefits
+##  Performance Benefits
 
 ### 1. **Robustness to Outliers**
 - Gene expression data often has extreme outliers
@@ -131,11 +131,11 @@ scaled_mad = mad_val * 1.4826
 3. **Empty features**: Assigns MAD = 0.0
 
 ### Integration Points
-- ✅ Feature selection in `_keep_top_variable_rows()`
-- ✅ Sparsity handling in `enhanced_sparsity_handling()`
-- ✅ Correlation-based removal in `advanced_feature_filtering()`
-- ✅ Low-information feature filtering throughout pipeline
-- ✅ Configuration system updated
+-  Feature selection in `_keep_top_variable_rows()`
+-  Sparsity handling in `enhanced_sparsity_handling()`
+-  Correlation-based removal in `advanced_feature_filtering()`
+-  Low-information feature filtering throughout pipeline
+-  Configuration system updated
 
 ## 📈 Expected Improvements
 
@@ -154,7 +154,7 @@ scaled_mad = mad_val * 1.4826
 - Better handling of diverse genomic data types
 - More consistent results across different cancer types
 
-## ✅ Validation Strategy
+##  Validation Strategy
 
 ### Recommended Testing
 1. **Compare feature stability**: MAD vs variance selection across subsamples

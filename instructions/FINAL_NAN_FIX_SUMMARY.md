@@ -23,14 +23,14 @@ The root cause was **target transformation using `log1p` on negative values** in
 ## Evidence from Debugging
 
 ### **Synthetic Data Test Results**
-- ✅ Synthetic data with proper handling: **No NaN errors**
-- ✅ Log transformation fixes: **Working correctly**
-- ✅ Preprocessing pipeline: **No NaN generation**
+-  Synthetic data with proper handling: **No NaN errors**
+-  Log transformation fixes: **Working correctly**
+-  Preprocessing pipeline: **No NaN generation**
 
 ### **Target Transformation Test Results**
-- ❌ Original `np.log1p([-2.5, -1.5, ...])`: **Creates 2 NaN values**
-- ✅ Safe transformation: **Detects negative values and skips transformation**
-- ✅ Warning logged: "Target contains values < -1, skipping log1p transformation to prevent NaN"
+-  Original `np.log1p([-2.5, -1.5, ...])`: **Creates 2 NaN values**
+-  Safe transformation: **Detects negative values and skips transformation**
+-  Warning logged: "Target contains values < -1, skipping log1p transformation to prevent NaN"
 
 ## Implemented Solution
 
@@ -93,9 +93,9 @@ if target_transform_applied:
 ### **3. Enhanced Data Preprocessing Safety**
 
 **Previous fixes maintained**:
-- ✅ Log transformation safety in `data_io.py`
-- ✅ Preprocessing pipeline safety in `preprocessing.py`
-- ✅ Comprehensive NaN cleaning in `fusion.py`
+-  Log transformation safety in `data_io.py`
+-  Preprocessing pipeline safety in `preprocessing.py`
+-  Comprehensive NaN cleaning in `fusion.py`
 
 ## Impact and Benefits
 
@@ -114,10 +114,10 @@ if target_transform_applied:
 ## Verification Results
 
 ### **Test Results**
-- ✅ **Target Transformation Fix**: Prevents NaN generation from `log1p` on negative values
-- ✅ **Edge Case Handling**: Safely handles extreme values, empty arrays, and existing NaN
-- ✅ **Multiple Datasets**: Works correctly for AML, SARCOMA, and unknown datasets
-- ✅ **Fallback Mechanism**: Gracefully reverts to original values when transformation fails
+-  **Target Transformation Fix**: Prevents NaN generation from `log1p` on negative values
+-  **Edge Case Handling**: Safely handles extreme values, empty arrays, and existing NaN
+-  **Multiple Datasets**: Works correctly for AML, SARCOMA, and unknown datasets
+-  **Fallback Mechanism**: Gracefully reverts to original values when transformation fails
 
 ### **Expected Behavior**
 When running the pipeline now:

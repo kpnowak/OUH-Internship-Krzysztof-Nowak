@@ -102,10 +102,10 @@ class SafeSMOTE(SMOTE):
 
 All fixes were tested with very small datasets:
 
-1. ✅ **KNNImputer**: Successfully handled 2 samples by falling back to mean imputation
-2. ✅ **Mutual Info**: Successfully handled 3 samples for both classification and regression  
-3. ✅ **SMOTE**: Successfully handled 4 samples (2 per class) by skipping oversampling
-4. ✅ **Fusion**: Successfully handled 5 samples with 2-fold CV
+1.  **KNNImputer**: Successfully handled 2 samples by falling back to mean imputation
+2.  **Mutual Info**: Successfully handled 3 samples for both classification and regression  
+3.  **SMOTE**: Successfully handled 4 samples (2 per class) by skipping oversampling
+4.  **Fusion**: Successfully handled 5 samples with 2-fold CV
 
 ## Impact
 

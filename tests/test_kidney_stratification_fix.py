@@ -174,7 +174,7 @@ def main():
     if all_passed:
         print("🎉 ALL TESTS PASSED - Kidney dataset stratification fix verified!")
     else:
-        print("❌ SOME TESTS FAILED - Please check the implementation")
+        print(" SOME TESTS FAILED - Please check the implementation")
     print(f"{'=' * 60}")
     
     return all_passed

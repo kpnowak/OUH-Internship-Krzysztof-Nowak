@@ -61,7 +61,7 @@ Updated all legacy selectors with genomic optimization:
 - **Permissive thresholds**: Very low thresholds to retain more features
 
 ## Verification
-✅ **Test Results**:
+ **Test Results**:
 - Selectors now return proper sklearn objects: `<class 'sklearn.feature_selection._univariate_selection.SelectKBest'>`
 - All selectors have `.fit()` method: `True`
 - No more dictionary type errors

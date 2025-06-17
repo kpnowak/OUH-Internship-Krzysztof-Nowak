@@ -182,11 +182,11 @@ scaler = transformers.get('robust_scaler')
 2. **`test_realistic_pca_scaling.py`**: Realistic genomic data simulation
 
 ### Key Validation Points
-- ✅ Modality-specific parameter handling
-- ✅ Train/test consistency
-- ✅ Outlier clipping effectiveness
-- ✅ Pipeline integration
-- ✅ Transformer storage and reuse
+-  Modality-specific parameter handling
+-  Train/test consistency
+-  Outlier clipping effectiveness
+-  Pipeline integration
+-  Transformer storage and reuse
 
 ## Expected Impact on PCA Issues
 

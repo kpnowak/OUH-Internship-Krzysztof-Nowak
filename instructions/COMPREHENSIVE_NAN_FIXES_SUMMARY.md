@@ -84,27 +84,27 @@ def aml_aggressive_extract(value):
 
 Comprehensive testing was performed with the following results:
 
-### ✅ Test Results (3/4 Passed)
-1. **Pipe-Separated Value Extraction**: ✅ PASSED
+###  Test Results (3/4 Passed)
+1. **Pipe-Separated Value Extraction**:  PASSED
    - Successfully extracts maximum values from complex strings
    - Handles edge cases and invalid data gracefully
    - No NaN values in valid extractions
 
-2. **Fusion Module NaN Handling**: ✅ PASSED
+2. **Fusion Module NaN Handling**:  PASSED
    - Handles modalities with NaN values correctly
    - Cleans target values during training
    - Produces clean predictions without NaN values
 
-3. **Model Training NaN Handling**: ✅ PASSED
+3. **Model Training NaN Handling**:  PASSED
    - All models (LinearRegression, RandomForestRegressor, ElasticNet) train successfully
    - No "Input contains NaN" errors during training
    - Proper metrics generation for all models
 
-4. **End-to-End Pipeline**: ❌ FAILED (file path issue, not NaN-related)
+4. **End-to-End Pipeline**:  FAILED (file path issue, not NaN-related)
 
 ## Impact and Benefits
 
-### 🎯 **Immediate Benefits**
+###  **Immediate Benefits**
 - **Eliminates "Input contains NaN" errors** in AML dataset processing
 - **Enables successful model training** across all regression models
 - **Prevents pipeline crashes** due to data quality issues
@@ -116,7 +116,7 @@ Comprehensive testing was performed with the following results:
 - **Automatic data recovery** from complex clinical data formats
 - **Robust cross-validation** that handles edge cases
 
-### 📊 **Data Quality Enhancements**
+###  **Data Quality Enhancements**
 - **AML-specific data handling** for medical data formats
 - **Aggressive value extraction** maximizes usable data
 - **Comprehensive validation** prevents silent data corruption
@@ -126,19 +126,19 @@ Comprehensive testing was performed with the following results:
 
 The fixes ensure that **no models are skipped** due to data quality issues:
 
-### ✅ **Regression Models**
+###  **Regression Models**
 - LinearRegression: Full compatibility
 - RandomForestRegressor: Full compatibility  
 - ElasticNet: Full compatibility
 - All other regression models: Full compatibility
 
-### ✅ **Integration Techniques**
+###  **Integration Techniques**
 - weighted_concat: Full compatibility
 - late_fusion_stacking: Full compatibility
 - early_fusion_pca: Full compatibility
 - All other fusion methods: Full compatibility
 
-### ✅ **Feature Extraction/Selection**
+###  **Feature Extraction/Selection**
 - PCA, ICA, NMF, FactorAnalysis: Full compatibility
 - PLSRegression, SparsePLS: Full compatibility
 - All selector methods: Full compatibility

@@ -1,83 +1,262 @@
 {
-  "total_datasets_analyzed": 2,
-  "datasets_with_scaling_data": 0,
+  "total_datasets_analyzed": 3,
+  "datasets_with_scaling_data": 3,
+  "scaling_metric_columns_found": [
+    "variance",
+    "pca_variance_std",
+    "pca_variance_ratio",
+    "robust_scaling_method",
+    "std_pca_variance_std",
+    "std_pca_variance_ratio",
+    "variance_reduction_ratio",
+    "pca_variance_std_improvement",
+    "pca_variance_ratio_improvement"
+  ],
   "scaling_effectiveness_summary": {
-    "fusion_weighted_concat": {
-      "samples_analyzed": 360,
+    "mirna": {
+      "samples_analyzed": 3,
       "variance_metrics_available": [
-        "variance"
+        "variance",
+        "pca_variance_std",
+        "pca_variance_ratio",
+        "std_pca_variance_std",
+        "std_pca_variance_ratio",
+        "variance_reduction_ratio",
+        "pca_variance_std_improvement",
+        "pca_variance_ratio_improvement"
+      ],
+      "datasets_represented": [
+        "AML",
+        "Breast",
+        "Colon"
       ],
       "variance_stats": {
-        "mean": 2.0281982180199583,
-        "median": 0.20291659412930446,
-        "std": 5.626725720904276,
-        "min": 0.0375210641669065,
-        "max": 51.62470163105545
+        "mean": 0.15440250141346498,
+        "median": 0.1516001039071888,
+        "std": 0.006833274692214815,
+        "min": 0.1494159330150957,
+        "max": 0.1621914673181104,
+        "count": 3
+      },
+      "pca_variance_std_stats": {
+        "mean": 1.3959508736928303,
+        "median": 0.930204451084137,
+        "std": 1.1804607824643198,
+        "min": 0.5194107890129089,
+        "max": 2.7382373809814453,
+        "count": 3
+      },
+      "pca_variance_ratio_stats": {
+        "mean": 6.8367812246140245,
+        "median": 5.434010325529841,
+        "std": 3.111415645451859,
+        "min": 4.6737151259056455,
+        "max": 10.402618222406588,
+        "count": 3
+      },
+      "std_pca_variance_std_stats": {
+        "mean": 2.9118284583091736,
+        "median": 1.842737317085266,
+        "std": 2.7395304021104807,
+        "min": 0.8680393099784851,
+        "max": 6.0247087478637695,
+        "count": 3
+      },
+      "std_pca_variance_ratio_stats": {
+        "mean": 6.428787101075421,
+        "median": 5.950805556151996,
+        "std": 3.60302373641289,
+        "min": 3.0886117308176915,
+        "max": 10.246944016256574,
+        "count": 3
+      },
+      "variance_reduction_ratio_stats": {
+        "mean": 0.5192228531762126,
+        "median": 0.5047949278823309,
+        "std": 0.07301271113903517,
+        "min": 0.4545012042204305,
+        "max": 0.5983724274258765,
+        "count": 3
+      },
+      "pca_variance_std_improvement_stats": {
+        "mean": 1.5158775846163433,
+        "median": 0.9125328660011292,
+        "std": 1.559085880872734,
+        "min": 0.3486285209655761,
+        "max": 3.286471366882324,
+        "count": 3
+      },
+      "pca_variance_ratio_improvement_stats": {
+        "mean": -0.4079941235386045,
+        "median": -0.1556742061500138,
+        "std": 1.0734260401740539,
+        "min": -1.585103395087954,
+        "max": 0.5167952306221544,
+        "count": 3
       }
     },
-    "fusion_learnable_weighted": {
-      "samples_analyzed": 360,
+    "exp": {
+      "samples_analyzed": 3,
       "variance_metrics_available": [
-        "variance"
+        "variance",
+        "pca_variance_std",
+        "pca_variance_ratio",
+        "std_pca_variance_std",
+        "std_pca_variance_ratio",
+        "variance_reduction_ratio",
+        "pca_variance_std_improvement",
+        "pca_variance_ratio_improvement"
+      ],
+      "datasets_represented": [
+        "AML",
+        "Breast",
+        "Colon"
       ],
       "variance_stats": {
-        "mean": 1.1675840995550881,
-        "median": 0.0569867616353294,
-        "std": 2.503041794944338,
-        "min": 0.0154512686984995,
-        "max": 15.957247636232912
+        "mean": 0.5020194174058688,
+        "median": 0.5062113695261736,
+        "std": 0.09070324152225329,
+        "min": 0.4092928798572757,
+        "max": 0.5905540028341569,
+        "count": 3
+      },
+      "pca_variance_std_stats": {
+        "mean": 5.734043518702189,
+        "median": 3.008443117141724,
+        "std": 4.744356955436263,
+        "min": 2.9813547134399414,
+        "max": 11.212332725524902,
+        "count": 3
+      },
+      "pca_variance_ratio_stats": {
+        "mean": 13.542508228177859,
+        "median": 13.203743377973566,
+        "std": 2.582990375985084,
+        "min": 11.145615519037554,
+        "max": 16.278165787522457,
+        "count": 3
+      },
+      "std_pca_variance_std_stats": {
+        "mean": 10.867969036102295,
+        "median": 7.647865295410156,
+        "std": 6.968391795784286,
+        "min": 6.091967105865479,
+        "max": 18.86407470703125,
+        "count": 3
+      },
+      "std_pca_variance_ratio_stats": {
+        "mean": 13.899137722635302,
+        "median": 12.961965698263798,
+        "std": 3.0526665098593946,
+        "min": 11.424926720419842,
+        "max": 17.31052074922227,
+        "count": 3
+      },
+      "variance_reduction_ratio_stats": {
+        "mean": 0.4923787851901285,
+        "median": 0.489391137809892,
+        "std": 0.10053560197097253,
+        "min": 0.3933703067373887,
+        "max": 0.5943749110231049,
+        "count": 3
+      },
+      "pca_variance_std_improvement_stats": {
+        "mean": 5.1339255174001055,
+        "median": 4.639422178268433,
+        "std": 2.3105983317131504,
+        "min": 3.110612392425537,
+        "max": 7.651741981506348,
+        "count": 3
+      },
+      "pca_variance_ratio_improvement_stats": {
+        "mean": 0.35662949445744435,
+        "median": 0.2793112013822885,
+        "std": 0.640575589457935,
+        "min": -0.2417776797097683,
+        "max": 1.032354961699813,
+        "count": 3
       }
     },
-    "fusion_attention_weighted": {
-      "samples_analyzed": 360,
+    "methy": {
+      "samples_analyzed": 3,
       "variance_metrics_available": [
-        "variance"
+        "variance",
+        "pca_variance_std",
+        "pca_variance_ratio",
+        "std_pca_variance_std",
+        "std_pca_variance_ratio",
+        "variance_reduction_ratio",
+        "pca_variance_std_improvement",
+        "pca_variance_ratio_improvement"
+      ],
+      "datasets_represented": [
+        "AML",
+        "Breast",
+        "Colon"
       ],
       "variance_stats": {
-        "mean": 1.5195972735398307,
-        "median": 0.0612050879375166,
-        "std": 4.123293203920065,
-        "min": 0.0163165319417624,
-        "max": 38.03253040660405
-      }
-    },
-    "fusion_mkl": {
-      "samples_analyzed": 360,
-      "variance_metrics_available": [
-        "variance"
-      ],
-      "variance_stats": {
-        "mean": 3.2944359424810385,
-        "median": 0.2491407934946474,
-        "std": 6.581323254775719,
-        "min": 0.0389375226501089,
-        "max": 31.33344066904447
-      }
-    },
-    "fusion_snf": {
-      "samples_analyzed": 360,
-      "variance_metrics_available": [
-        "variance"
-      ],
-      "variance_stats": {
-        "mean": 0.47786454176168913,
-        "median": 0.007990219118593898,
-        "std": 1.6817222179272981,
-        "min": 9.868315163868205e-06,
-        "max": 10.56476211430444
-      }
-    },
-    "fusion_early_fusion_pca": {
-      "samples_analyzed": 360,
-      "variance_metrics_available": [
-        "variance"
-      ],
-      "variance_stats": {
-        "mean": 1.739446085267726,
-        "median": 0.972104205967085,
-        "std": 4.986035372048799,
-        "min": 0.0578560817462743,
-        "max": 43.877179377978536
+        "mean": 0.13359171736029912,
+        "median": 0.1369460555657866,
+        "std": 0.00638372750973469,
+        "min": 0.1262300704168959,
+        "max": 0.1375990260982149,
+        "count": 3
+      },
+      "pca_variance_std_stats": {
+        "mean": 2.493827482064565,
+        "median": 1.7731618881225586,
+        "std": 2.0726630679211437,
+        "min": 0.8776955008506775,
+        "max": 4.830625057220459,
+        "count": 3
+      },
+      "pca_variance_ratio_stats": {
+        "mean": 13.644721383537506,
+        "median": 11.120391683185618,
+        "std": 10.278390795806184,
+        "min": 4.863672752747596,
+        "max": 24.950099714679304,
+        "count": 3
+      },
+      "std_pca_variance_std_stats": {
+        "mean": 9.785884936650595,
+        "median": 7.138516426086426,
+        "std": 7.628335893545326,
+        "min": 3.833918809890747,
+        "max": 18.38521957397461,
+        "count": 3
+      },
+      "std_pca_variance_ratio_stats": {
+        "mean": 17.351035279353194,
+        "median": 15.93041641732932,
+        "std": 10.736988404056017,
+        "min": 7.395075375425205,
+        "max": 28.727614045305064,
+        "count": 3
+      },
+      "variance_reduction_ratio_stats": {
+        "mean": 0.2466892404264919,
+        "median": 0.2483936132223296,
+        "std": 0.01697228021323246,
+        "min": 0.2289290786717751,
+        "max": 0.2627450293853711,
+        "count": 3
+      },
+      "pca_variance_std_improvement_stats": {
+        "mean": 7.292057454586029,
+        "median": 5.365354537963867,
+        "std": 5.5556733310028195,
+        "min": 2.9562233090400696,
+        "max": 13.55459451675415,
+        "count": 3
+      },
+      "pca_variance_ratio_improvement_stats": {
+        "mean": 3.7063138958156903,
+        "median": 3.77751433062576,
+        "std": 1.1409784433342318,
+        "min": 2.531402622677609,
+        "max": 4.810024734143703,
+        "count": 3
       }
     }
   }

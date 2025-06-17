@@ -1,9 +1,9 @@
 # Data Quality Analyzer for Pre-Model Training Data
 
-## 🎯 Purpose
+##  Purpose
 This script analyzes the quality of data **right before it gets fed into the ML models** during training. It runs independently from the main pipeline to allow for hyperparameter adjustments without affecting the main training process.
 
-## 📊 What Gets Analyzed
+##  What Gets Analyzed
 
 ### **All 9 Datasets:**
 - **Regression (2)**: AML, Sarcoma
@@ -47,7 +47,7 @@ For every combination, the analyzer calculates:
 - **Percentiles (25th, 50th, 75th)** - Distribution characteristics
 - **Interquartile range (IQR)** - Robust spread measure
 
-## 🚀 How to Run
+##  How to Run
 
 ### **Simple Execution:**
 ```bash
@@ -98,25 +98,25 @@ Combined data from all datasets for cross-dataset analysis
 ### **Summary Statistics** (`summary_statistics.csv`)
 Aggregated statistics grouped by algorithm combinations
 
-## 💡 Key Features
+##  Key Features
 
-### **✅ Independent Analysis**
+### ** Independent Analysis**
 - Runs separately from main training pipeline
 - No interference with existing hyperparameter settings
 - Safe to run alongside main training
 
-### **✅ Comprehensive Coverage**
+### ** Comprehensive Coverage**
 - Tests **ALL** extraction/selection algorithm combinations
 - Includes feature engineering algorithms
 - Covers multiple fusion strategies
 - Tests different missing data scenarios
 
-### **✅ Critical Timing**
+### ** Critical Timing**
 - Analyzes data at the exact point where `final_X_train` and `final_X_val` are passed to models
 - Captures quality **right before fitting into the model**
 - Reveals data quality issues that directly impact model performance
 
-### **✅ Production-Ready**
+### ** Production-Ready**
 - Robust error handling
 - Comprehensive logging
 - Memory-efficient processing
@@ -146,7 +146,7 @@ The analyzer automatically:
 - **Parallel Processing**: Utilizes available system resources
 - **Background Execution**: Can run while other analyses are performed
 
-## 🎯 Critical Point Analysis
+##  Critical Point Analysis
 
 This analyzer captures data quality at the **most critical point** in your pipeline - right before the data enters the machine learning models. This is where all preprocessing, fusion, extraction, and selection steps have been completed, making it the perfect place to assess the final data quality that will determine model performance.
 

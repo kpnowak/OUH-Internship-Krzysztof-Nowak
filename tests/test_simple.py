@@ -124,8 +124,8 @@ def test_simple_classification():
 if __name__ == "__main__":
     success = test_simple_classification()
     if success:
-        print("✅ Simple classification test PASSED")
+        print(" Simple classification test PASSED")
         sys.exit(0)
     else:
-        print("❌ Simple classification test FAILED")
+        print(" Simple classification test FAILED")
         sys.exit(1) 

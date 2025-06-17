@@ -76,20 +76,20 @@ except Exception as e:
 
 Both `SparsePLS` and `PLSDiscriminantAnalysis` classes now have:
 
-- ✅ `get_params(deep=True)` method for parameter introspection
-- ✅ `set_params(**params)` method for parameter setting  
-- ✅ Full scikit-learn estimator interface compliance
-- ✅ Cross-validation compatibility
+-  `get_params(deep=True)` method for parameter introspection
+-  `set_params(**params)` method for parameter setting  
+-  Full scikit-learn estimator interface compliance
+-  Cross-validation compatibility
 
 ## Expected Results After Fix
 
 Your analysis pipeline should now work without cloning errors:
 
-- ✅ **AML dataset**: SparsePLS-128 models work correctly
-- ✅ **Colon dataset**: PLS-DA-128 models work correctly
-- ✅ **All cancer types**: Both models available for analysis
-- ✅ **Cross-validation**: No more cloning errors
-- ✅ **Missing data scenarios**: Compatible with all missing data levels
+-  **AML dataset**: SparsePLS-128 models work correctly
+-  **Colon dataset**: PLS-DA-128 models work correctly
+-  **All cancer types**: Both models available for analysis
+-  **Cross-validation**: No more cloning errors
+-  **Missing data scenarios**: Compatible with all missing data levels
 
 ## If Issues Persist
 

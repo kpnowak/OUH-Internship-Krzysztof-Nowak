@@ -96,12 +96,12 @@ if np.isnan(X_train).any() or np.isnan(y_train).any():
 ```
 
 ### Comprehensive Coverage:
-- ✅ Data loading and preprocessing
-- ✅ Feature extraction and selection
-- ✅ Cross-validation splits
-- ✅ Model training (individual and ensemble)
-- ✅ Prediction generation
-- ✅ Meta-learning and stacking
+-  Data loading and preprocessing
+-  Feature extraction and selection
+-  Cross-validation splits
+-  Model training (individual and ensemble)
+-  Prediction generation
+-  Meta-learning and stacking
 
 ## Files Modified
 

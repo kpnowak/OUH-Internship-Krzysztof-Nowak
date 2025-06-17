@@ -173,11 +173,11 @@ print(f"Recommended strategy: {recommended}")  # Output: 'learnable_weighted'
 
 | Strategy | Missing Data Support | Restriction |
 |----------|---------------------|-------------|
-| weighted_concat | ❌ | 0% missing only |
-| learnable_weighted | ✅ | 0%, 20%, 50% |
-| mkl | ✅ | 0%, 20%, 50% |
-| snf | ✅ | 0%, 20%, 50% |
-| early_fusion_pca | ✅ | 0%, 20%, 50% |
+| weighted_concat |  | 0% missing only |
+| learnable_weighted |  | 0%, 20%, 50% |
+| mkl |  | 0%, 20%, 50% |
+| snf |  | 0%, 20%, 50% |
+| early_fusion_pca |  | 0%, 20%, 50% |
 
 ## Technical Implementation Notes
 

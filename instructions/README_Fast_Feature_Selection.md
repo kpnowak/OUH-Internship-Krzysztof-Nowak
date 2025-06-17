@@ -142,34 +142,34 @@ This will generate performance comparison plots and speed vs accuracy trade-off 
 ## Method Selection Guide
 
 ### Choose **VarianceFTest** when:
-- ✅ You need the best speed/performance balance
-- ✅ Working with mixed data types
-- ✅ General purpose feature selection
-- ✅ First time trying alternatives to MRMR
+-  You need the best speed/performance balance
+-  Working with mixed data types
+-  General purpose feature selection
+-  First time trying alternatives to MRMR
 
 ### Choose **RFImportance** when:
-- ✅ You suspect feature interactions are important
-- ✅ Non-linear relationships in your data
-- ✅ You can afford slightly more computation time
-- ✅ Maximum predictive performance is priority
+-  You suspect feature interactions are important
+-  Non-linear relationships in your data
+-  You can afford slightly more computation time
+-  Maximum predictive performance is priority
 
 ### Choose **ElasticNetFS** when:
-- ✅ Your features are highly correlated (common in genomics)
-- ✅ You want sparse feature selection
-- ✅ Linear relationships are expected
-- ✅ You need interpretable feature weights
+-  Your features are highly correlated (common in genomics)
+-  You want sparse feature selection
+-  Linear relationships are expected
+-  You need interpretable feature weights
 
 ### Choose **CorrelationFS** when:
-- ✅ You need maximum speed (regression only)
-- ✅ Simple baseline for comparison
-- ✅ Linear relationships with target
-- ✅ Quick exploratory analysis
+-  You need maximum speed (regression only)
+-  Simple baseline for comparison
+-  Linear relationships with target
+-  Quick exploratory analysis
 
 ### Choose **CombinedFast** when:
-- ✅ Maximum performance is critical
-- ✅ You can afford more computation time
-- ✅ Complex, high-dimensional data
-- ✅ Production systems where accuracy matters most
+-  Maximum performance is critical
+-  You can afford more computation time
+-  Complex, high-dimensional data
+-  Production systems where accuracy matters most
 
 ## Migration from MRMR
 
