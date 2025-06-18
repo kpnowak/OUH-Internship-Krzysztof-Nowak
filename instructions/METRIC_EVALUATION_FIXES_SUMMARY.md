@@ -180,7 +180,7 @@ All fixes have been integrated into the existing pipeline without breaking chang
 - Target scaling can be enabled/disabled
 - Enhanced AUC calculation is automatic for multi-class
 
-## 🧪 Testing and Validation
+##  Testing and Validation
 
 ### Test Coverage
 - Multi-class AUC calculation verified

@@ -114,7 +114,7 @@ X_selected = selector.fit_transform(X_train, y_train, is_regression=False)
 - Robust across different data types
 - 14x faster than MRMR
 
-## 🧪 Test Before Full Deployment
+##  Test Before Full Deployment
 
 ### Quick Benchmark
 ```python

@@ -392,7 +392,7 @@ class CompletePipelineAnalyzer:
 
 def run_complete_analysis():
     """Run the complete pipeline analysis."""
-    print("🧪 COMPLETE PIPELINE FLOW ANALYSIS")
+    print(" COMPLETE PIPELINE FLOW ANALYSIS")
     print("="*80)
     
     analyzer = CompletePipelineAnalyzer()

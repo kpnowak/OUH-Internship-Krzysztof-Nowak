@@ -1,0 +1,27 @@
+{
+  "best_params": {
+    "model__n_estimators": 200,
+    "model__min_samples_split": 2,
+    "model__min_samples_leaf": 2,
+    "model__max_features": "sqrt",
+    "model__max_depth": 5,
+    "extractor__extractor__n_components": 4,
+    "extractor__extractor__gamma": 0.01
+  },
+  "best_score": 0.0,
+  "dataset": "Breast",
+  "task": "clf",
+  "extractor": "KPCA",
+  "model": "RandomForestClassifier",
+  "preprocessing": "4-phase-enhanced",
+  "data_shape": [
+    697,
+    20214
+  ],
+  "n_parameter_combinations": 576,
+  "search_method": "HalvingRandomSearchCV",
+  "cv_folds": 3,
+  "search_time_seconds": 140.48964953422546,
+  "timestamp": "2025-06-18 03:22:28",
+  "scoring_method": "Matthews correlation coefficient"
+}

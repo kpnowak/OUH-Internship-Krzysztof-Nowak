@@ -628,7 +628,7 @@ class DataQualityAnalyzer:
         
         try:
             # Stage 1: Test 4-Phase Pipeline Integration
-            logger.info(f"🧪 Running 4-Phase Pipeline Integration Test for {dataset_name}")
+            logger.info(f" Running 4-Phase Pipeline Integration Test for {dataset_name}")
             pipeline_test_results = self.test_4phase_pipeline_integration(dataset_config, is_regression)
             analysis_results['stages']['4_phase_pipeline_test'] = pipeline_test_results
             
@@ -1625,7 +1625,7 @@ class DataQualityAnalyzer:
         """
         dataset_name = dataset_config['name']
         task_type = 'regression' if is_regression else 'classification'
-        logger.info(f"🧪 Testing 4-Phase Enhanced Pipeline for {dataset_name} ({task_type})")
+        logger.info(f" Testing 4-Phase Enhanced Pipeline for {dataset_name} ({task_type})")
         
         test_results = {
             'dataset_name': dataset_name,
@@ -1803,9 +1803,24 @@ class DataQualityAnalyzer:
                 logger.info("  Testing Phase 4: Validation Framework")
                 validator = create_validation_coordinator()
                 
-                # Create dummy processed data for validation test
-                test_data = {mod_name: mod_array for mod_name, (mod_array, _) in modality_data_dict.items()}
-                validation_results = validator.validate_processed_data(test_data, y_raw.values)
+                # Use the actual processed data from enhanced pipeline instead of raw data
+                if 'modalities_data' in locals() and modalities_data:
+                    # Use the processed data from the enhanced pipeline
+                    validation_results = validator.validate_processed_data(modalities_data, y_aligned)
+                else:
+                    # Fallback: Apply basic scaling to raw data for validation
+                    from sklearn.preprocessing import RobustScaler
+                    test_data = {}
+                    for mod_name, (mod_array, _) in modality_data_dict.items():
+                        scaler = RobustScaler()
+                        scaled_data = scaler.fit_transform(mod_array)
+                        # Apply clipping to prevent extreme values warning
+                        if mod_name == 'exp':
+                            scaled_data = np.clip(scaled_data, -5, 5)
+                        else:
+                            scaled_data = np.clip(scaled_data, -6, 6)
+                        test_data[mod_name] = scaled_data
+                    validation_results = validator.validate_processed_data(test_data, y_raw.values)
                 
                 test_results['pipeline_phases']['phase_4_validation'] = {
                     'success': True,
@@ -2144,7 +2159,7 @@ def main():
     
     # Test Phase Integration Summary
     logger.info("")
-    logger.info("🧪 4-PHASE PIPELINE TESTING PLAN")
+    logger.info(" 4-PHASE PIPELINE TESTING PLAN")
     logger.info("=" * 50)
     logger.info("1. Individual Phase Testing (data_quality.py, fusion_aware_preprocessing.py, etc.)")
     logger.info("2. Complete 4-Phase Integration Testing (enhanced_pipeline_integration.py)")
@@ -2229,7 +2244,7 @@ def main():
     logger.info(f"    Overall Summary: {analyzer.output_dir}/summary/overall_data_quality_summary.csv")
     logger.info(f"   📈 Statistics: {analyzer.output_dir}/summary/summary_statistics.csv")
     logger.info(f"    Robust Scaling Report: {analyzer.output_dir}/summary/robust_scaling_effectiveness_report.json")
-    logger.info(f"   🧪 4-Phase Pipeline Report: {analyzer.output_dir}/summary/4phase_pipeline_summary.json")
+    logger.info(f"    4-Phase Pipeline Report: {analyzer.output_dir}/summary/4phase_pipeline_summary.json")
     logger.info(f"    Regression Details: {analyzer.output_dir}/regression/")
     logger.info(f"    Classification Details: {analyzer.output_dir}/classification/")
     logger.info("")

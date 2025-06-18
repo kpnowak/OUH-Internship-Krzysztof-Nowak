@@ -866,7 +866,7 @@ def load_modality(base_path: Union[str, Path],
     base_path       Base path for the dataset
     modality_path   Path to modality file (relative to base_path)
     modality_name   Name of the modality
-    k_features      Maximum number of features to keep
+    k_features      Maximum number of features to keep (None = no limit, let 4-phase pipeline decide)
     chunk_size      Number of rows to read at a time when loading large files
     use_cache       Whether to use caching for faster repeated loads
     
@@ -981,9 +981,12 @@ def load_modality(base_path: Union[str, Path],
     df = advanced_feature_filtering(df)
     
     # Apply MAD filtering AFTER advanced filtering for final feature count
-    if df.shape[0] > k_features:
+    # DISABLED: Let 4-phase pipeline handle feature selection intelligently
+    if k_features is not None and df.shape[0] > k_features:
         logger.info(f"Applying MAD filtering to {modality_name}, keeping top {k_features} most variable features")
         df = _keep_top_variable_rows(df, k=k_features)
+    elif k_features is None:
+        logger.info(f"Skipping initial MAD filtering for {modality_name} - letting 4-phase pipeline handle feature selection (current: {df.shape[0]} features)")
     
     # Optimize data types for memory efficiency AFTER filtering
     df = optimize_data_types(df, modality_name)

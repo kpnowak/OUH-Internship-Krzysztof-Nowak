@@ -20,13 +20,13 @@ from config import (
 from data_io import load_dataset, load_and_preprocess_data_enhanced
 from models import (
     get_regression_extractors, get_regression_selectors,
-    get_classification_extractors, get_classification_selectors,
-    get_classification_models
+    get_classification_extractors, get_classification_selectors
 )
 from cv import (
     run_extraction_pipeline, run_selection_pipeline
 )
-from utils import comprehensive_logger, merge_small_classes
+from utils import comprehensive_logger
+from cv import merge_small_classes
 from mad_analysis import run_mad_analysis
 from logging_utils import (
     setup_logging_levels, log_pipeline_stage, log_mad_analysis_info,

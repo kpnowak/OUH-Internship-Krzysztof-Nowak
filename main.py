@@ -14,8 +14,9 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cli import main
-from utils import monitor_memory_usage, comprehensive_logger, memory_monitor, force_garbage_collection
-from models import clear_all_caches, get_cache_stats
+from utils import monitor_memory_usage, comprehensive_logger, memory_monitor, force_garbage_collection, suppress_sklearn_warnings
+# Cache functions not available - removing for now
+# from models import clear_all_caches, get_cache_stats
 from config import CACHE_CONFIG, MEMORY_OPTIMIZATION
 import threading
 import time
@@ -37,44 +38,11 @@ def enhanced_cache_monitor(interval_seconds=600):  # Less frequent monitoring fo
             # Sleep first to allow initial processing
             time.sleep(interval_seconds)
             
-            # Check cache stats
-            stats = get_cache_stats()
-            total_mb = stats["total_memory_mb"]
-            
-            # Enhanced logging with detailed breakdown
-            comprehensive_logger.log_cache_operation(
-                "system", "monitor", "total_usage", 
-                size_mb=total_mb
-            )
-            
-            # Log individual cache usage
-            for cache_type, cache_stats in stats.items():
-                if isinstance(cache_stats, dict) and "memory_usage_mb" in cache_stats:
-                    comprehensive_logger.logger.debug(
-                        f"[CACHE] {cache_type}: {cache_stats['memory_usage_mb']:.2f} MB, "
-                        f"hit_ratio: {cache_stats.get('hit_ratio', 0):.2f}"
-                    )
-            
-            # Check against configured limits
-            total_limit_mb = CACHE_CONFIG.get("total_limit_mb", 8000)
-            auto_clear_threshold = MEMORY_OPTIMIZATION.get("auto_clear_threshold", 0.9)
-            ## Check against configured limits for high-memory server
-            #total_limit_mb = CACHE_CONFIG.get("total_limit_mb", 32000)
-            #auto_clear_threshold = MEMORY_OPTIMIZATION.get("auto_clear_threshold", 0.85)
-            
-            if total_mb > (total_limit_mb * auto_clear_threshold):
-                comprehensive_logger.logger.warning(
-                    f"Cache memory usage high ({total_mb:.2f} MB / {total_limit_mb} MB limit), "
-                    f"clearing caches"
-                )
-                
-                # Clear caches and force garbage collection
-                stats_before = clear_all_caches()
-                force_garbage_collection()
-                
-                comprehensive_logger.logger.info(
-                    f"Cleared {stats_before['total_memory_mb']:.2f} MB from caches"
-                )
+            # Cache monitoring temporarily disabled
+            # TODO: Re-enable when cache functions are available
+            # stats = get_cache_stats()
+            # total_mb = stats["total_memory_mb"]
+            pass
                 
         except Exception as e:
             comprehensive_logger.log_error("cache_monitor", e)
@@ -121,6 +89,9 @@ def performance_summary_reporter(interval_seconds=1800):  # 30 minutes
             comprehensive_logger.log_error("performance_reporter", e)
 
 if __name__ == "__main__":
+    # Suppress sklearn warnings early in pipeline startup
+    suppress_sklearn_warnings()
+    
     # Enhanced startup logging
     print("=== Multi-Omics Data Fusion Optimization Pipeline STARTING ===")
     comprehensive_logger.log_memory_usage("startup", force=True)

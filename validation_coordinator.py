@@ -418,7 +418,8 @@ class CoordinatedValidationFramework:
                     # Check for extreme values (potential scaling issues)
                     extreme_values = np.sum(np.abs(X) > 100)
                     if extreme_values > 0:
-                        issue = f"Found {extreme_values} extreme values (>100) in {modality_name}"
+                        max_value = np.max(np.abs(X))
+                        issue = f"Found {extreme_values} extreme values (>100) in {modality_name} (max abs value: {max_value:.2f})"
                         self.add_issue(ValidationSeverity.WARNING, issue)
                         modality_issues.append(issue)
                     

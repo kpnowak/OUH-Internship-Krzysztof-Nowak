@@ -932,14 +932,14 @@ def _keep_top_variable_rows(df: pd.DataFrame,
     Parameters
     ----------
     df : pd.DataFrame (features × samples)
-    k  : int – number of rows to keep (default = 10,000, increased from 5,000)
+    k  : int or None – number of rows to keep (None = no limit, let 4-phase pipeline decide)
 
     Returns
     -------
-    pd.DataFrame containing ≤ k rows with highest MAD
+    pd.DataFrame containing ≤ k rows with highest MAD (or all rows if k is None)
     """
-    # Skip if the data frame is already small enough
-    if df.shape[0] <= k:
+    # Skip if k is None (no limit) or if the data frame is already small enough
+    if k is None or df.shape[0] <= k:
         return df
     
     # Compute row-wise Median Absolute Deviation (MAD) with improved handling
@@ -1527,8 +1527,10 @@ def advanced_feature_filtering(df: pd.DataFrame,
         correlation_threshold = config.get("correlation_threshold", 0.90)  # OPTIMIZED: More aggressive (0.95 → 0.90)
         if df.shape[0] > 1:  # Only if we have more than 1 feature
             try:
-                # OPTIMIZATION: Use sample of features if too many (>5000) for initial screening
-                if df.shape[0] > 5000:
+                # OPTIMIZATION: Use sample of features if too many for correlation analysis
+                # Dynamic threshold based on available memory and computational resources
+                correlation_analysis_threshold = 10000  # Increased from hardcoded 5000
+                if df.shape[0] > correlation_analysis_threshold:
                     # Sample features for correlation analysis to speed up
                     sample_size = min(2000, df.shape[0])
                     sample_indices = np.random.choice(df.index, sample_size, replace=False)

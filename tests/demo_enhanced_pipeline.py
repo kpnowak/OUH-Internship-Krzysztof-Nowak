@@ -61,7 +61,7 @@ def generate_demo_data() -> Tuple[Dict[str, Tuple[np.ndarray, List[str]]], np.nd
     logger.info(f"   Samples: {n_samples}")
     logger.info(f"  🧬 Gene expression: {gene_expression.shape} ({np.sum(missing_mask_exp)} missing values)")
     logger.info(f"  🔬 Methylation: {methylation.shape} ({np.sum(missing_mask_methy)} missing values)")
-    logger.info(f"  🧪 miRNA: {mirna.shape} ({np.sum(missing_mask_mirna)} missing values)")
+    logger.info(f"   miRNA: {mirna.shape} ({np.sum(missing_mask_mirna)} missing values)")
     logger.info(f"   Target distribution: {np.sum(y==0)} healthy, {np.sum(y==1)} disease")
     
     return modality_data_dict, y
@@ -109,7 +109,7 @@ def demo_enhanced_pipeline():
             "fusion_method": "mkl"
         },
         {
-            "name": "🧪 Quality + Missing Data Focus",
+            "name": " Quality + Missing Data Focus",
             "config": {
                 "enable_early_quality_check": True,
                 "enable_fusion_aware_order": False,

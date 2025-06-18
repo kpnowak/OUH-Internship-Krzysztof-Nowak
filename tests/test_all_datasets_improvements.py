@@ -287,7 +287,7 @@ def test_improvement_classes():
 
 def run_comprehensive_test():
     """Run comprehensive test across all datasets"""
-    logger.info("🧪 STARTING COMPREHENSIVE TEST OF ALL IMPROVEMENTS ACROSS ALL 9 DATASETS")
+    logger.info(" STARTING COMPREHENSIVE TEST OF ALL IMPROVEMENTS ACROSS ALL 9 DATASETS")
     logger.info("=" * 100)
     
     # Test improvement classes independently first

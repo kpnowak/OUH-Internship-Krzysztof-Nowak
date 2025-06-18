@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def test_real_data_pipeline():
     """Test the complete pipeline with real data."""
-    print("🧪 TESTING COMPLETE PIPELINE WITH REAL DATA")
+    print(" TESTING COMPLETE PIPELINE WITH REAL DATA")
     print("="*80)
     
     try:
@@ -216,7 +216,7 @@ def test_deprecated_functions():
 
 def main():
     """Run all comprehensive tests."""
-    print("🧪 COMPREHENSIVE REAL DATA PIPELINE TESTING")
+    print(" COMPREHENSIVE REAL DATA PIPELINE TESTING")
     print("="*80)
     
     # Test 1: Real data pipeline

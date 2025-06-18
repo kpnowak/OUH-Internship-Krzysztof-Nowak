@@ -22,7 +22,8 @@ except ImportError:
     warnings.filterwarnings('ignore', message='.*Objective did not converge.*')
 
 # Constants
-MAX_VARIABLE_FEATURES = 5000  # OPTIMIZED: Reduced from 50000 for faster processing
+MAX_VARIABLE_FEATURES = None  # DISABLED: Let 4-phase pipeline handle feature selection intelligently
+# OLD: MAX_VARIABLE_FEATURES = 5000  # OPTIMIZED: Reduced from 50000 for faster processing
 MAX_COMPONENTS = 128  # OPTIMIZED: Reduced from 256 for faster processing
 MAX_FEATURES = 512  # OPTIMIZED: Reduced from 1024 for faster processing
 N_JOBS = min(os.cpu_count() or 8, 8)  # Increased to 8 cores for server
@@ -354,6 +355,16 @@ MODEL_OPTIMIZATIONS = {
         "probability": True,
         "random_state": 42
     },
+    "GradientBoosting": {
+        "n_estimators": 200,         # 100-300 trees as specified
+        "learning_rate": 0.1,        # Moderate learning rate
+        "max_depth": 3,              # Shallow trees for boosting
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "subsample": 1.0,
+        "random_state": 42
+    },
+
     "XGBoost": {
         "n_estimators": 200,         # Increased trees for better performance
         "max_depth": 6,              # Deeper trees for more complex patterns
@@ -613,7 +624,7 @@ FUSION_UPGRADES_CONFIG = {
     "late_fusion_stacking": {
         "enabled": False,
         "cv_folds": 5,           # Cross-validation folds for meta-features
-        "base_models": None,     # Use default models (RF, ElasticNet/Logistic, SVR/SVC)
+        "base_models": None,     # Use default models (RF, ElasticNet/Logistic)
         "random_state": 42,
         "description": "Uses per-omic model predictions as features; helps when one modality dominates"
     },

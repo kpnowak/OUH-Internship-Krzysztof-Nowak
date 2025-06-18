@@ -75,7 +75,7 @@ def test_step_3_safe_sampler():
         
         print(" Step 3 passed")
     except ImportError:
-        print("⚠ Step 3 skipped (imbalanced-learn not available)")
+        print(" Step 3 skipped (imbalanced-learn not available)")
 
 def test_step_4_top_level_sampler():
     """Test Step 4: Top-level sampler class (SafeSMOTE)"""

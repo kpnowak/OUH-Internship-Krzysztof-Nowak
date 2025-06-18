@@ -49,14 +49,17 @@ def safe_sampler(y, k_default=5, random_state=42):
         
         logger.debug(f"Class distribution: {class_counts}, min_class_size: {min_c}, n_classes: {n_classes}")
         
-        # Case 1: Extremely small minority class (< 3 samples)
-        if min_c < 3:
+        # Case 1: Extremely small minority class (< 6 samples)
+        # This is more conservative to account for CV splits
+        if min_c < 6:
             logger.info(f"Minority class has {min_c} samples - using RandomOverSampler for safety")
             return RandomOverSampler(random_state=random_state, sampling_strategy='not majority')
         
-        # Case 2: Small minority class (3 <= samples <= k_default)
-        elif min_c <= k_default:
-            safe_k = min_c - 1
+        # Case 2: Small minority class (6 <= samples <= k_default + 2)
+        # Added buffer of +2 to be more conservative
+        elif min_c <= k_default + 2:
+            # Use even more conservative k_neighbors calculation
+            safe_k = max(1, min_c - 2)  # Leave more buffer
             logger.info(f"Minority class has {min_c} samples - using SMOTE with k_neighbors={safe_k}")
             return SMOTE(k_neighbors=safe_k, random_state=random_state)
         

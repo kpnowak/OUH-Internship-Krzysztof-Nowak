@@ -95,12 +95,12 @@ modalities_data, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipel
 
 ---
 
-## 🧪 **Comprehensive Test Results: 100% SUCCESS**
+##  **Comprehensive Test Results: 100% SUCCESS**
 
 ### **Test Suite: `test_4phase_integration.py`**
 
 ```
-🧪 4-Phase Pipeline Integration Test
+ 4-Phase Pipeline Integration Test
 ==================================================
  Phase 1: Data Quality
  Phase 2: Fusion-Aware

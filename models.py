@@ -14,13 +14,18 @@ warnings.filterwarnings("ignore", message=".*force_all_finite.*was renamed to.*e
 
 from sklearn import __version__ as sklearn_version
 from sklearn.linear_model import (
-    LinearRegression, Lasso, ElasticNet, LogisticRegression
+    LinearRegression, Lasso, ElasticNet, ElasticNetCV, LogisticRegression,
+    HuberRegressor, RANSACRegressor
 )
 from sklearn.ensemble import (
     RandomForestRegressor, RandomForestClassifier,
-    GradientBoostingRegressor, GradientBoostingClassifier
+    ExtraTreesRegressor, ExtraTreesClassifier,
+    GradientBoostingClassifier
 )
-from sklearn.svm import SVR, SVC
+from sklearn.compose import TransformedTargetRegressor
+from sklearn.preprocessing import PowerTransformer
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.svm import SVC
 from sklearn.decomposition import (
     PCA, NMF, FastICA, FactorAnalysis, KernelPCA
 )
@@ -1682,6 +1687,315 @@ class KernelPLSRegression:
                 raise ValueError(f"Invalid parameter {key}")
         return self
 
+# ============================================================================
+# ENHANCED REGRESSION MODELS WITH AUTOMATIC PARAMETER SELECTION
+# ============================================================================
+
+class SelectionByCyclicCoordinateDescent(BaseEstimator, RegressorMixin):
+    """
+    ElasticNet with automatic α search using Cyclic Coordinate Descent.
+    
+    This wrapper uses ElasticNetCV to automatically find the optimal alpha
+    parameter through cross-validation, which can find sparser models than
+    halving search by using the efficient coordinate descent algorithm.
+    
+    Parameters
+    ----------
+    l1_ratio : float, default=0.5
+        The ElasticNet mixing parameter between L1 and L2 penalties
+    cv : int, default=5
+        Number of cross-validation folds for alpha selection
+    max_iter : int, default=2000
+        Maximum number of iterations
+    tol : float, default=1e-4
+        Tolerance for optimization
+    random_state : int, default=42
+        Random state for reproducibility
+    n_alphas : int, default=100
+        Number of alphas along the regularization path
+    """
+    
+    def __init__(self, l1_ratio=0.5, cv=5, max_iter=2000, tol=1e-4, 
+                 random_state=42, n_alphas=100, eps=1e-3):
+        self.l1_ratio = l1_ratio
+        self.cv = cv
+        self.max_iter = max_iter
+        self.tol = tol
+        self.random_state = random_state
+        self.n_alphas = n_alphas
+        self.eps = eps
+        
+    def fit(self, X, y):
+        """Fit the ElasticNet model with automatic alpha selection."""
+        try:
+            # Use ElasticNetCV for automatic alpha selection
+            self.model_ = ElasticNetCV(
+                l1_ratio=self.l1_ratio,
+                cv=self.cv,
+                max_iter=self.max_iter,
+                tol=self.tol,
+                random_state=self.random_state,
+                n_alphas=self.n_alphas,
+                eps=self.eps,
+                n_jobs=-1,
+                selection='cyclic'  # Use cyclic coordinate descent
+            )
+            
+            # Wrap in TransformedTargetRegressor for target transformation
+            self.regressor_ = TransformedTargetRegressor(
+                regressor=self.model_,
+                transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+            )
+            
+            self.regressor_.fit(X, y)
+            
+            # Store optimal alpha for inspection
+            self.alpha_ = self.model_.alpha_
+            self.l1_ratio_ = self.model_.l1_ratio
+            
+            logger.debug(f"SelectionByCyclicCoordinateDescent: Optimal alpha={self.alpha_:.6f}, "
+                        f"l1_ratio={self.l1_ratio_:.3f}")
+            
+            return self
+            
+        except Exception as e:
+            logger.warning(f"SelectionByCyclicCoordinateDescent fit failed: {e}")
+            # Fallback to regular ElasticNet
+            self.regressor_ = TransformedTargetRegressor(
+                regressor=ElasticNet(random_state=self.random_state, max_iter=self.max_iter),
+                transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+            )
+            self.regressor_.fit(X, y)
+            self.alpha_ = self.regressor_.regressor_.alpha
+            return self
+    
+    def predict(self, X):
+        """Make predictions using the fitted model."""
+        return self.regressor_.predict(X)
+    
+    def get_params(self, deep=True):
+        """Get parameters for this estimator."""
+        return {
+            'l1_ratio': self.l1_ratio,
+            'cv': self.cv,
+            'max_iter': self.max_iter,
+            'tol': self.tol,
+            'random_state': self.random_state,
+            'n_alphas': self.n_alphas,
+            'eps': self.eps
+        }
+    
+    def set_params(self, **params):
+        """Set the parameters of this estimator."""
+        for key, value in params.items():
+            setattr(self, key, value)
+        return self
+
+
+class RobustLinearRegressor(BaseEstimator, RegressorMixin):
+    """
+    Robust Linear Regression with automatic outlier handling.
+    
+    This wrapper provides identical interpretation to LinearRegression but
+    with robustness to remaining outliers. It uses HuberRegressor as the
+    primary method with RANSACRegressor as a fallback for extreme cases.
+    
+    Parameters
+    ----------
+    method : str, default='huber'
+        Robust regression method ('huber' or 'ransac')
+    epsilon : float, default=1.35
+        Huber parameter (only for method='huber')
+    max_iter : int, default=2000
+        Maximum number of iterations
+    random_state : int, default=42
+        Random state for reproducibility
+    """
+    
+    def __init__(self, method='huber', epsilon=1.35, max_iter=2000, 
+                 random_state=42, alpha=0.0001):
+        self.method = method
+        self.epsilon = epsilon
+        self.max_iter = max_iter
+        self.random_state = random_state
+        self.alpha = alpha
+        
+    def fit(self, X, y):
+        """Fit the robust linear regression model."""
+        try:
+            if self.method == 'huber':
+                # Use HuberRegressor for robustness to outliers
+                base_model = HuberRegressor(
+                    epsilon=self.epsilon,
+                    max_iter=self.max_iter,
+                    alpha=self.alpha,
+                    fit_intercept=True
+                )
+            elif self.method == 'ransac':
+                # Use RANSACRegressor for extreme outlier cases
+                base_model = RANSACRegressor(
+                    base_estimator=LinearRegression(),
+                    max_trials=100,
+                    min_samples=None,  # Auto-determine
+                    residual_threshold=None,  # Auto-determine
+                    random_state=self.random_state
+                )
+            else:
+                # Fallback to regular LinearRegression
+                base_model = LinearRegression()
+            
+            # Wrap in TransformedTargetRegressor for target transformation
+            self.regressor_ = TransformedTargetRegressor(
+                regressor=base_model,
+                transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+            )
+            
+            self.regressor_.fit(X, y)
+            
+            # Store method used for inspection
+            self.method_used_ = self.method
+            
+            logger.debug(f"RobustLinearRegressor: Using {self.method} method")
+            
+            return self
+            
+        except Exception as e:
+            logger.warning(f"RobustLinearRegressor fit failed with {self.method}: {e}")
+            # Ultimate fallback to LinearRegression
+            self.regressor_ = TransformedTargetRegressor(
+                regressor=LinearRegression(),
+                transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+            )
+            self.regressor_.fit(X, y)
+            self.method_used_ = 'linear_fallback'
+            return self
+    
+    def predict(self, X):
+        """Make predictions using the fitted model."""
+        return self.regressor_.predict(X)
+    
+    def get_params(self, deep=True):
+        """Get parameters for this estimator."""
+        return {
+            'method': self.method,
+            'epsilon': self.epsilon,
+            'max_iter': self.max_iter,
+            'random_state': self.random_state,
+            'alpha': self.alpha
+        }
+    
+    def set_params(self, **params):
+        """Set the parameters of this estimator."""
+        for key, value in params.items():
+            setattr(self, key, value)
+        return self
+
+
+class OptimizedExtraTreesRegressor(BaseEstimator, RegressorMixin):
+    """
+    Optimized Extra Trees Regressor for small-n scenarios.
+    
+    This wrapper uses ExtraTreesRegressor with optimized parameters for
+    small sample sizes, which tends to reduce variance compared to
+    RandomForestRegressor on small-n datasets.
+    
+    Parameters
+    ----------
+    n_estimators : int, default=200
+        Number of trees in the forest
+    max_features : str or int, default='sqrt'
+        Number of features to consider for splits
+    bootstrap : bool, default=False
+        Whether to use bootstrap sampling
+    random_state : int, default=42
+        Random state for reproducibility
+    min_samples_split : int, default=5
+        Minimum samples required to split a node
+    min_samples_leaf : int, default=2
+        Minimum samples required at a leaf node
+    """
+    
+    def __init__(self, n_estimators=200, max_features='sqrt', bootstrap=False,
+                 random_state=42, min_samples_split=5, min_samples_leaf=2,
+                 max_depth=None, n_jobs=-1):
+        self.n_estimators = n_estimators
+        self.max_features = max_features
+        self.bootstrap = bootstrap
+        self.random_state = random_state
+        self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
+        self.max_depth = max_depth
+        self.n_jobs = n_jobs
+        
+    def fit(self, X, y):
+        """Fit the Extra Trees model."""
+        try:
+            # Adapt parameters based on sample size
+            n_samples = X.shape[0]
+            
+            # For very small datasets, reduce complexity
+            if n_samples < 50:
+                n_estimators = min(100, self.n_estimators)
+                min_samples_split = max(2, min(self.min_samples_split, n_samples // 5))
+                min_samples_leaf = max(1, min(self.min_samples_leaf, n_samples // 10))
+            else:
+                n_estimators = self.n_estimators
+                min_samples_split = self.min_samples_split
+                min_samples_leaf = self.min_samples_leaf
+            
+            self.model_ = ExtraTreesRegressor(
+                n_estimators=n_estimators,
+                max_features=self.max_features,
+                bootstrap=self.bootstrap,
+                random_state=self.random_state,
+                min_samples_split=min_samples_split,
+                min_samples_leaf=min_samples_leaf,
+                max_depth=self.max_depth,
+                n_jobs=self.n_jobs
+            )
+            
+            self.model_.fit(X, y)
+            
+            logger.debug(f"OptimizedExtraTreesRegressor: n_estimators={n_estimators}, "
+                        f"max_features={self.max_features}, bootstrap={self.bootstrap}")
+            
+            return self
+            
+        except Exception as e:
+            logger.warning(f"OptimizedExtraTreesRegressor fit failed: {e}")
+            # Fallback to RandomForestRegressor
+            self.model_ = RandomForestRegressor(
+                n_estimators=100,
+                random_state=self.random_state,
+                n_jobs=self.n_jobs
+            )
+            self.model_.fit(X, y)
+            return self
+    
+    def predict(self, X):
+        """Make predictions using the fitted model."""
+        return self.model_.predict(X)
+    
+    def get_params(self, deep=True):
+        """Get parameters for this estimator."""
+        return {
+            'n_estimators': self.n_estimators,
+            'max_features': self.max_features,
+            'bootstrap': self.bootstrap,
+            'random_state': self.random_state,
+            'min_samples_split': self.min_samples_split,
+            'min_samples_leaf': self.min_samples_leaf,
+            'max_depth': self.max_depth,
+            'n_jobs': self.n_jobs
+        }
+    
+    def set_params(self, **params):
+        """Set the parameters of this estimator."""
+        for key, value in params.items():
+            setattr(self, key, value)
+        return self
+
+
 # Initialize caches with enhanced configuration from config
 from config import CACHE_CONFIG
 
@@ -2761,19 +3075,24 @@ def build_model(name, task):
     from sklearn.preprocessing import PowerTransformer
     
     _MODEL = {
-        "LinearRegression": lambda: TransformedTargetRegressor(
-            regressor=LinearRegression(),
-            transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+        # Enhanced regression models with automatic parameter selection
+        "LinearRegression": lambda: RobustLinearRegressor(
+            method='huber',
+            random_state=42
         ),
-        "ElasticNet": lambda: TransformedTargetRegressor(
-            regressor=ElasticNet(random_state=42, max_iter=2000),
-            transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+        "ElasticNet": lambda: SelectionByCyclicCoordinateDescent(
+            l1_ratio=0.5,
+            cv=5,
+            random_state=42
         ),
-        "RandomForestRegressor": lambda: RandomForestRegressor(
-            random_state=42,
-            n_jobs=-1,
-            n_estimators=200
+        "RandomForestRegressor": lambda: OptimizedExtraTreesRegressor(
+            n_estimators=200,
+            max_features='sqrt',
+            bootstrap=False,
+            random_state=42
         ),
+
+        # Classification models (unchanged)
         "RandomForestClassifier": lambda: RandomForestClassifier(
             random_state=42,
             n_jobs=-1,

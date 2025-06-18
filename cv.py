@@ -30,7 +30,7 @@ import time
 import joblib
 import shutil
 import glob
-from sklearn.base import clone
+from sklearn.base import clone, BaseEstimator, TransformerMixin
 
 # Import for hyperparameter loading
 import json
@@ -40,6 +40,7 @@ import pathlib
 from config import N_JOBS, DatasetConfig, FEATURE_EXTRACTION_CONFIG
 from preprocessing import process_with_missing_modalities, CrossValidationTargetValidator
 from fusion import merge_modalities, ModalityImputer
+from utils import suppress_sklearn_warnings, safe_r2_score, safe_mcc_score
 from models import (
     get_model_object, cached_fit_transform_selector_regression,
     transform_selector_regression, cached_fit_transform_selector_classification,
@@ -76,13 +77,41 @@ def load_best(dataset, extr_nm, model_nm, task):
     dict
         Best hyperparameters, or empty dict if not found
     """
+    
+    def deserialize_sklearn_objects(params):
+        """
+        Convert string representations of sklearn objects back to actual objects.
+        """
+        from sklearn.preprocessing import PowerTransformer
+        
+        deserialized = {}
+        for key, value in params.items():
+            if isinstance(value, str):
+                # Check for common sklearn objects that were serialized as strings
+                if value == "PowerTransformer()":
+                    deserialized[key] = PowerTransformer()
+                elif "PowerTransformer(" in value:
+                    # Handle PowerTransformer with parameters
+                    deserialized[key] = PowerTransformer()
+                else:
+                    deserialized[key] = value
+            else:
+                deserialized[key] = value
+        return deserialized
+    
     f = HP_DIR / f"{dataset}_{extr_nm}_{model_nm}.json"
     if f.exists():
-        return json.load(open(f))["best_params"]
+        params = json.load(open(f))["best_params"]
+        return deserialize_sklearn_objects(params)
+    
     # Fallback: Breast best for other classification, AML best for other regression
     family_ds = "Breast" if task == "clf" else "AML"
     f = HP_DIR / f"{family_ds}_{extr_nm}_{model_nm}.json"
-    return json.load(open(f))["best_params"] if f.exists() else {}
+    if f.exists():
+        params = json.load(open(f))["best_params"]
+        return deserialize_sklearn_objects(params)
+    
+    return {}
 
 # 1. Add a threshold for severe alignment loss at the top of the file:
 SEVERE_ALIGNMENT_LOSS_THRESHOLD = 0.3  # 30%
@@ -99,6 +128,99 @@ CV_CONFIG = {
     "merge_small_classes": True,  # Enable merging of small classes
     "min_samples_for_merge": 2,  # Minimum samples before merging is considered
 }
+
+class SafeExtractorWrapper(BaseEstimator, TransformerMixin):
+    """
+    Wrapper to ensure extractors always produce 2-dimensional output.
+    
+    This prevents the "Found array with dim 3. ElasticNet expected <= 2" error
+    by enforcing that all extractor outputs are properly shaped for downstream models.
+    """
+    
+    def __init__(self, extractor):
+        self.extractor = extractor
+        
+    def fit(self, X, y=None):
+        """Fit the wrapped extractor."""
+        self.extractor.fit(X, y)
+        return self
+        
+    def transform(self, X):
+        """Transform with safe dimensionality checking."""
+        X_transformed = self.extractor.transform(X)
+        
+        # Ensure output is always 2-dimensional
+        if X_transformed.ndim > 2:
+            # Flatten extra dimensions while preserving the sample dimension
+            original_shape = X_transformed.shape
+            n_samples = original_shape[0]
+            n_features = np.prod(original_shape[1:])  # Flatten all feature dimensions
+            
+            X_transformed = X_transformed.reshape(n_samples, n_features)
+            
+            logger.debug(f"SafeExtractorWrapper: Reshaped {original_shape} -> {X_transformed.shape}")
+            
+        elif X_transformed.ndim < 2:
+            # Add feature dimension if needed
+            if X_transformed.ndim == 1:
+                X_transformed = X_transformed.reshape(-1, 1)
+                
+        # Final validation
+        if X_transformed.ndim != 2:
+            raise ValueError(f"SafeExtractorWrapper: Could not reshape to 2D. "
+                           f"Got shape {X_transformed.shape} with {X_transformed.ndim} dimensions")
+                           
+        return X_transformed
+        
+    def fit_transform(self, X, y=None):
+        """Fit and transform with safe dimensionality checking."""
+        return self.fit(X, y).transform(X)
+        
+    def get_params(self, deep=True):
+        """Get parameters from wrapped extractor."""
+        if deep:
+            params = self.extractor.get_params(deep=True)
+            # Prefix with extractor__ to avoid conflicts
+            return {f"extractor__{k}": v for k, v in params.items()}
+        else:
+            return {'extractor': self.extractor}
+            
+    def set_params(self, **params):
+        """Set parameters on wrapped extractor."""
+        extractor_params = {}
+        for key, value in params.items():
+            if key.startswith('extractor__'):
+                # Remove the extractor__ prefix
+                actual_key = key[len('extractor__'):]
+                extractor_params[actual_key] = value
+            elif key == 'extractor':
+                self.extractor = value
+                
+        if extractor_params:
+            self.extractor.set_params(**extractor_params)
+            
+        return self
+
+def safe_wrap_extractor(extractor_obj):
+    """
+    Safely wrap extractor with SafeExtractorWrapper if needed.
+    
+    Parameters
+    ----------
+    extractor_obj : object
+        The extractor object to wrap
+        
+    Returns
+    -------
+    object
+        Safely wrapped extractor
+    """
+    # Check if this is already a SafeExtractorWrapper
+    if isinstance(extractor_obj, SafeExtractorWrapper):
+        return extractor_obj
+    
+    # Wrap the extractor with safety checks
+    return SafeExtractorWrapper(extractor_obj)
 
 def _process_single_modality(
     modality_name: str, 
@@ -562,92 +684,129 @@ def process_cv_fold(
             logger.error(f"Failed to pre-filter target vectors for fold {fold_idx}: {str(e)}")
             return {}, {}
         
-        # Process modalities in parallel, using the EXACT common sample sets
-        from joblib import Parallel, delayed
-        from config import JOBLIB_PARALLEL_CONFIG
-        
-        # Limit number of jobs to avoid excessive resource usage
-        n_jobs = min(3, os.cpu_count() or 1)
-        logger.debug(f"Processing {len(modified_modalities)} modalities with {len(final_common_train)} train and {len(final_common_val)} val samples")
-        
-        modality_results = Parallel(n_jobs=n_jobs, **JOBLIB_PARALLEL_CONFIG)(
-            delayed(_process_single_modality)(
-                name, 
-                df, 
-                final_common_train,  # Use final common samples
-                final_common_val,    # Use final common samples
-                idx_test, 
-                final_aligned_y_train,  # Use pre-filtered targets
-                (clone(extr_obj) if hasattr(extr_obj, 'fit') else extr_obj),  # fresh instance
-                ncomps, 
-                idx_to_id,
-                fold_idx,
-                is_regression
-            )
-            for name, df in modified_modalities.items()
-        )
-
-        # Filter out None results - all should have the same dimensions now
-        valid_results = []
-        expected_train_samples = len(final_common_train)
-        expected_val_samples = len(final_common_val)
-        
-        for i, r in enumerate(modality_results):
-            if r is not None and len(r) >= 3:  # Check we have at least train, val, test
-                X_train, X_val, X_test = r[0], r[1], r[2]
-                if X_train is not None and X_val is not None:
-                    if X_train.size > 0 and X_val.size > 0:
-                        # CRITICAL: Verify dimensions match expected - this is where alignment bugs are caught
-                        train_samples = X_train.shape[0]
-                        val_samples = X_val.shape[0]
-                        
-                        if train_samples != expected_train_samples:
-                            logger.error(f"CRITICAL: Modality {i} train samples mismatch: expected {expected_train_samples}, got {train_samples}")
-                            logger.error(f"This indicates _process_single_modality is not using the correct sample lists!")
-                            continue
-                        if val_samples != expected_val_samples:
-                            logger.error(f"CRITICAL: Modality {i} val samples mismatch: expected {expected_val_samples}, got {val_samples}")
-                            logger.error(f"This indicates _process_single_modality is not using the correct sample lists!")
-                            continue
-                        
-                        # Additional validation: check for NaN or infinite values that could cause issues
-                        if np.isnan(X_train).all() or np.isnan(X_val).all():
-                            logger.error(f"Modality {i} contains all NaN values - skipping")
-                            continue
-                        if np.isinf(X_train).all() or np.isinf(X_val).all():
-                            logger.error(f"Modality {i} contains all infinite values - skipping")
-                            continue
-                            
-                        valid_results.append((X_train, X_val, X_test))
-                        logger.debug(f"Modality {i} validated: Train {X_train.shape}, Val {X_val.shape}")
-                    else:
-                        logger.warning(f"Modality {i} returned empty arrays")
+        # Apply target outlier removal for regression tasks (only on training data)
+        if is_regression:
+            try:
+                original_train_size = len(final_aligned_y_train)
+                
+                # Remove extreme outliers (>97.5th percentile) from training data only
+                outlier_threshold = np.percentile(final_aligned_y_train, 97.5)
+                outlier_mask = final_aligned_y_train <= outlier_threshold
+                
+                # Count outliers for logging
+                n_outliers = np.sum(~outlier_mask)
+                outlier_percentage = (n_outliers / original_train_size) * 100
+                
+                if n_outliers > 0:
+                    # Filter training data and corresponding sample IDs
+                    final_aligned_y_train = final_aligned_y_train[outlier_mask]
+                    final_common_train_filtered = [final_common_train[i] for i, keep in enumerate(outlier_mask) if keep]
+                    
+                    # Update the training sample list
+                    final_common_train = final_common_train_filtered
+                    
+                    logger.info(f"Fold {fold_idx}: Removed {n_outliers} extreme outliers (>{outlier_threshold:.2f}) "
+                               f"from training set ({outlier_percentage:.1f}% of training data)")
+                    logger.info(f"Training set size: {original_train_size} → {len(final_aligned_y_train)}")
+                    
+                    # Ensure we still have enough training samples
+                    if len(final_aligned_y_train) < MIN_SAMPLES_PER_FOLD:
+                        logger.warning(f"Insufficient training samples after outlier removal in fold {fold_idx}: "
+                                     f"{len(final_aligned_y_train)} < {MIN_SAMPLES_PER_FOLD}")
+                        return {}, {}
                 else:
-                    logger.warning(f"Modality {i} returned None arrays")
-            else:
-                logger.warning(f"Modality {i} returned invalid result")
-
-        if not valid_results:
-            logger.error(f"CRITICAL: No valid data found for any modality in fold {fold_idx}")
-            logger.error(f"All {len(modality_results)} modalities failed validation - this indicates a serious alignment bug!")
-            logger.error(f"Expected samples: train={expected_train_samples}, val={expected_val_samples}")
-            for i, r in enumerate(modality_results):
-                if r is not None and len(r) >= 3:
-                    X_train, X_val, X_test = r[0], r[1], r[2]
-                    if X_train is not None and X_val is not None:
-                        logger.error(f"Modality {i}: Train={X_train.shape[0]}, Val={X_val.shape[0]}")
+                    logger.debug(f"Fold {fold_idx}: No extreme outliers detected in training targets")
+                    
+                # Validation data keeps all samples (including outliers)
+                logger.debug(f"Validation set unchanged: {len(final_aligned_y_val)} samples "
+                            f"(outliers preserved for unbiased evaluation)")
+                
+            except Exception as e:
+                logger.warning(f"Target outlier removal failed for fold {fold_idx}: {e}")
+                # Continue without outlier removal if it fails
+        
+        # CORRECTED PIPELINE ORDER: FUSION FIRST, THEN FEATURE PROCESSING
+        # Step 1: Extract RAW modality data (no feature processing)
+        logger.info(f"PIPELINE ORDER: Fusion → Feature Processing (extractors/selectors)")
+        logger.debug(f"Extracting raw data from {len(modified_modalities)} modalities with {len(final_common_train)} train and {len(final_common_val)} val samples")
+        
+        raw_modality_train = []
+        raw_modality_val = []
+        raw_modality_test = []
+        
+        for modality_name, modality_df in modified_modalities.items():
+            logger.debug(f"Extracting raw data from {modality_name}")
+            
+            # Align modality data to sample IDs (but no feature processing)
+            try:
+                # Get training samples - ensure ID alignment  
+                train_mask = modality_df.columns.isin(final_common_train)
+                X_train_raw = modality_df.loc[:, train_mask].T.values  # Transpose to samples x features
+                
+                # Get validation samples  
+                val_mask = modality_df.columns.isin(final_common_val)
+                X_val_raw = modality_df.loc[:, val_mask].T.values
+                
+                # Get test samples
+                test_ids = [idx_to_id[i] for i in idx_test if i in idx_to_id]
+                test_mask = modality_df.columns.isin(test_ids)
+                X_test_raw = modality_df.loc[:, test_mask].T.values if test_ids else np.array([])
+                
+                # Ensure correct sample order
+                if X_train_raw.shape[0] == len(final_common_train):
+                    # Reorder to match exact sample order
+                    train_cols = modality_df.columns[train_mask]
+                    train_order = [list(train_cols).index(sid) for sid in final_common_train if sid in train_cols]
+                    if len(train_order) == len(final_common_train):
+                        X_train_raw = X_train_raw[train_order]
+                
+                if X_val_raw.shape[0] == len(final_common_val):
+                    # Reorder to match exact sample order
+                    val_cols = modality_df.columns[val_mask]
+                    val_order = [list(val_cols).index(sid) for sid in final_common_val if sid in val_cols]
+                    if len(val_order) == len(final_common_val):
+                        X_val_raw = X_val_raw[val_order]
+                
+                # Basic validation
+                if X_train_raw.shape[0] != len(final_common_train):
+                    logger.error(f"Training sample count mismatch for {modality_name}: expected {len(final_common_train)}, got {X_train_raw.shape[0]}")
+                    continue
+                if X_val_raw.shape[0] != len(final_common_val):
+                    logger.error(f"Validation sample count mismatch for {modality_name}: expected {len(final_common_val)}, got {X_val_raw.shape[0]}")
+                    continue
+                    
+                if X_train_raw.size == 0 or X_val_raw.size == 0:
+                    logger.warning(f"Empty data arrays for {modality_name}")
+                    continue
+                    
+                raw_modality_train.append(X_train_raw)
+                raw_modality_val.append(X_val_raw)
+                raw_modality_test.append(X_test_raw)
+                
+                logger.debug(f"Raw {modality_name}: Train {X_train_raw.shape}, Val {X_val_raw.shape}")
+                
+            except Exception as e:
+                logger.error(f"Error extracting raw data from {modality_name}: {e}")
+                continue
+        
+        # Validate we have raw modality data
+        if not raw_modality_train or not raw_modality_val:
+            logger.error(f"CRITICAL: No raw modality data available in fold {fold_idx}")
             return {}, {}
+        
+        # Step 2: Apply FUSION to raw modalities FIRST (before feature processing)
+        logger.info(f"Applying fusion strategy '{integration_technique}' to raw modalities")
         
         # Create a new imputer instance for this fold
         from fusion import ModalityImputer
         fold_imputer = ModalityImputer()
 
-        # Merge modalities - all should have identical dimensions now
+        # Merge raw modalities - apply fusion BEFORE feature processing
         try:
             # Handle strategies that return tuples (fitted fusion objects) specially
             if integration_technique in ["early_fusion_pca", "learnable_weighted", "mkl", "snf", "attention_weighted", "late_fusion_stacking"]:
                 # For training data: fit and get the fusion object
-                train_result = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_train, is_regression=is_regression)
+                train_result = merge_modalities(*raw_modality_train, imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_train, is_regression=is_regression)
                 
                 # Handle tuple return values
                 if isinstance(train_result, tuple):
@@ -657,15 +816,15 @@ def process_cv_fold(
                     fitted_fusion = None
                 
                 # For validation data: use the fitted fusion object
-                X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps, fitted_fusion=fitted_fusion, y=final_aligned_y_val, is_regression=is_regression)
+                X_val_merged = merge_modalities(*raw_modality_val, imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps, fitted_fusion=fitted_fusion, y=final_aligned_y_val, is_regression=is_regression)
                 
                 # Handle tuple return for validation (should just be array)
                 if isinstance(X_val_merged, tuple):
                     X_val_merged = X_val_merged[0]  # Take just the array part
             else:
                 # For simple strategies that don't return tuples
-                X_train_merged = merge_modalities(*[r[0] for r in valid_results], imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_train, is_regression=is_regression)
-                X_val_merged = merge_modalities(*[r[1] for r in valid_results], imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_val, is_regression=is_regression)
+                X_train_merged = merge_modalities(*raw_modality_train, imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_train, is_regression=is_regression)
+                X_val_merged = merge_modalities(*raw_modality_val, imputer=fold_imputer, is_train=False, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_val, is_regression=is_regression)
                 
                 # Handle unexpected tuple returns for simple strategies
                 if isinstance(X_train_merged, tuple):
@@ -676,44 +835,44 @@ def process_cv_fold(
             # Handle potential sample truncation from merge_modalities
             # If merge_modalities truncated samples due to mismatches, we need to update target vectors
             if X_train_merged.shape[0] != len(final_aligned_y_train):
-                logger.warning(f"Training X/y length mismatch after merging: X={X_train_merged.shape[0]} vs y={len(final_aligned_y_train)}")
-                logger.warning("Truncating target vector to match merged data...")
+                logger.warning(f"Training X/y length mismatch after fusion: X={X_train_merged.shape[0]} vs y={len(final_aligned_y_train)}")
+                logger.warning("Truncating target vector to match fused data...")
                 final_aligned_y_train = final_aligned_y_train[:X_train_merged.shape[0]]
                 logger.info(f"Training targets truncated to {len(final_aligned_y_train)} samples")
             
             if X_val_merged.shape[0] != len(final_aligned_y_val):
-                logger.warning(f"Validation X/y length mismatch after merging: X={X_val_merged.shape[0]} vs y={len(final_aligned_y_val)}")
-                logger.warning("Truncating target vector to match merged data...")
+                logger.warning(f"Validation X/y length mismatch after fusion: X={X_val_merged.shape[0]} vs y={len(final_aligned_y_val)}")
+                logger.warning("Truncating target vector to match fused data...")
                 final_aligned_y_val = final_aligned_y_val[:X_val_merged.shape[0]]
                 logger.info(f"Validation targets truncated to {len(final_aligned_y_val)} samples")
             
-            # Skip if no valid data after merging
+            # Skip if no valid data after fusion
             if X_train_merged.size == 0 or X_val_merged.size == 0:
-                logger.warning(f"No valid data after merging in fold {fold_idx}")
+                logger.warning(f"No valid data after fusion in fold {fold_idx}")
                 return {}, {}
                 
-            # Skip if too few samples after merging
+            # Skip if too few samples after fusion
             if X_train_merged.shape[0] < MIN_SAMPLES_PER_FOLD:
-                logger.warning(f"Skipping fold {fold_idx} for {ds_name}: too few samples after merging ({X_train_merged.shape[0]} < {MIN_SAMPLES_PER_FOLD})")
+                logger.warning(f"Skipping fold {fold_idx} for {ds_name}: too few samples after fusion ({X_train_merged.shape[0]} < {MIN_SAMPLES_PER_FOLD})")
                 return {}, {}
                 
-            logger.debug(f"Alignment achieved in fold {fold_idx}: Train {X_train_merged.shape}, Val {X_val_merged.shape}")
+            logger.debug(f"Fusion completed in fold {fold_idx}: Train {X_train_merged.shape}, Val {X_val_merged.shape}")
             
             # Update the aligned target vectors for the rest of the processing
             aligned_y_train = final_aligned_y_train
             aligned_y_val = final_aligned_y_val
             
         except Exception as e:
-            logger.error(f"Error merging modalities in fold {fold_idx}: {str(e)}")
+            logger.error(f"Error during fusion in fold {fold_idx}: {str(e)}")
             return {}, {}
         
-        # No need for verify_data_alignment calls here since we ensured perfect alignment
-        # The arrays should be perfectly aligned at this point
+        # Step 3: Apply feature processing (extractors/selectors) to FUSED data
+        logger.info(f"Applying feature processing ({pipeline_type}) to fused data")
         
         # Save the number of features before extraction/selection
         original_n_features = ncomps  # This ensures n_features matches the intended value in metrics
 
-        # Apply extraction/selection to merged data
+        # Apply extraction/selection to FUSED data (correct order)
         # --- ENFORCE ncomps after reduction ---
         if is_regression:
             # Extraction pipeline
@@ -1204,14 +1363,38 @@ def train_regression_model(X_train, y_train, X_val, y_val, model_name, out_dir, 
                 'early_stopping_used': False
             }
         
-        # Make predictions
-        y_pred = model.predict(X_val)
+        # Make predictions with validation
+        try:
+            y_pred = model.predict(X_val)
+            
+            # Validate predictions are finite
+            if not np.all(np.isfinite(y_pred)):
+                logger.warning(f"Model {model_name} (fold {fold_idx}) produced non-finite predictions, cleaning...")
+                y_pred = np.nan_to_num(y_pred, nan=0.0, posinf=np.median(y_val), neginf=np.median(y_val))
+            
+            # Check for reasonable prediction variance
+            if np.std(y_pred) == 0:
+                logger.warning(f"Model {model_name} (fold {fold_idx}) produced constant predictions")
         
-        # Calculate metrics
-        mse = mean_squared_error(y_val, y_pred)
-        rmse = np.sqrt(mse)
-        mae = mean_absolute_error(y_val, y_pred)
-        r2 = r2_score(y_val, y_pred)
+        except Exception as e:
+            logger.error(f"Prediction failed for {model_name} (fold {fold_idx}): {str(e)}")
+            # Create fallback predictions
+            y_pred = np.full(len(y_val), np.median(y_val))
+            fallback_used = True
+        
+        # Calculate metrics with error handling
+        try:
+            mse = mean_squared_error(y_val, y_pred)
+            rmse = np.sqrt(mse) if mse >= 0 else 0.0
+            mae = mean_absolute_error(y_val, y_pred)
+            
+            # Safe R² calculation using centralized safe scorer
+            r2 = safe_r2_score(y_val, y_pred)
+                
+        except Exception as e:
+            logger.warning(f"Metric calculation failed for {model_name} (fold {fold_idx}): {str(e)}")
+            mse, rmse, mae, r2 = 999.0, 999.0, 999.0, -999.0
+            fallback_used = True
         
         # Log successful training
         log_model_training_info(model_name, dataset_name, fold_idx, X_train.shape[0], X_val.shape[0], 
@@ -1395,8 +1578,33 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
                 if model.n_classes_ != n_classes:
                     raise ValueError(f"Failed to train model with correct number of classes. Expected {n_classes}, got {model.n_classes_}")
         
-        # Calculate metrics
-        y_pred = model.predict(X_val)
+        # Make predictions with validation
+        try:
+            y_pred = model.predict(X_val)
+            
+            # Validate predictions
+            if not np.all(np.isfinite(y_pred)):
+                logger.warning(f"Model {model_name} (fold {fold_idx}) produced non-finite predictions, using fallback...")
+                # Use most frequent class as fallback
+                from scipy.stats import mode
+                fallback_class = mode(y_train)[0][0] if len(y_train) > 0 else 0
+                y_pred = np.full(len(y_val), fallback_class)
+                fallback_used = True
+            
+            # Validate predictions are in expected range
+            valid_classes = np.unique(y_train)
+            invalid_mask = ~np.isin(y_pred, valid_classes)
+            if np.any(invalid_mask):
+                logger.warning(f"Model {model_name} (fold {fold_idx}) predicted invalid classes, correcting...")
+                y_pred[invalid_mask] = valid_classes[0]  # Use first valid class
+                
+        except Exception as e:
+            logger.error(f"Prediction failed for {model_name} (fold {fold_idx}): {str(e)}")
+            # Create fallback predictions
+            from scipy.stats import mode
+            fallback_class = mode(y_train)[0][0] if len(y_train) > 0 else 0
+            y_pred = np.full(len(y_val), fallback_class)
+            fallback_used = True
         
         # Get prediction probabilities with proper validation
         if hasattr(model, 'predict_proba'):
@@ -1480,7 +1688,8 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         
         # Calculate Matthews Correlation Coefficient
         try:
-            mcc = matthews_corrcoef(y_val, y_pred)
+            # Use safe MCC scorer to prevent warnings
+            mcc = safe_mcc_score(y_val, y_pred)
         except Exception as e:
             logger.warning(f"Could not calculate MCC for {model_name}: {str(e)}")
             mcc = 0.0
@@ -1788,9 +1997,9 @@ def get_optimal_cv_splits(y_temp, is_regression=False):
         
         return optimal_splits
 
-def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False):
+def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False, sample_ids=None):
     """
-    Create a robust CV splitter that ensures good class distribution.
+    Create a robust CV splitter with enhanced strategies for stratified regression and grouped CV.
     
     Parameters
     ----------
@@ -1800,6 +2009,8 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False):
         Training labels
     is_regression : bool
         Whether this is a regression task
+    sample_ids : List[str], optional
+        Sample IDs for extracting patient groups (for grouped CV)
         
     Returns
     -------
@@ -1808,8 +2019,44 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False):
     """
     n_samples = len(y_temp)
     
+    # Determine optimal number of splits
+    optimal_splits = get_optimal_cv_splits(y_temp, is_regression)
+    
+    # Try enhanced CV strategies first
+    try:
+        task_type = 'regression' if is_regression else 'classification'
+        
+        # Use enhanced CV splitter with stratified regression and grouped CV
+        cv_result = create_enhanced_cv_splitter(
+            y=y_temp,
+            sample_ids=sample_ids,
+            task_type=task_type,
+            n_splits=optimal_splits,
+            use_stratified_regression=True,
+            use_grouped_cv=True,
+            random_state=0
+        )
+        
+        # Unpack the result (handle different return formats)
+        if len(cv_result) == 4:
+            cv_splitter, strategy_desc, y_for_cv, groups = cv_result
+        else:
+            cv_splitter, strategy_desc = cv_result[:2]
+            y_for_cv = y_temp
+            groups = None
+        
+        # Validate the enhanced strategy
+        if validate_enhanced_cv_strategy(cv_splitter, y_for_cv, groups, optimal_splits, task_type):
+            logger.info(f"Enhanced CV strategy successful: {strategy_desc}")
+            return cv_splitter, optimal_splits, strategy_desc
+        else:
+            logger.warning(f"Enhanced CV strategy validation failed: {strategy_desc}")
+            
+    except Exception as e:
+        logger.warning(f"Enhanced CV strategy failed: {e}, falling back to standard approach")
+    
+    # Fallback to original robust CV logic
     if is_regression:
-        optimal_splits = get_optimal_cv_splits(y_temp, is_regression)
         cv_splitter = KFold(n_splits=optimal_splits, shuffle=True, random_state=0)
         return cv_splitter, optimal_splits, "KFold"
     
@@ -1837,9 +2084,6 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False):
         n_classes = len(unique)
         min_class_count = np.min(counts)
         logger.info(f"After merging: {n_classes} classes, min_count={min_class_count}")
-    
-    # Calculate optimal number of splits
-    optimal_splits = get_optimal_cv_splits(y_temp, is_regression)
     
     # Try stratified split first
     try:
@@ -1971,6 +2215,8 @@ def _run_pipeline(
     is_regression: bool = True, 
     pipeline_type: str = "extraction"
 ):
+    # Suppress sklearn warnings early in pipeline
+    suppress_sklearn_warnings()
     """
     Generic pipeline function handling both extraction and selection for
     both regression and classification tasks.
@@ -2157,8 +2403,8 @@ def _run_pipeline(
                 logger.info(progress_msg)
                 log_pipeline_stage(f"{trans_type}_CV", dataset=ds_name, details=f"{trans_name}-{n_val} ({run_idx}/{total_runs})")
 
-                # Use the new robust CV splitter
-                cv_splitter, n_splits, cv_type_used = create_robust_cv_splitter(idx_temp, y_temp, is_regression)
+                # Use the enhanced robust CV splitter with sample IDs for grouped CV
+                cv_splitter, n_splits, cv_type_used = create_robust_cv_splitter(idx_temp, y_temp, is_regression, sample_ids=common_ids)
                 
                 logger.info(f"Dataset: {ds_name}, using {cv_type_used} {n_splits}-fold CV with {len(idx_temp)} training samples")
                 logger.debug(f"[PIPELINE] {ds_name} - {trans_name}-{n_val}: Using {cv_type_used} {n_splits}-fold CV")
@@ -2173,40 +2419,28 @@ def _run_pipeline(
                 # Process each missing percentage
                 for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
                     try:
-                        # Check if fusion upgrades are enabled for intelligent strategy selection
-                        from config import FUSION_UPGRADES_CONFIG
-                        if FUSION_UPGRADES_CONFIG.get("enabled", False):
-                            # FUSION UPGRADES MODE: Use intelligent strategy selection
-                            from fusion import get_recommended_fusion_strategy
-                            recommended_strategy = get_recommended_fusion_strategy(
-                                missing_percentage * 100,  # Convert to percentage
-                                has_targets=True,
-                                n_modalities=len(data_modalities),
-                                task_type="regression" if is_regression else "classification"
-                            )
-                            integration_techniques = [recommended_strategy]
-                            logger.info(f"Fusion upgrades enabled: Using intelligent strategy '{recommended_strategy}' for {missing_percentage*100}% missing data")
+                        # COMPREHENSIVE FUSION TESTING: Test all appropriate fusion techniques as specified in README
+                        # Always test ALL fusion techniques regardless of FUSION_UPGRADES_CONFIG
+                        if missing_percentage == 0.0:
+                            # For 0% missing data, test ALL fusion techniques that work with clean data
+                            # As specified in README: [attention_weighted, learnable_weighted, mkl, snf, early_fusion_pca]
+                            integration_techniques = [
+                                "attention_weighted", 
+                                "learnable_weighted", 
+                                "mkl", 
+                                "snf", 
+                                "early_fusion_pca"
+                            ]
+                            logger.info(f"Testing {len(integration_techniques)} fusion techniques for 0% missing data: {integration_techniques}")
                         else:
-                            # STANDARD MODE: Test all appropriate fusion techniques
-                            if missing_percentage == 0.0:
-                                # For 0% missing data, test ALL fusion techniques that work with clean data
-                                integration_techniques = [
-                                    "attention_weighted", 
-                                    "learnable_weighted", 
-                                    "mkl", 
-                                    "snf", 
-                                    "early_fusion_pca"
-                                ]
-                                logger.info(f"Standard mode: Testing {len(integration_techniques)} fusion techniques for 0% missing data")
-                            else:
-                                # For missing data (>0%), test only techniques that handle missing data
-                                # (exclude weighted_concat as it requires 0% missing data)
-                                integration_techniques = [
-                                    "mkl", 
-                                    "snf", 
-                                    "early_fusion_pca"
-                                ]
-                                logger.info(f"Standard mode: Testing {len(integration_techniques)} fusion techniques for {missing_percentage*100}% missing data")
+                            # For missing data (>0%), test only techniques that handle missing data
+                            # As specified in README: [mkl, snf, early_fusion_pca]
+                            integration_techniques = [
+                                "mkl", 
+                                "snf", 
+                                "early_fusion_pca"
+                            ]
+                            logger.info(f"Testing {len(integration_techniques)} fusion techniques for {missing_percentage*100}% missing data: {integration_techniques}")
                         
                         # Process each integration technique
                         for integration_technique in integration_techniques:
@@ -2842,3 +3076,365 @@ def cross_validate_model(X, y, model_name, n_splits=5, random_state=42, out_dir=
     else:
         logger.warning(f"No models were successfully trained for {model_name}")
         return None
+
+# ============================================================================
+# ENHANCED CROSS-VALIDATION STRATEGIES
+# ============================================================================
+
+def extract_patient_ids_from_samples(sample_ids: List[str]) -> List[str]:
+    """
+    Extract patient IDs from sample IDs for grouped cross-validation.
+    
+    For TCGA data, sample IDs typically have format: TCGA-XX-XXXX-XXX
+    where the first 12 characters (TCGA-XX-XXXX) identify the patient.
+    
+    Parameters
+    ----------
+    sample_ids : List[str]
+        List of sample IDs
+        
+    Returns
+    -------
+    List[str]
+        List of patient IDs (same length as sample_ids)
+    """
+    patient_ids = []
+    
+    for sample_id in sample_ids:
+        if isinstance(sample_id, str) and sample_id.startswith("TCGA"):
+            # Extract patient ID from TCGA format: TCGA-XX-XXXX
+            parts = sample_id.split("-")
+            if len(parts) >= 3:
+                patient_id = "-".join(parts[:3])  # TCGA-XX-XXXX
+                patient_ids.append(patient_id)
+            else:
+                # Fallback if format is unexpected
+                patient_ids.append(sample_id)
+        else:
+            # For non-TCGA data, use the full sample ID as patient ID
+            patient_ids.append(sample_id)
+    
+    return patient_ids
+
+def create_stratified_regression_bins(y: np.ndarray, n_bins: int = 4, min_samples_per_bin: int = 2) -> Tuple[np.ndarray, bool]:
+    """
+    Create stratified bins for regression targets to enable stratified K-fold.
+    
+    For AML blast percentage, this bins the continuous values into quartiles
+    to ensure each fold has a comparable range of target values.
+    
+    Parameters
+    ----------
+    y : np.ndarray
+        Continuous target values
+    n_bins : int, default=4
+        Number of bins to create (quartiles by default)
+    min_samples_per_bin : int, default=2
+        Minimum samples required per bin for stratification to be viable
+        
+    Returns
+    -------
+    Tuple[np.ndarray, bool]
+        Binned target values and whether stratification is viable
+    """
+    try:
+        # Use quantile-based binning to ensure equal-sized bins
+        bins = np.quantile(y, np.linspace(0, 1, n_bins + 1))
+        
+        # Handle edge case where all values are the same
+        if len(np.unique(bins)) == 1:
+            logger.warning("All target values are identical, stratification not viable")
+            return np.zeros(len(y), dtype=int), False
+        
+        # Create bins using digitize (returns bin indices)
+        binned_y = np.digitize(y, bins[1:-1])  # Exclude first and last bin edges
+        
+        # Ensure bins are 0-indexed and within valid range
+        binned_y = np.clip(binned_y, 0, n_bins - 1)
+        
+        # Check bin distribution for stratification viability
+        unique_bins, bin_counts = np.unique(binned_y, return_counts=True)
+        min_bin_count = np.min(bin_counts)
+        
+        # Check if stratification is viable
+        stratification_viable = (min_bin_count >= min_samples_per_bin)
+        
+        if not stratification_viable:
+            logger.warning(f"Stratification not viable: smallest bin has {min_bin_count} samples "
+                          f"(minimum required: {min_samples_per_bin})")
+            logger.debug(f"Bin distribution: bins={unique_bins}, counts={bin_counts}")
+        else:
+            logger.debug(f"Target stratification viable: {len(unique_bins)} bins with counts {bin_counts}")
+        
+        return binned_y, stratification_viable
+        
+    except Exception as e:
+        logger.warning(f"Failed to create stratified bins: {e}")
+        return y, False
+
+def check_classification_stratification_viability(y: np.ndarray, n_splits: int = 3, min_samples_per_class: int = 2) -> bool:
+    """
+    Check if classification stratification is viable given the class distribution.
+    
+    Parameters
+    ----------
+    y : np.ndarray
+        Classification target values
+    n_splits : int
+        Number of CV splits planned
+    min_samples_per_class : int
+        Minimum samples per class required for stratification
+        
+    Returns
+    -------
+    bool
+        True if stratification is viable, False otherwise
+    """
+    unique_classes, class_counts = np.unique(y, return_counts=True)
+    min_class_count = np.min(class_counts)
+    
+    # Need at least min_samples_per_class AND at least n_splits samples per class
+    required_min = max(min_samples_per_class, n_splits)
+    stratification_viable = (min_class_count >= required_min)
+    
+    if not stratification_viable:
+        logger.warning(f"Classification stratification not viable: smallest class has {min_class_count} samples "
+                      f"(minimum required: {required_min} for {n_splits} splits)")
+        logger.debug(f"Class distribution: classes={unique_classes}, counts={class_counts}")
+    else:
+        logger.debug(f"Classification stratification viable: {len(unique_classes)} classes with counts {class_counts}")
+    
+    return stratification_viable
+
+def create_enhanced_cv_splitter(y: np.ndarray, 
+                              sample_ids: Optional[List[str]] = None,
+                              task_type: str = 'regression',
+                              n_splits: int = 5,
+                              use_stratified_regression: bool = True,
+                              use_grouped_cv: bool = True,
+                              random_state: int = 42) -> Tuple[Any, str]:
+    """
+    Create enhanced cross-validation splitter with stratified regression and grouped CV.
+    
+    Parameters
+    ----------
+    y : np.ndarray
+        Target values
+    sample_ids : List[str], optional
+        Sample IDs for extracting patient groups
+    task_type : str
+        'regression' or 'classification'
+    n_splits : int
+        Number of CV folds
+    use_stratified_regression : bool
+        Whether to use stratified bins for regression
+    use_grouped_cv : bool
+        Whether to use grouped CV for patient replicates
+    random_state : int
+        Random state for reproducibility
+        
+    Returns
+    -------
+    Tuple[cv_splitter, strategy_description]
+        CV splitter object and description of strategy used
+    """
+    import warnings
+    from sklearn.model_selection import (
+        KFold, StratifiedKFold, GroupKFold, StratifiedGroupKFold
+    )
+    
+    # Suppress sklearn stratification warnings during CV setup
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", 
+                              message="The least populated class in y has only .* members", 
+                              category=UserWarning)
+        
+        return _create_enhanced_cv_splitter_impl(y, sample_ids, task_type, n_splits, 
+                                                use_stratified_regression, use_grouped_cv, random_state)
+
+def _create_enhanced_cv_splitter_impl(y: np.ndarray, 
+                                    sample_ids: Optional[List[str]] = None,
+                                    task_type: str = 'regression',
+                                    n_splits: int = 5,
+                                    use_stratified_regression: bool = True,
+                                    use_grouped_cv: bool = True,
+                                    random_state: int = 42):
+    """Implementation of enhanced CV splitter with warnings suppressed."""
+    from sklearn.model_selection import (
+        KFold, StratifiedKFold, GroupKFold, StratifiedGroupKFold
+    )
+    
+    n_samples = len(y)
+    strategy_parts = []
+    
+    # Determine if we have patient groups
+    groups = None
+    if use_grouped_cv and sample_ids is not None:
+        patient_ids = extract_patient_ids_from_samples(sample_ids)
+        unique_patients = np.unique(patient_ids)
+        
+        # Only use grouped CV if we have multiple samples per patient
+        if len(unique_patients) < len(sample_ids):
+            groups = np.array([list(unique_patients).index(pid) for pid in patient_ids])
+            n_groups = len(unique_patients)
+            
+            # Adjust n_splits if we have fewer groups than requested splits
+            n_splits = min(n_splits, n_groups)
+            strategy_parts.append(f"Grouped({n_groups} patients)")
+            
+            logger.info(f"Detected {len(sample_ids) - len(unique_patients)} patient replicates")
+            logger.info(f"Using grouped CV with {n_groups} patient groups")
+        else:
+            logger.debug("No patient replicates detected, skipping grouped CV")
+    
+    # Handle regression vs classification
+    if task_type == 'regression':
+        if use_stratified_regression:
+            # Create stratified bins for regression and check viability
+            y_binned, stratification_viable = create_stratified_regression_bins(y, n_bins=4, min_samples_per_bin=n_splits)
+            
+            if stratification_viable:
+                strategy_parts.append("Stratified(quartiles)")
+                
+                if groups is not None:
+                    # Grouped + Stratified
+                    cv_splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+                    strategy_parts.append("StratifiedGroupKFold")
+                    strategy_desc = " + ".join(strategy_parts)
+                    
+                    logger.info(f"Using {strategy_desc} for regression CV")
+                    return cv_splitter, strategy_desc, y_binned, groups
+                else:
+                    # Stratified only
+                    cv_splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+                    strategy_desc = "StratifiedKFold(quartiles)"
+                    
+                    logger.info(f"Using {strategy_desc} for regression CV")
+                    return cv_splitter, strategy_desc, y_binned, None
+            else:
+                logger.info("Stratified regression not viable, falling back to non-stratified CV")
+        
+        # Fallback for regression: GroupKFold or regular KFold
+        if groups is not None:
+            cv_splitter = GroupKFold(n_splits=n_splits)
+            strategy_desc = "GroupKFold"
+            logger.info(f"Using {strategy_desc} for regression CV")
+            return cv_splitter, strategy_desc, y, groups
+        else:
+            cv_splitter = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+            strategy_desc = "KFold"
+            logger.info(f"Using {strategy_desc} for regression CV")
+            return cv_splitter, strategy_desc, y, None
+    
+    else:  # Classification
+        # Check if stratification is viable for classification
+        stratification_viable = check_classification_stratification_viability(y, n_splits=n_splits)
+        
+        if stratification_viable:
+            if groups is not None:
+                # Grouped + Stratified for classification
+                cv_splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+                strategy_desc = "StratifiedGroupKFold"
+                
+                logger.info(f"Using {strategy_desc} for classification CV")
+                return cv_splitter, strategy_desc, y, groups
+            else:
+                # Standard stratified classification
+                cv_splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+                strategy_desc = "StratifiedKFold"
+                
+                logger.info(f"Using {strategy_desc} for classification CV")
+                return cv_splitter, strategy_desc, y, None
+        else:
+            logger.info("Classification stratification not viable, falling back to non-stratified CV")
+            
+            # Fallback to non-stratified CV
+            if groups is not None:
+                cv_splitter = GroupKFold(n_splits=n_splits)
+                strategy_desc = "GroupKFold (stratification not viable)"
+                logger.info(f"Using {strategy_desc} for classification CV")
+                return cv_splitter, strategy_desc, y, groups
+            else:
+                cv_splitter = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+                strategy_desc = "KFold (stratification not viable)"
+                logger.info(f"Using {strategy_desc} for classification CV")
+                return cv_splitter, strategy_desc, y, None
+
+def validate_enhanced_cv_strategy(cv_splitter, y_for_cv, groups, n_splits, task_type):
+    """
+    Validate that the enhanced CV strategy will work properly.
+    
+    Parameters
+    ----------
+    cv_splitter : sklearn CV splitter
+        The cross-validation splitter
+    y_for_cv : np.ndarray
+        Target values (potentially binned for stratified regression)
+    groups : np.ndarray or None
+        Group labels for grouped CV
+    n_splits : int
+        Expected number of splits
+    task_type : str
+        'regression' or 'classification'
+        
+    Returns
+    -------
+    bool
+        True if validation passes, False otherwise
+    """
+    import warnings
+    
+    # Suppress sklearn stratification warnings during validation
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", 
+                              message="The least populated class in y has only .* members", 
+                              category=UserWarning)
+        
+        try:
+            # Test the splitter
+            if groups is not None:
+                splits = list(cv_splitter.split(np.zeros((len(y_for_cv), 1)), y_for_cv, groups))
+            else:
+                splits = list(cv_splitter.split(np.zeros((len(y_for_cv), 1)), y_for_cv))
+        
+            actual_splits = len(splits)
+            if actual_splits != n_splits:
+                logger.warning(f"CV validation: expected {n_splits} splits, got {actual_splits}")
+                return False
+            
+            # Check fold sizes
+            fold_sizes = [len(train_idx) + len(val_idx) for train_idx, val_idx in splits]
+            min_fold_size = min(fold_sizes)
+            max_fold_size = max(fold_sizes)
+            
+            if min_fold_size < 10:
+                logger.warning(f"CV validation: very small fold detected ({min_fold_size} samples)")
+                return False
+            
+            if max_fold_size / min_fold_size > 2.0:
+                logger.warning(f"CV validation: unbalanced folds (sizes: {min_fold_size}-{max_fold_size})")
+            
+            # Check class distribution for classification
+            if task_type == 'classification':
+                for fold_idx, (train_idx, val_idx) in enumerate(splits):
+                    y_train_fold = y_for_cv[train_idx]
+                    y_val_fold = y_for_cv[val_idx]
+                    
+                    # Check if all classes are represented in training
+                    train_classes = set(y_train_fold)
+                    val_classes = set(y_val_fold)
+                    
+                    if len(train_classes) < 2:
+                        logger.warning(f"CV validation: fold {fold_idx} training set has only {len(train_classes)} classes")
+                        return False
+                    
+                    if len(val_classes) < 1:
+                        logger.warning(f"CV validation: fold {fold_idx} validation set has no samples")
+                        return False
+            
+            logger.debug(f"CV validation passed: {actual_splits} folds, sizes {min_fold_size}-{max_fold_size}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"CV validation failed: {e}")
+            return False

@@ -1,0 +1,33 @@
+{
+  "best_params": {
+    "model__n_estimators": 200,
+    "model__min_samples_split": 5,
+    "model__min_samples_leaf": 1,
+    "model__max_features": 0.5,
+    "model__max_depth": 10,
+    "model__bootstrap": false,
+    "extractor__extractor__n_components": 4,
+    "extractor__extractor__gamma": 0.001
+  },
+  "best_score": -10.0,
+  "dataset": "AML",
+  "task": "reg",
+  "extractor": "KPLS",
+  "model": "RandomForestRegressor",
+  "preprocessing": "4-phase-enhanced",
+  "data_shape": [
+    165,
+    18735
+  ],
+  "n_parameter_combinations": 5184,
+  "search_method": "HalvingRandomSearchCV",
+  "cv_folds": 3,
+  "search_time_seconds": 18.77840256690979,
+  "timestamp": "2025-06-18 01:37:42",
+  "best_r2_score": -10.0,
+  "best_mae_score": 28.042994046525862,
+  "baseline_mae": 28.0,
+  "mae_improvement": -0.04299404652586247,
+  "mae_improvement_pct": -0.15355016616379455,
+  "scoring_method": "Multi-metric: R\u00b2 (optimized) + MAE (tracked)"
+}

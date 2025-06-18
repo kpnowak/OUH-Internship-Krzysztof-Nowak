@@ -59,7 +59,7 @@ weights = performances / np.sum(performances)  # w_i = perf_i / Σ perf_i
 - **Validation Mode** (`is_train=False`): Returns `merged_data` only
 - **Simple Strategies**: Always return `merged_data` only
 
-## 🧪 **TESTING VERIFICATION**
+##  **TESTING VERIFICATION**
 
 ### **Test Results**
 ```

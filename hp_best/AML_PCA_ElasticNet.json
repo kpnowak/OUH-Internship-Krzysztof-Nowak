@@ -1,0 +1,31 @@
+{
+  "best_params": {
+    "model__n_alphas": 100,
+    "model__max_iter": 1000,
+    "model__l1_ratio": 0.5,
+    "model__eps": 0.001,
+    "model__cv": 3,
+    "extractor__extractor__n_components": 4
+  },
+  "best_score": -0.2487726410230001,
+  "dataset": "AML",
+  "task": "reg",
+  "extractor": "PCA",
+  "model": "ElasticNet",
+  "preprocessing": "4-phase-enhanced",
+  "data_shape": [
+    165,
+    18748
+  ],
+  "n_parameter_combinations": 240,
+  "search_method": "HalvingRandomSearchCV",
+  "cv_folds": 3,
+  "search_time_seconds": 8.141560554504395,
+  "timestamp": "2025-06-18 01:31:27",
+  "best_r2_score": -0.2487726410230001,
+  "best_mae_score": 28.85844357808431,
+  "baseline_mae": 28.0,
+  "mae_improvement": -0.8584435780843087,
+  "mae_improvement_pct": -3.065869921729674,
+  "scoring_method": "Multi-metric: R\u00b2 (optimized) + MAE (tracked)"
+}

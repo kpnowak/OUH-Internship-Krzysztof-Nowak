@@ -85,7 +85,7 @@ def load_and_preprocess_data_enhanced(...):
 
 ---
 
-## 🧪 COMPREHENSIVE TEST RESULTS
+##  COMPREHENSIVE TEST RESULTS
 
 ### **Integration Test Summary**:  **ALL PASSED**
 

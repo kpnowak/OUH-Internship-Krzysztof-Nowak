@@ -81,7 +81,7 @@ if fitted_fusion is None:
 -  **Optimal performance**: Full late-fusion stacking functionality available
 -  **Clear logging**: Informative messages about what's happening
 
-## 🧪 Verification Results
+##  Verification Results
 
 All test scenarios pass successfully:
 

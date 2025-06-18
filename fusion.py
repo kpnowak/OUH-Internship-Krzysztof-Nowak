@@ -17,7 +17,7 @@ from typing import List, Optional, Union, Tuple, Dict, Any
 import logging
 from sklearn.metrics import r2_score, roc_auc_score
 from sklearn.model_selection import cross_val_score
-from sklearn.svm import SVR, SVC
+from sklearn.svm import SVC
 from sklearn.cluster import SpectralClustering
 from sklearn.impute import KNNImputer, SimpleImputer
 try:
@@ -486,9 +486,10 @@ class LateFusionFallback:
                             random_state=self.random_state, n_jobs=-1
                         )
                 
-                # Assess reliability using cross-validation
+                # Assess reliability using cross-validation with safe scoring
                 try:
-                    cv_scores = cross_val_score(
+                    from utils import safe_cross_val_score
+                    cv_scores = safe_cross_val_score(
                         model, modality, y, cv=3, scoring=metric, n_jobs=-1
                     )
                     reliability = np.mean(cv_scores)
@@ -2064,7 +2065,6 @@ class LateFusionStacking:
         if self.is_regression:
             from sklearn.ensemble import RandomForestRegressor
             from sklearn.linear_model import ElasticNet
-            from sklearn.svm import SVR
             from sklearn.compose import TransformedTargetRegressor
             from sklearn.preprocessing import PowerTransformer
             
@@ -2073,8 +2073,7 @@ class LateFusionStacking:
                 'elastic': TransformedTargetRegressor(
                     regressor=ElasticNet(alpha=0.3, l1_ratio=0.5, random_state=self.random_state),
                     transformer=PowerTransformer(method="yeo-johnson", standardize=True)
-                ),
-                'svr': SVR(kernel='rbf', C=1.0)
+                )
             }
         else:
             from sklearn.ensemble import RandomForestClassifier
@@ -2995,7 +2994,8 @@ class LearnableWeightedFusion:
                         # Calculate mean performance
                         performance = np.mean(scores) if scores else 0.5
                     else:
-                        scores = cross_val_score(model, modality, y_clean, cv=cv, scoring=scoring)
+                        from utils import safe_cross_val_score
+                        scores = safe_cross_val_score(model, modality, y_clean, cv=cv, scoring=scoring)
                         performance = np.mean(scores)
                     
                     performances.append(performance)
@@ -3164,7 +3164,8 @@ class LearnableWeightedFusion:
         """
         try:
             if scoring == 'r2':
-                return r2_score(y_test, model.predict(X_test))
+                from utils import safe_r2_score
+                return safe_r2_score(y_test, model.predict(X_test))
             elif scoring in ['roc_auc', 'roc_auc_ovr_weighted']:
                 y_proba = model.predict_proba(X_test)
                 return enhanced_roc_auc_score(y_test, y_proba, 

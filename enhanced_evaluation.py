@@ -86,7 +86,9 @@ class EnhancedMetrics:
             
             # Matthews Correlation Coefficient (handles imbalanced classes well)
             try:
-                metrics['mcc'] = matthews_corrcoef(y_true, y_pred)
+                # Use safe MCC scorer to prevent warnings with edge cases
+                from utils import safe_mcc_score
+                metrics['mcc'] = safe_mcc_score(y_true, y_pred)
             except Exception as e:
                 logger.warning(f"Could not calculate MCC: {str(e)}")
                 metrics['mcc'] = 0.0
@@ -205,7 +207,9 @@ class EnhancedMetrics:
             metrics['mse'] = mean_squared_error(y_true_unscaled, y_pred_unscaled)
             
             # R² can be calculated on either scaled or unscaled (should be the same)
-            metrics['r2'] = r2_score(y_true, y_pred)
+            # Use safe R² scorer to prevent warnings with small datasets
+            from utils import safe_r2_score
+            metrics['r2'] = safe_r2_score(y_true, y_pred)
             
             # Additional metrics
             metrics['mean_residual'] = np.mean(y_true_unscaled - y_pred_unscaled)

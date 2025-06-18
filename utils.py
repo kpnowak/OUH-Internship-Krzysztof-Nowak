@@ -487,11 +487,273 @@ def force_garbage_collection():
             f"[GC] Collected {collected} objects, freed {memory_freed:.1f} MB"
         )
 
+# ============= Safe Scoring Functions for Pipeline-Wide Protection =============
 
+def safe_r2_score(y_true, y_pred, **kwargs):
+    """
+    Safe R² scorer that handles edge cases with small sample sizes and model failures.
+    Returns a meaningful fallback score when R² is undefined or when predictions are invalid.
+    
+    Parameters
+    ----------
+    y_true : array-like
+        Ground truth (correct) target values.
+    y_pred : array-like
+        Estimated target values.
+    **kwargs : dict
+        Additional keyword arguments for r2_score.
+        
+    Returns
+    -------
+    float
+        R² score or fallback value if calculation fails.
+    """
+    from sklearn.metrics import r2_score
+    
+    # Check for minimum sample size
+    if len(y_true) < 2:
+        return -999.0
+    
+    # Validate predictions are finite and not all the same
+    if not np.all(np.isfinite(y_pred)):
+        return -999.0
+    
+    # Check if all predictions are identical (no variation)
+    if np.std(y_pred) == 0:
+        # If predictions have no variation, R² is typically very poor
+        return -10.0
+    
+    # Check if targets have variation (avoid division by zero in R²)
+    if np.var(y_true) == 0:
+        # If true values are constant but predictions vary, R² is undefined
+        # Return a poor but finite score
+        return -50.0
+    
+    try:
+        r2 = r2_score(y_true, y_pred, **kwargs)
+        
+        # Validate the result is finite
+        if not np.isfinite(r2):
+            return -999.0
+            
+        return r2
+    except Exception:
+        # If R² calculation fails for any reason, return poor score
+        return -999.0
+
+
+def safe_mcc_score(y_true, y_pred, **kwargs):
+    """
+    Safe Matthews correlation coefficient that handles edge cases.
+    
+    Parameters
+    ----------
+    y_true : array-like
+        Ground truth (correct) target values.
+    y_pred : array-like
+        Predicted target values.
+    **kwargs : dict
+        Additional keyword arguments for matthews_corrcoef.
+        
+    Returns
+    -------
+    float
+        MCC score or fallback value if calculation fails.
+    """
+    from sklearn.metrics import matthews_corrcoef
+    
+    if len(y_true) < 2:
+        return -1.0
+    
+    # Check if predictions are valid
+    if not np.all(np.isfinite(y_pred)):
+        return -1.0
+    
+    try:
+        mcc = matthews_corrcoef(y_true, y_pred, **kwargs)
+        
+        # Validate the result is finite
+        if not np.isfinite(mcc):
+            return -1.0
+            
+        return mcc
+    except Exception:
+        # If MCC calculation fails, return poor score
+        return -1.0
+
+
+def safe_cross_val_score(estimator, X, y, cv=None, scoring=None, n_jobs=None, 
+                        verbose=0, fit_params=None, pre_dispatch='2*n_jobs',
+                        error_score='raise'):
+    """
+    Safe cross-validation scoring that handles model failures gracefully.
+    
+    This is a wrapper around sklearn's cross_val_score that:
+    1. Uses safe scoring functions for regression/classification
+    2. Handles non-finite scores appropriately
+    3. Provides meaningful fallback scores
+    
+    Parameters
+    ----------
+    estimator : estimator object
+        The object to use to fit the data.
+    X : array-like, shape (n_samples, n_features)
+        The data to fit.
+    y : array-like, shape (n_samples,) or (n_samples, n_outputs)
+        The target variable to try to predict.
+    cv : int, cross-validation generator or an iterable, optional
+        Determines the cross-validation splitting strategy.
+    scoring : string, callable or None, optional, default: None
+        A string or scorer callable object / function with signature
+        scorer(estimator, X, y).
+    n_jobs : int, optional
+        The number of CPUs to use to do the computation.
+    verbose : integer, optional
+        The verbosity level.
+    fit_params : dict, optional
+        Parameters to pass to the fit method of the estimator.
+    pre_dispatch : int, or string, optional
+        Controls the number of out-of-process workers to use for the computation.
+    error_score : 'raise' or numeric
+        Value to use when there is an error in fitting.
+        
+    Returns
+    -------
+    scores : array of float, shape=(len(list(cv)),)
+        Array of scores of the estimator for each run of the cross validation.
+    """
+    from sklearn.model_selection import cross_val_score
+    from sklearn.metrics import make_scorer
+    
+    # Convert string scoring to safe scorer if needed
+    safe_scoring = scoring
+    if isinstance(scoring, str):
+        if scoring == 'r2':
+            safe_scoring = make_scorer(safe_r2_score, greater_is_better=True)
+        elif scoring in ['matthews_corrcoef', 'mcc']:
+            safe_scoring = make_scorer(safe_mcc_score, greater_is_better=True)
+    
+    try:
+        # Use 'raise' to catch errors and handle them
+        scores = cross_val_score(
+            estimator, X, y, cv=cv, scoring=safe_scoring, n_jobs=n_jobs,
+            verbose=verbose, fit_params=fit_params, pre_dispatch=pre_dispatch,
+            error_score='raise'
+        )
+        
+        # Replace any non-finite scores with fallback values
+        if not np.all(np.isfinite(scores)):
+            fallback_score = -999.0 if scoring == 'r2' else -1.0
+            scores = np.where(np.isfinite(scores), scores, fallback_score)
+            
+        return scores
+        
+    except Exception as e:
+        # If cross-validation fails completely, return array of fallback scores
+        import warnings
+        warnings.warn(f"Cross-validation failed: {str(e)}. Returning fallback scores.")
+        
+        # Determine number of CV folds
+        if hasattr(cv, 'get_n_splits'):
+            n_splits = cv.get_n_splits(X, y)
+        elif isinstance(cv, int):
+            n_splits = cv
+        else:
+            n_splits = 5  # Default
+            
+        # Return appropriate fallback scores
+        fallback_score = -999.0 if scoring == 'r2' else -1.0
+        return np.full(n_splits, fallback_score)
+
+
+def validate_predictions(y_pred, y_true=None, task_type='regression'):
+    """
+    Validate predictions and clean them if necessary.
+    
+    Parameters
+    ----------
+    y_pred : array-like
+        Predicted values
+    y_true : array-like, optional
+        True values for validation
+    task_type : str
+        'regression' or 'classification'
+        
+    Returns
+    -------
+    np.ndarray
+        Validated and cleaned predictions
+    bool
+        Whether predictions were modified
+    """
+    y_pred = np.asarray(y_pred)
+    modified = False
+    
+    # Check for non-finite values
+    if not np.all(np.isfinite(y_pred)):
+        if task_type == 'regression':
+            # For regression, replace with median of true values or zero
+            if y_true is not None:
+                replacement = np.median(y_true[np.isfinite(y_true)])
+            else:
+                replacement = 0.0
+        else:
+            # For classification, replace with most frequent class or zero
+            if y_true is not None:
+                from scipy.stats import mode
+                replacement = mode(y_true)[0][0] if len(y_true) > 0 else 0
+            else:
+                replacement = 0
+                
+        y_pred = np.nan_to_num(y_pred, nan=replacement, posinf=replacement, neginf=replacement)
+        modified = True
+    
+    return y_pred, modified
+
+
+# ============= Warning Suppression Utilities =============
+
+def suppress_sklearn_warnings():
+    """
+    Suppress common sklearn warnings that occur during hyperparameter tuning
+    and cross-validation with small datasets or edge cases.
+    """
+    import warnings
+    
+    # Suppress R² warnings
+    warnings.filterwarnings('ignore', 
+                           message=r'R\^2 score is not well-defined with less than two samples.',
+                           category=UserWarning,
+                           module='sklearn.metrics._regression')
+    
+    # Suppress non-finite test score warnings
+    warnings.filterwarnings('ignore',
+                           message=r'One or more of the test scores are non-finite.*',
+                           category=UserWarning,
+                           module='sklearn.model_selection._search')
+    
+    # Suppress convergence warnings for small datasets
+    warnings.filterwarnings('ignore',
+                           message=r'.*did not converge.*',
+                           category=UserWarning,
+                           module='sklearn')
+    
+    # Suppress singular matrix warnings
+    warnings.filterwarnings('ignore',
+                           message=r'.*singular matrix.*',
+                           category=UserWarning,
+                           module='sklearn')
+    
+    # Suppress warnings about non-positive definite matrices
+    warnings.filterwarnings('ignore',
+                           message=r'.*not positive definite.*',
+                           category=UserWarning,
+                           module='sklearn')
 
 # Export the comprehensive logger for use in other modules
 __all__ = [
     'comprehensive_logger', 'performance_monitor', 'memory_monitor',
     'monitor_memory_usage', 'log_dataset_info', 'log_cv_fold_info',
-    'force_garbage_collection'
+    'force_garbage_collection', 'safe_r2_score', 'safe_mcc_score',
+    'safe_cross_val_score', 'validate_predictions', 'suppress_sklearn_warnings'
 ] 

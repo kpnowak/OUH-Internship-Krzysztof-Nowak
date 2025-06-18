@@ -16,7 +16,7 @@ This work is part of a broader research project aimed at creating innovative mac
 2. **Select** the algorithms most suitable for multi-omics data.
 3. **Evaluate** those algorithms on benchmark cancer datasets, using a comprehensive, multi-factor experiment.
 4. **Analyse** the results to determine which methods perform best and **explain why**.
-5. **Design** a purpose-built extraction or selection algorithm optimised for multi-omics cancer data.
+5. **Design** a purpose-built extraction or selection algorithm optimised for multi-omics cancer data. *(Future Work)*
 
 ### Project Purpose
 
@@ -44,24 +44,32 @@ The pipeline works with **multi-omics cancer data**, specifically:
 
 This multi-modal approach captures different layers of biological information, providing a comprehensive view of the molecular landscape in cancer patients.
 
-## Enhanced Pipeline Features
+## Current Pipeline Features
 
-###  **Advanced Fusion Strategies**
-- **Attention-Weighted Fusion**: Sample-specific weighting with neural attention mechanisms (default)
-- **Learnable Weighted Fusion**: Performance-based modality weighting with cross-validation
-- **Late Fusion Stacking**: Meta-learner approach for complex modality interactions
-- **Early Fusion PCA**: Dimensionality reduction before fusion for high-dimensional data
+### 🔬 **4-Phase Enhanced Pipeline Architecture**
+- **Phase 1 - Early Data Quality Assessment**: Comprehensive data validation and quality scoring
+- **Phase 2 - Fusion-First Processing**: Fusion applied to raw modalities before feature processing
+- **Phase 3 - Centralized Missing Data Management**: Intelligent imputation and missing data handling
+- **Phase 4 - Coordinated Validation**: Enhanced cross-validation with numerical stability
 
-### 🧬 **Modality-Specific Preprocessing**
-- **Gene Expression**: Biological KNN imputation (k=7) with similarity matrices
-- **miRNA**: Zero-inflated transformations + biological KNN imputation (k=5)
-- **Methylation**: Mean imputation for low-missingness data + conservative scaling
-- **Advanced Sparsity Handling**: Log1p transformations, outlier capping, variance-based filtering
+### 🧩 **Missing Data-Adaptive Fusion Strategies**
+- **Clean Data (0% missing)**: 5 advanced methods - attention_weighted, learnable_weighted, mkl, snf, early_fusion_pca
+- **Missing Data (>0% missing)**: 3 robust methods - mkl, snf, early_fusion_pca
+- **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific weighting
+- **Multiple Kernel Learning (MKL)**: RBF kernel-based fusion with automatic kernel weighting
+- **Similarity Network Fusion (SNF)**: Graph-based network integration with spectral clustering
 
-###  **Missing Data Intelligence**
-- **Missing Data Indicators**: Binary features capturing missingness patterns (threshold: 5%)
-- **Adaptive Imputation**: Automatic strategy selection based on data characteristics
-- **Robust Missing Modality Simulation**: Real-world missing data scenarios (0%, 20%, 50%)
+### 🧬 **Enhanced Modality-Specific Preprocessing**
+- **Gene Expression**: Robust biomedical preprocessing with log transformation and robust scaling
+- **miRNA**: Advanced sparsity handling (>90% zeros), biological KNN imputation, zero-inflation modeling
+- **Methylation**: Conservative preprocessing with mean imputation and outlier capping
+- **Cross-Modality Features**: Data orientation validation, numerical stability checks, adaptive MAD thresholds
+
+### 📊 **Comprehensive Data Quality Analysis**
+- **Quality Scoring**: Automated assessment of data quality with detailed reporting
+- **Missing Pattern Analysis**: Intelligent detection and handling of missing data patterns
+- **Numerical Stability**: Automatic removal of problematic features that cause NaN/inf values
+- **Preprocessing Guidance**: Data-driven recommendations for optimal preprocessing strategies
 
 ### ⚡ **Performance Optimizations**
 - **Enhanced Feature Selection**: MAD thresholds (0.05), correlation removal (0.90), sparsity filtering (0.9)
@@ -77,152 +85,185 @@ This multi-modal approach captures different layers of biological information, p
 The pipeline systematically evaluates all combinations of algorithms and parameters using the following enhanced experimental structure:
 
 ```python
-# Regression branch algorithms (ACTUAL IMPLEMENTATION)
-REGRESSION_EXTRACTORS = [PCA, KPLS, FA, PLS, SparsePLS]
+# Regression branch algorithms (CURRENT IMPLEMENTATION)
+REGRESSION_EXTRACTORS = [PCA, KPCA, FA, PLS, KPLS, SparsePLS]
 REGRESSION_SELECTORS = [ElasticNetFS, RFImportance, VarianceFTest, LASSO, f_regressionFS]
 REGRESSION_MODELS = [LinearRegression, ElasticNet, RandomForestRegressor]
 
-# Classification branch algorithms (ACTUAL IMPLEMENTATION)
-CLASSIFICATION_EXTRACTORS = [PCA, FA, LDA, 'PLS-DA', SparsePLS]
-CLASSIFICATION_SELECTORS = [ElasticNetFS, RFImportance, VarianceFTest, LogisticL1, XGBoostFS]
-CLASSIFICATION_MODELS = [LogisticRegression, SVC, RandomForestClassifier]
+# Classification branch algorithms (CURRENT IMPLEMENTATION)
+CLASSIFICATION_EXTRACTORS = [PCA, KPCA, FA, LDA, PLS-DA, SparsePLS]
+CLASSIFICATION_SELECTORS = [ElasticNetFS, RFImportance, VarianceFTest, LASSO, LogisticL1]
+CLASSIFICATION_MODELS = [LogisticRegression, RandomForestClassifier]
 
-# Enhanced fusion strategies (ACTUAL IMPLEMENTATION)
-FUSION_STRATEGIES = {
-    'attention_weighted': 'Sample-specific attention weighting (OPTIMIZED default)',
+# Missing data-adaptive fusion strategies (CURRENT IMPLEMENTATION)
+FUSION_STRATEGIES_CLEAN_DATA = {
+    'attention_weighted': 'Sample-specific attention weighting',
     'learnable_weighted': 'Performance-based modality weighting', 
     'mkl': 'Multiple Kernel Learning with RBF kernels',
     'snf': 'Similarity Network Fusion with spectral clustering',
     'early_fusion_pca': 'PCA-based early integration'
 }
 
-# Experimental loop for each dataset
-for ALGORITHM in EXTRACTORS + SELECTORS:
-    for N_FEATURES in [8, 16, 32]:
-        for MISSING in [0, 0.20, 0.50]:
-            # ENHANCED: Adaptive fusion strategy selection (ACTUAL IMPLEMENTATION)
-            if MISSING == 0:
-                INTEGRATIONS = [attention_weighted, learnable_weighted, 
-                               mkl, snf, early_fusion_pca]
-            else:
-                INTEGRATIONS = [mkl, snf, early_fusion_pca]
-            
-            for INTEGRATION in INTEGRATIONS:
+FUSION_STRATEGIES_MISSING_DATA = {
+    'mkl': 'Multiple Kernel Learning (robust to missing data)',
+    'snf': 'Similarity Network Fusion (handles missing data)',
+    'early_fusion_pca': 'PCA-based early integration (robust)'
+}
+
+# CORRECTED Experimental loop for each dataset - Fusion FIRST, then Feature Processing
+for MISSING in [0, 0.20, 0.50]:  # Missing data scenarios first
+    # STEP 1: Select fusion strategy based on missing data percentage
+    if MISSING == 0:
+        INTEGRATIONS = [attention_weighted, learnable_weighted, 
+                       mkl, snf, early_fusion_pca]  # 5 methods for clean data
+    else:  # missing data scenarios
+        INTEGRATIONS = [mkl, snf, early_fusion_pca]  # 3 robust methods for missing data
+    
+    for INTEGRATION in INTEGRATIONS:  # Apply fusion to raw modalities FIRST
+        for ALGORITHM in EXTRACTORS + SELECTORS:  # Then apply feature processing to fused data
+            for N_FEATURES in [8, 16, 32]:  # For selection methods only
                 for MODEL in TASK_SPECIFIC_MODELS:
                     run_experiment(
-                        algorithm=ALGORITHM,
-                        n_features=N_FEATURES,
-                        missing_rate=MISSING,
-                        integration=INTEGRATION,
-                        model=MODEL,
-                        # NEW: Enhanced preprocessing
-                        missing_indicators=True,
-                        modality_specific_imputation=True,
-                        advanced_sparsity_handling=True
+                        # CORRECTED ORDER: Fusion → Feature Processing → Model Training
+                        missing_rate=MISSING,           # 1. Missing data scenario
+                        integration=INTEGRATION,        # 2. Fusion applied to raw modalities FIRST
+                        algorithm=ALGORITHM,            # 3. Feature processing applied to fused data SECOND
+                        n_features=N_FEATURES if ALGORITHM in SELECTORS else None,  # Fixed for selectors
+                        n_components=None if ALGORITHM in SELECTORS else "optimized",  # Tuned for extractors
+                        model=MODEL,                    # 4. Model training on processed fused data
+                        # Pipeline configuration
+                        enable_early_quality_check=True,
+                        enable_fusion_first_order=True,  # Fusion applied to raw modalities first
+                        enable_centralized_missing_data=True,
+                        enable_coordinated_validation=True
                     )
 ```
 
-### Enhanced Experimental Features:
-- **Adaptive Strategy Selection**: For 0% missing data: 5 fusion methods; for >0% missing: 3 robust methods
-- **Missing Data Indicators**: Binary features capturing informative missingness patterns  
-- **Modality-Specific Processing**: Tailored preprocessing for each genomic data type
-- **Robust Validation**: Enhanced cross-validation with sample alignment and numerical stability checks
-- **Performance Monitoring**: Real-time memory usage and computational efficiency tracking
+### Current Experimental Features:
+- **Missing Data-Based Strategy Selection**: 5 fusion methods for clean data (0% missing); 3 robust methods for missing data scenarios
+- **Corrected Pipeline Order**: Fusion applied FIRST to raw modalities, then feature processing applied to fused data
+- **4-Phase Pipeline Integration**: Early quality assessment, fusion-first processing, centralized missing data, coordinated validation
+- **Enhanced Data Quality Analysis**: Comprehensive data quality assessment with automated reporting
+- **Modality-Specific Processing**: Tailored preprocessing configurations for gene expression, miRNA, and methylation data
+- **Robust Cross-Validation**: Enhanced CV with patient-level grouping and numerical stability checks
+- **Memory & Performance Monitoring**: Real-time resource tracking and intelligent caching
 
 This comprehensive experimental design ensures systematic evaluation across:
-- **Feature extraction/selection algorithms** (5 extractors + 5 selectors per task type)
-- **Feature counts** (8, 16, 32 components/features) 
+- **Feature extraction/selection algorithms** (6 extractors + 5 selectors for regression; 6 extractors + 5 selectors for classification)
+- **Feature/component optimization**: 
+  - **Selection methods**: Fixed at 8, 16, 32 features for systematic comparison
+  - **Extraction methods**: Optimal number of components determined through hyperparameter tuning
 - **Missing data scenarios** (0%, 20%, 50% missing modalities)
-- **Advanced integration strategies** (5 for clean data, 3 for missing data scenarios)
-- **Enhanced preprocessing** (modality-specific imputation, missing indicators, sparsity handling)
-- **Predictive models** optimized for regression vs. classification tasks
+- **Missing data-adaptive integration strategies** (5 methods for clean data, 3 methods for missing data scenarios)
+- **Corrected Pipeline Architecture**: Fusion → Feature Processing → Model Training (optimal order for multi-modal genomics)
+- **Predictive models** with hyperparameter optimization and numerical stability
 
 ## Deliverables
 
 1. **Literature review** summarising extraction and selection methods for multi-omics data.
 2. **Experimental report** (methods, code links, and results tables/plots) highlighting the top-performing algorithm combinations and explaining their success.
 3. **Recommendation** of the algorithms most suitable for multi-omics cancer studies, with justification.
-4. **New algorithm** specifically designed and empirically validated for this data.
+4. **New algorithm** specifically designed and empirically validated for this data. *(Future Work)*
 
 ## Algorithm Architecture
 
 ### Enhanced Pipeline Workflow
 
-1. **Data Loading & Preprocessing**: 
-   - Robust file loading with automatic format detection
-   - Sample ID standardization across modalities
-   - Data quality validation and optimization
-   - **NEW**: Modality-specific preprocessing configurations
+1. **Phase 1 - Early Data Quality Assessment**: 
+   - Automated data quality evaluation with comprehensive scoring
+   - Data orientation validation (samples × features) for genomic data
+   - Sample ID standardization and alignment across modalities
+   - Quality-based preprocessing guidance and strategy recommendations
 
-2. **Missing Data Intelligence**:
-   - **Missing Data Indicators**: Create binary features before imputation (>5% missing threshold)
-   - **Modality-Specific Imputation**: Gene expression (biological KNN), miRNA (zero-inflated + KNN), methylation (mean)
-   - **Adaptive Strategy Selection**: Choose imputation based on data characteristics
+2. **Phase 2 - Fusion-First Processing**:
+   - Fusion applied to raw modalities before any feature processing
+   - Modality-specific preprocessing configurations (gene expression, miRNA, methylation)
+   - Numerical stability checks with automatic problematic feature removal
+   - Robust biomedical preprocessing pipeline with enhanced sparsity handling
 
-3. **Enhanced Preprocessing Pipeline**:
-   - **Numerical Stability Checks**: Automatic detection and removal of problematic features
-   - **Advanced Sparsity Handling**: Log1p transformations, outlier capping, targeted feature removal
-   - **Smart Skewness Correction**: Box-Cox/Yeo-Johnson transformations with intelligent selection
-   - **Robust Scaling**: Modality-aware scaling with outlier clipping
+3. **Phase 3 - Centralized Missing Data Management**:
+   - Intelligent missing data pattern analysis and strategy selection
+   - Adaptive imputation methods based on data characteristics and modality type
+   - Missing modality simulation for robustness testing (0%, 20%, 50%)
+   - Cross-validation compatible missing data handling
 
-4. **Missing Modality Simulation**:
-   - Simulates real-world scenarios where some data types may be unavailable
-   - Tests robustness across different missing data percentages (0%, 20%, 50%)
-   - **NEW**: Maintains minimum overlap ratios for valid analysis
+4. **Phase 4 - Coordinated Validation Framework**:
+   - Enhanced cross-validation with patient-level grouping when applicable
+   - Numerical stability validation throughout the pipeline
+   - Sample alignment verification across processing steps
+   - Final data quality validation before model training
 
-5. **Feature Extraction/Selection**:
-   - **Extraction Pipeline**: Dimensionality reduction techniques (PCA, ICA, NMF, etc.)
-   - **Selection Pipeline**: Feature selection methods (MRMR, LASSO, etc.)
-   - **Enhanced Feature Selection**: Aggressive MAD thresholds, correlation removal, sparsity filtering
-   - Parallel processing for efficiency
+5. **Missing Data-Adaptive Fusion** (Applied FIRST - to Raw Modalities):
+   - **Clean Data (0% missing)**: 5 fusion methods tested - attention_weighted, learnable_weighted, mkl, snf, early_fusion_pca
+   - **Missing Data (>0% missing)**: 3 robust fusion methods - mkl, snf, early_fusion_pca  
+   - **Strategy Selection**: Automatic based on missing data percentage, not task type
+   - **Raw Data Fusion**: Fusion applied to raw modality data before any feature processing
+   - **Robust Fallbacks**: Graceful degradation when advanced fusion methods fail
 
-6. **Advanced Data Fusion**:
-   - **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific weighting
-   - **Learnable Weighted Fusion**: Performance-based modality importance with cross-validation
-   - **Late Fusion Stacking**: Meta-learner approach using per-modality predictions
-   - **Early Fusion PCA**: Dimensionality reduction before integration
-   - **Adaptive Strategy Selection**: Choose fusion method based on missing data and task complexity
+6. **Feature Extraction/Selection** (Applied SECOND - to Fused Data):
+   - **Extraction Pipeline**: Dimensionality reduction (PCA, KPCA, PLS, KPLS, SparsePLS, Factor Analysis) with optimal components via hyperparameter tuning
+   - **Selection Pipeline**: Feature selection (ElasticNetFS, Random Forest Importance, Variance F-test, LASSO) with fixed 8, 16, 32 features
+   - **Applied to Fused Data**: Feature processing applied to already-fused multi-modal data
+   - **Intelligent Caching**: Cached results for expensive extraction/selection operations
 
 7. **Model Training & Evaluation**:
-   - Cross-validation with robust fold creation and sample alignment
-   - Multiple machine learning algorithms with optimized hyperparameters
-   - **Enhanced Regularization**: Stricter ElasticNet (alpha 0.1-0.5)
-   - Comprehensive performance metrics with numerical stability
+   - Enhanced cross-validation with patient-level grouping and robust fold creation
+   - **Hyperparameter Optimization**: Pre-tuned parameters from `hp_best/` including optimal component counts for extraction methods
+   - **Systematic Feature Evaluation**: Fixed feature counts (8, 16, 32) for selection methods to enable fair comparison
+   - Numerical stability checks to prevent NaN/inf values in predictions
+   - Comprehensive evaluation metrics with enhanced AUC calculation for imbalanced datasets
 
-8. **MAD Analysis**:
-   - Mean Absolute Deviation analysis for algorithm comparison
-   - Critical difference diagrams for statistical significance testing
-   - Detailed performance statistics with confidence intervals
+8. **Results Analysis & Visualization**:
+   - Automated generation of performance plots (scatter, residuals, ROC, confusion matrices)
+   - Algorithm ranking and performance comparison across all experimental conditions
+   - Statistical significance testing with critical difference analysis
+   - Comprehensive results storage in `final_results/` with detailed metrics
 
 ### Supported Algorithms
 
-#### Feature Extraction Methods (ACTUAL IMPLEMENTATION)
-- **PCA (Principal Component Analysis)**: Linear dimensionality reduction
-- **KPLS (Kernel PLS)**: Non-linear kernel-based partial least squares
-- **Factor Analysis**: Latent factor modeling
-- **PLS (Partial Least Squares)**: Supervised dimensionality reduction for regression
-- **PLS-DA (PLS Discriminant Analysis)**: Supervised dimensionality reduction for classification
-- **SparsePLS**: Sparse partial least squares with feature selection
+#### Feature Extraction Methods (CURRENT IMPLEMENTATION)
 
-#### Feature Selection Methods (ACTUAL IMPLEMENTATION)
-- **ElasticNetFS**: ElasticNet-based feature selection with L1/L2 regularization
-- **RFImportance (Random Forest Importance)**: Tree-based importance ranking
-- **VarianceFTest**: Variance-based F-test feature selection
-- **LASSO**: L1-regularized linear model selection
-- **f_regressionFS**: F-test based regression feature selection
-- **LogisticL1**: L1-regularized logistic regression for classification
-- **XGBoostFS**: XGBoost-based feature importance selection
+**Regression Extractors (6)**: PCA, KPCA, Factor Analysis, PLS, KPLS, SparsePLS
+**Classification Extractors (6)**: PCA, KPCA, Factor Analysis, LDA, PLS-DA, SparsePLS
 
-#### Advanced Data Fusion Methods (ACTUAL IMPLEMENTATION)
+- **PCA (Principal Component Analysis)**: Linear dimensionality reduction with variance maximization
+- **KPCA (Kernel PCA)**: Non-linear dimensionality reduction with RBF kernel and median heuristic
+- **Factor Analysis**: Latent factor modeling for hidden structure discovery
+- **PLS (Partial Least Squares)**: Supervised dimensionality reduction for regression tasks
+- **KPLS (Kernel PLS)**: Non-linear kernel-based partial least squares with cross-validation optimization (regression only)
+- **LDA (Linear Discriminant Analysis)**: Supervised dimensionality reduction for classification tasks (classification only)
+- **PLS-DA (PLS Discriminant Analysis)**: Supervised dimensionality reduction for classification tasks
+- **SparsePLS**: Sparse partial least squares with automatic sparsity selection
+
+#### Feature Selection Methods (CURRENT IMPLEMENTATION)
+
+**Regression Selectors (5)**: ElasticNetFS, RFImportance, VarianceFTest, LASSO, f_regressionFS
+**Classification Selectors (5)**: ElasticNetFS, RFImportance, VarianceFTest, LASSO, LogisticL1
+
+- **ElasticNetFS**: ElasticNet-based feature selection with L1/L2 regularization and cross-validation
+- **RFImportance (Random Forest Importance)**: Tree-based feature importance ranking with ensemble voting
+- **VarianceFTest**: Variance-based F-test feature selection for statistical significance
+- **LASSO**: L1-regularized linear model with automatic regularization parameter selection
+- **f_regressionFS**: F-test based regression feature selection with statistical validation (regression only)
+- **LogisticL1**: L1-regularized logistic regression for classification feature selection (classification only)
+
+#### Data Fusion Methods (CURRENT IMPLEMENTATION)
+
+**Clean Data Fusion (0% missing) - 5 methods tested:**
 - **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific modality weighting
 - **Learnable Weighted Fusion**: Cross-validation based performance weighting of modalities  
-- **MKL (Multiple Kernel Learning)**: RBF kernel-based fusion with optimal kernel weighting
-- **SNF (Similarity Network Fusion)**: Spectral clustering-based network integration
-- **Early Fusion PCA**: Dimensionality reduction applied to concatenated features
+- **MKL (Multiple Kernel Learning)**: RBF kernel-based fusion with automatic kernel parameter optimization
+- **SNF (Similarity Network Fusion)**: Graph-based network integration with spectral clustering
+- **Early Fusion PCA**: Dimensionality reduction applied to concatenated raw modalities before feature processing
+
+**Missing Data Fusion (>0% missing) - 3 robust methods tested:**
+- **MKL (Multiple Kernel Learning)**: Robust to missing data with kernel approximation
+- **SNF (Similarity Network Fusion)**: Handles missing data through network completion
+- **Early Fusion PCA**: Simple and robust concatenation with PCA dimensionality reduction
 
 #### Machine Learning Models
-- **Regression**: Linear Regression, Random Forest Regressor, ElasticNet (enhanced α=0.1-0.5)
-- **Classification**: Logistic Regression, Random Forest Classifier, SVM
+- **Regression**: Linear Regression, ElasticNet, Random Forest Regressor (with pre-tuned hyperparameters)
+- **Classification**: Logistic Regression, Random Forest Classifier (with pre-tuned hyperparameters)
 
 ## Datasets
 
@@ -594,36 +635,33 @@ OUH-Internship-Krzysztof-Nowak/
 ├── install.py                          # Convenience installation script
 ├── main.py                             # Main pipeline entry point
 ├── cli.py                              # Command-line interface
-├── config.py                           # Configuration settings
-├── data_io.py                          # Data loading and processing
-├── preprocessing.py                    # Data preprocessing utilities
-├── fusion.py                           # Multi-modal data fusion
-├── models.py                           # Machine learning models and caching
-├── cv.py                               # Cross-validation pipeline
-├── plots.py                            # Visualization functions
-├── mad_analysis.py                     # MAD analysis implementation
-├── utils.py                            # Utility functions
-├── logging_utils.py                    # Logging configuration and utilities
-├── run_mad_analysis.py                 # Standalone MAD analysis script
-├── _process_single_modality.py         # Single modality processing utilities
-├── utils_boruta.py                     # Boruta feature selection utilities
-├── mrmr_helper.py                      # MRMR feature selection implementation
-├── create_diagrams_only.py             # Standalone diagram creation
-├── combine_cv_metrics.py               # Cross-validation metrics combination
-├── create_classification_plots.py      # Basic classification visualization
-├── create_enhanced_classification_plots.py # Enhanced classification plots
-├── create_regression_plots.py          # Basic regression visualization
-├── create_enhanced_regression_plots.py # Enhanced regression plots
-├── top_algorithms_classification.py    # Top performing classification algorithms
-├── top_algorithms_regression.py        # Top performing regression algorithms
+├── config.py                           # Configuration settings and dataset definitions
+├── data_io.py                          # Data loading, I/O operations, and orientation validation  
+├── preprocessing.py                    # Biomedical preprocessing and transformations
+├── fusion.py                           # Multi-modal data fusion strategies
+├── models.py                           # ML models, feature extraction/selection, and caching
+├── cv.py                               # Cross-validation pipeline and model training
+├── enhanced_pipeline_integration.py    # 4-phase enhanced pipeline coordinator
+├── data_quality_analyzer.py            # Comprehensive data quality analysis
+├── enhanced_evaluation.py              # Enhanced evaluation metrics and plotting
+├── missing_data_handler.py             # Centralized missing data management
+├── fusion_aware_preprocessing.py       # Fusion-first processing (legacy module name)
+├── validation_coordinator.py           # Coordinated validation framework
+├── plots.py                            # Basic visualization functions
+├── mad_analysis.py                     # Statistical analysis and comparison
+├── utils.py                            # Utility functions and performance monitoring
+├── logging_utils.py                    # Enhanced logging and performance tracking
+├── tuner_halving.py                    # Hyperparameter optimization
+├── samplers.py                         # Data sampling and cross-validation strategies
+├── fast_feature_selection.py          # Optimized feature selection methods
 ├── __init__.py                         # Package initialization
-├── algorithm_development/              # Algorithm development and testing
-│   ├── alg1.py                        # First algorithm implementation
-│   ├── alg2_multicore.py              # Multicore algorithm implementation
-│   ├── alg3_multi_additions/          # Third algorithm with additions
-│   ├── old1_algorithm_output/         # Legacy algorithm outputs
-│   ├── old2_algorithm_output/         # Second legacy algorithm outputs
-│   └── output_algorithm_multicore/    # Multicore algorithm results
+├── hp_best/                            # Pre-tuned hyperparameters for optimal performance
+├── tuner_logs/                         # Hyperparameter tuning logs and progress tracking
+├── data_quality_analysis/              # Comprehensive data quality reports
+│   ├── classification/                # Classification task quality analysis
+│   ├── regression/                    # Regression task quality analysis
+│   ├── plots/                         # Data quality visualization plots
+│   └── summary/                       # Overall quality summary reports
 ├── setup_and_info/                     # Setup and documentation files
 │   ├── setup.py                       # Package installation script
 │   ├── pyproject.toml                 # Modern Python packaging
@@ -668,28 +706,25 @@ OUH-Internship-Krzysztof-Nowak/
 
 ## Recent Pipeline Enhancements
 
-### Version 2.1 - Enhanced Missing Data Intelligence
--  **Missing Data Indicators**: Binary features capturing informative missingness patterns
--  **Modality-Specific Imputation**: Gene expression (biological KNN), miRNA (zero-inflated), methylation (mean)
--  **Adaptive Strategy Selection**: Automatic imputation method selection based on data characteristics
+### Version 3.0 - 4-Phase Enhanced Pipeline Architecture (CURRENT)
+- ✅ **4-Phase Integration**: Early quality assessment, fusion-first processing, centralized missing data, coordinated validation
+- ✅ **Corrected Pipeline Order**: Fusion applied FIRST to raw modalities, then feature processing applied to fused data
+- ✅ **Missing Data-Adaptive Fusion**: 5 fusion methods for clean data, 3 robust methods for missing data scenarios
+- ✅ **Comprehensive Data Quality Analysis**: Automated quality scoring with detailed reporting and preprocessing guidance
+- ✅ **Enhanced Cross-Validation**: Patient-level grouping, numerical stability checks, and robust fold creation
+- ✅ **Pre-Tuned Hyperparameters**: Optimized parameters stored in `hp_best/` for immediate high performance
 
-### Version 2.0 - Advanced Fusion Strategies  
--  **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific modality weighting
--  **Learnable Weighted Fusion**: Performance-based modality importance with cross-validation
--  **Late Fusion Stacking**: Meta-learner approach using per-modality predictions
--  **Strategic Optimization**: Attention-weighted fusion now default for 0% missing data scenarios
+### Version 2.5 - Advanced Data Quality & Stability
+- ✅ **Data Orientation Validation**: Automatic detection and correction of transposed data matrices
+- ✅ **Numerical Stability Framework**: Comprehensive NaN/inf detection and prevention
+- ✅ **Modality-Specific Preprocessing**: Tailored configurations for gene expression, miRNA, and methylation data
+- ✅ **Enhanced Missing Data Handling**: Intelligent pattern analysis and adaptive imputation strategies
 
-### Version 1.9 - Enhanced Preprocessing Pipeline
--  **Numerical Stability Checks**: Automatic detection and removal of problematic features
--  **Advanced Sparsity Handling**: Log1p transformations, outlier capping, variance-based filtering
--  **Smart Skewness Correction**: Box-Cox/Yeo-Johnson transformations with intelligent selection
--  **Robust Scaling**: Modality-aware scaling with outlier clipping and quantile normalization
-
-### Version 1.8 - Performance Optimizations
--  **Enhanced Feature Selection**: Aggressive MAD thresholds (0.05), correlation removal (0.90)
--  **Stricter Regularization**: ElasticNet alpha range (0.1-0.5) for better generalization
--  **Memory Optimization**: Intelligent caching and parallel processing for 60GB RAM systems
--  **Computational Efficiency**: Reduced pipeline execution time by ~40% through optimizations
+### Version 2.0 - Multi-Modal Fusion Integration  
+- ✅ **Advanced Fusion Methods**: SNF, MKL, attention-weighted, learnable weighted, and early fusion PCA
+- ✅ **Fusion-First Architecture**: Fusion applied to raw modalities before feature processing
+- ✅ **Performance Monitoring**: Real-time memory usage tracking and computational efficiency optimization
+- ✅ **Intelligent Caching**: LRU caching system for expensive extraction/selection operations
 
 ## Contributing
 

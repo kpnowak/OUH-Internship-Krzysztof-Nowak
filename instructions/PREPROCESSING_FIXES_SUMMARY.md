@@ -100,7 +100,7 @@ if X.shape[1] != len(median):
 -  **Optimal performance**: No preprocessing-related performance loss
 -  **Robust execution**: Graceful handling of edge cases
 
-## 🧪 Validation
+##  Validation
 
 The fixes have been tested with:
 -  Basic functionality (consistent dimensions)
