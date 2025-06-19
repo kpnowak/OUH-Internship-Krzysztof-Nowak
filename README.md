@@ -113,12 +113,12 @@ FUSION_STRATEGIES_MISSING_DATA = {
 # CORRECTED Experimental loop for each dataset - Fusion FIRST, then Feature Processing
 for MISSING in [0, 0.20, 0.50]:  # Missing data scenarios first
     # STEP 1: Select fusion strategy based on missing data percentage
-    if MISSING == 0:
-        INTEGRATIONS = [attention_weighted, learnable_weighted, 
+            if MISSING == 0:
+                INTEGRATIONS = [attention_weighted, learnable_weighted, 
                        mkl, snf, early_fusion_pca]  # 5 methods for clean data
     else:  # missing data scenarios
         INTEGRATIONS = [mkl, snf, early_fusion_pca]  # 3 robust methods for missing data
-    
+            
     for INTEGRATION in INTEGRATIONS:  # Apply fusion to raw modalities FIRST
         for ALGORITHM in EXTRACTORS + SELECTORS:  # Then apply feature processing to fused data
             for N_FEATURES in [8, 16, 32]:  # For selection methods only

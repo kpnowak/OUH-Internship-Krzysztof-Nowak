@@ -14,7 +14,7 @@ Features:
 """
 
 import json, pathlib, argparse, numpy as np, joblib, time, sys, subprocess, warnings
-import logging
+import logging, gc, signal
 from datetime import datetime
 from itertools import product
 from sklearn.experimental import enable_halving_search_cv  # Enable experimental feature
@@ -22,6 +22,155 @@ from sklearn.model_selection import HalvingRandomSearchCV, KFold, StratifiedKFol
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import make_scorer, r2_score, matthews_corrcoef, mean_absolute_error
 from data_io import load_dataset_for_tuner
+
+# Optimized loader for already processed data
+def load_dataset_for_tuner_optimized(dataset_name, task=None):
+    """
+    Load dataset with FULL 4-phase preprocessing AND fusion for tuner_halving.py.
+    
+    This loads the SAME fused and processed data that the main pipeline uses,
+    resulting in much smaller feature counts for efficient hyperparameter tuning.
+    
+    Expected feature counts after 4-phase + fusion:
+    - Breast: ~142 features per modality → ~200-500 fused features (vs 20,000+)
+    - Colon: ~142 features per modality → ~200-500 fused features
+    
+    Parameters
+    ----------
+    dataset_name : str
+        Name of the dataset (e.g., 'AML', 'Breast', etc.)
+    task : str
+        Task type ('reg' or 'clf')
+        
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        Fully processed and fused features (X) and targets (y) as numpy arrays
+    """
+    import numpy as np
+    from config import DatasetConfig
+    from enhanced_pipeline_integration import run_enhanced_preprocessing_pipeline
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Loading dataset {dataset_name} with 4-phase preprocessing AND fusion (task: {task})")
+    
+    # Determine task type
+    if task is None:
+        config = DatasetConfig.get_config(dataset_name.lower())
+        if not config:
+            raise ValueError(f"No configuration found for dataset: {dataset_name}")
+        
+        outcome_col = config.get('outcome_col', '')
+        if 'blast' in outcome_col.lower() or 'length' in outcome_col.lower():
+            task_type = 'regression'
+        else:
+            task_type = 'classification'
+    else:
+        task_type = 'regression' if task == 'reg' else 'classification'
+    
+    # Get configuration for the dataset
+    config = DatasetConfig.get_config(dataset_name.lower())
+    if not config:
+        raise ValueError(f"No configuration found for dataset: {dataset_name}")
+    
+    # Map modality names to short names (same as main pipeline)
+    modality_mapping = {
+        "Gene Expression": "exp",
+        "miRNA": "mirna", 
+        "Methylation": "methy"
+    }
+    
+    modality_short_names = []
+    for full_name in config['modalities'].keys():
+        short_name = modality_mapping.get(full_name, full_name.lower())
+        modality_short_names.append(short_name)
+    
+    # Load raw dataset first
+    from data_io import load_dataset
+    modalities_data, y_series, common_ids = load_dataset(
+        ds_name=dataset_name.lower(),
+        modalities=modality_short_names,
+        outcome_col=config['outcome_col'],
+        task_type=task_type,
+        parallel=True,
+        use_cache=True
+    )
+    
+    if not modalities_data or y_series is None:
+        raise ValueError(f"Failed to load data for {dataset_name}")
+    
+    logger.info(f"Raw data loaded: {len(modalities_data)} modalities with {len(common_ids)} common samples")
+    
+    # Convert to enhanced pipeline format: Dict[str, Tuple[np.ndarray, List[str]]]
+    modality_data_dict = {}
+    for modality_name, modality_df in modalities_data.items():
+        # Convert DataFrame to numpy array (transpose to get samples x features)
+        X_modality = modality_df.T.values  # modality_df is features x samples
+        modality_data_dict[modality_name] = (X_modality, common_ids)
+        logger.info(f"  Raw {modality_name} shape: {X_modality.shape}")
+    
+    # Apply 4-phase enhanced preprocessing pipeline WITH fusion
+    fusion_method = "snf" if task_type == "classification" else "weighted_concat"
+    logger.info(f"Applying 4-phase preprocessing with {fusion_method} fusion...")
+    
+    processed_modalities, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipeline(
+        modality_data_dict=modality_data_dict,
+        y=y_series.values,
+        fusion_method=fusion_method,
+        task_type=task_type,
+        dataset_name=dataset_name,
+        enable_early_quality_check=True,
+        enable_fusion_aware_order=True,
+        enable_centralized_missing_data=True,
+        enable_coordinated_validation=True
+    )
+    
+    logger.info(f"4-phase preprocessing completed with quality score: {pipeline_metadata.get('quality_score', 'N/A')}")
+    
+    # The processed_modalities should now be fused and ready for tuning
+    # Each modality should have been processed and potentially fused together
+    if len(processed_modalities) == 1:
+        # Single fused modality
+        modality_name = list(processed_modalities.keys())[0]
+        X = processed_modalities[modality_name]
+        logger.info(f"Single fused modality: {modality_name} shape {X.shape}")
+    else:
+        # Multiple processed modalities - concatenate them (they should be much smaller now)
+        X_parts = []
+        modality_info = []
+        
+        for modality_name, modality_array in processed_modalities.items():
+            X_parts.append(modality_array)
+            modality_info.append(f"{modality_name}: {modality_array.shape[1]} features")
+            logger.info(f"  Processed {modality_name} shape: {modality_array.shape}")
+        
+        # Concatenate horizontally (samples x all_processed_features)
+        X = np.concatenate(X_parts, axis=1)
+        logger.info(f"Concatenated processed modalities: {', '.join(modality_info)}")
+    
+    y = y_aligned
+    
+    logger.info(f"Dataset {dataset_name} loaded with 4-phase preprocessing + fusion:")
+    logger.info(f"  Final X shape: {X.shape}")
+    logger.info(f"  Final y shape: {y.shape}")
+    logger.info(f"  Fusion method: {fusion_method}")
+    logger.info(f"  Quality score: {pipeline_metadata.get('quality_score', 'N/A')}")
+    
+    # Calculate original feature count
+    original_features = sum(arr[0].shape[1] for arr in modality_data_dict.values())
+    logger.info(f"  Feature reduction: {original_features} → {X.shape[1]} features ({original_features - X.shape[1]} reduced)")
+    
+    # Final validation
+    if np.any(np.isnan(X)) or np.any(np.isinf(X)):
+        logger.warning("Found NaN/Inf values in processed data, cleaning...")
+        X = np.nan_to_num(X, nan=0.0, posinf=1e6, neginf=-1e6)
+    
+    if np.any(np.isnan(y)) or np.any(np.isinf(y)):
+        logger.warning("Found NaN/Inf values in target, cleaning...")
+        y = np.nan_to_num(y, nan=0.0, posinf=1e6, neginf=-1e6)
+    
+    return X, y
 from samplers import safe_sampler
 from models import build_extractor, build_model
 from sklearn.preprocessing import PowerTransformer
@@ -64,6 +213,7 @@ SEED   = 42
 N_ITER = 32          # candidates; Halving keeps ~⅓ each rung
 CV_INNER = 3
 TIMEOUT_MINUTES = 30  # Timeout per combination
+SEARCH_TIMEOUT_MINUTES = 10  # Timeout for individual hyperparameter search
 
 # Minimum samples per fold for reliable metrics
 MIN_SAMPLES_PER_FOLD = 5
@@ -235,7 +385,7 @@ def detect_dataset_task(dataset):
 # ------------- Enhanced search space for 4-phase preprocessed data ----------------------------------
 def param_space(extr, mdl, X_shape=None):
     """
-    Enhanced parameter space for models trained on 4-phase preprocessed data.
+    Ultra-conservative parameter space for Windows resource management.
     
     Since data is now fully preprocessed with:
     - Phase 1: Early Data Quality Assessment
@@ -243,8 +393,7 @@ def param_space(extr, mdl, X_shape=None):
     - Phase 3: Centralized Missing Data Management
     - Phase 4: Coordinated Validation Framework
     
-    We can use more aggressive hyperparameter ranges, but need to be adaptive
-    to the actual data dimensions after preprocessing.
+    We use ultra-conservative parameter ranges to prevent Windows system crashes.
     
     Parameters
     ----------
@@ -257,6 +406,9 @@ def param_space(extr, mdl, X_shape=None):
     """
     p = {}
     
+    # No more high-risk restrictions needed due to proper preprocessing reducing features dramatically
+    is_high_risk = False  # All combinations are now safe with 700-feature data instead of 20,000+
+    
     # Adaptive component selection based on actual data dimensions
     if X_shape is not None:
         n_samples, n_features = X_shape
@@ -264,14 +416,14 @@ def param_space(extr, mdl, X_shape=None):
         # Calculate cross-validation fold size for safety constraints
         cv_fold_size = n_samples // CV_INNER
         
-        # Enhanced component ranges - 2 components is almost always too small
-        # Base range: [4, 8, 16], doubled when n_samples >= 150
+        # Reasonable component ranges now that we have properly preprocessed data (~700 features)
+        # Much more aggressive than before since feature count is 96.5% smaller
         if n_samples >= 150:
-            # Larger datasets can handle more components: [8, 16, 32]
-            base_components = [8, 16, 32]
+            # Good range for larger datasets: [4, 8, 16, 32]
+            base_components = [4, 8, 16, 32]
         else:
-            # Standard range for smaller datasets: [4, 8, 16]
-            base_components = [4, 8, 16]
+            # Standard range for smaller datasets: [2, 4, 8, 16]  
+            base_components = [2, 4, 8, 16]
         
         # Apply safety constraints while maintaining reasonable minimums
         # For KPCA and kernel methods, be more conservative due to numerical issues
@@ -305,8 +457,8 @@ def param_space(extr, mdl, X_shape=None):
                     f"cv_fold_size={cv_fold_size}, max_safe={max_safe_components}, "
                     f"selected={component_options}")
     else:
-        # Default ranges when no shape provided - use improved baseline
-        component_options = [4, 8, 16, 32]
+        # Default ranges when no shape provided - use reasonable baseline
+        component_options = [2, 4, 8, 16]  # Standard range for preprocessed data
     
     # Extractor parameters - adaptive for preprocessed data
     # Note: Parameters now have extractor__extractor__ prefix due to SafeExtractorWrapper
@@ -329,20 +481,21 @@ def param_space(extr, mdl, X_shape=None):
             # Default conservative range
             p["extractor__extractor__gamma"] = [0.01, 0.1, 1.0]
     
-    if extr in {"SparsePLS","PLS-DA","Sparse PLS-DA"}:
-        # More alpha values for sparse methods
-        p["extractor__extractor__alpha"] = np.logspace(-2, 0, 4)  # Reduced range and count for stability
+    if extr in {"SparsePLS","Sparse PLS-DA"}:
+        # Conservative alpha values for sparse methods to reduce resource usage
+        p["extractor__extractor__alpha"] = np.logspace(-1, 0, 3)  # Further reduced: 3 values instead of 4
     
-    # Enhanced parameters for FA
+    # Reasonable parameters for FA with preprocessed data
     if extr == "FA":
         p["extractor__extractor__n_components"] = component_options
-        p["extractor__extractor__max_iter"] = [1000, 3000]  # Reduced options for speed
-        p["extractor__extractor__tol"] = [1e-3, 1e-2]  # More tolerant for small data
+        p["extractor__extractor__max_iter"] = [1000, 3000]  # Restored to 2 options
+        p["extractor__extractor__tol"] = [1e-3, 1e-2]  # Restored to 2 options
     
-    # Enhanced parameters for LDA
+    # LDA parameters with compatibility fixes for preprocessed data
     if extr == "LDA":
-        p["extractor__extractor__solver"] = ["svd", "lsqr"]  # Reduced solvers for stability
-        p["extractor__extractor__shrinkage"] = [None, "auto", 0.1]  # Reduced options
+        # Use lsqr solver which supports shrinkage for better hyperparameter exploration
+        p["extractor__extractor__solver"] = ["lsqr", "svd"]  # Both solvers
+        p["extractor__extractor__shrinkage"] = [None, "auto"]  # Shrinkage options (only with lsqr)
     
     # Model parameters - enhanced for preprocessed data
     if mdl == "RandomForestRegressor":
@@ -378,11 +531,11 @@ def param_space(extr, mdl, X_shape=None):
             })
         else:
             p.update({
-                "model__n_estimators": [100, 200],  # Fewer estimators for speed
-                "model__max_depth": [None, 5, 10],  # Reasonable depths
-                "model__min_samples_leaf": [1, 2],  # Less options
-                "model__min_samples_split": [2, 5],  # Less options
-                "model__max_features": ["sqrt", "log2"]  # Simple feature sampling
+                "model__n_estimators": [100, 200],  # Restored to 2 options
+                "model__max_depth": [None, 5, 10],  # Restored to 3 options
+                "model__min_samples_leaf": [1, 2],  # Restored to 2 options
+                "model__min_samples_split": [2, 5],  # Restored to 2 options  
+                "model__max_features": ["sqrt", "log2"]  # Restored to 2 options
             })
     
     if mdl in {"ElasticNet"}:
@@ -396,10 +549,11 @@ def param_space(extr, mdl, X_shape=None):
         })
     
     if mdl == "SVC":
+        # Reasonable SVC parameters now that we have properly preprocessed data
         p.update({
-            "model__C": np.logspace(-1, 1, 4),  # Smaller C range
-            "model__gamma": np.logspace(-3, 0, 4),  # Smaller gamma range
-            "model__kernel": ["rbf", "linear"]  # Stable kernels for small data
+            "model__C": np.logspace(-1, 1, 4),  # Restored to 4 C values  
+            "model__gamma": np.logspace(-3, 0, 4),  # Restored to 4 gamma values
+            "model__kernel": ["rbf", "linear"]  # Both kernels since data is much smaller
         })
     
     # Enhanced parameters for LinearRegression (now RobustLinearRegressor)
@@ -497,11 +651,26 @@ def run_tuning_subprocess(dataset, task, extractor, model, logger=None):
 
 # ------------- main tune routine with 4-phase preprocessing -----------------------------
 def tune(dataset, task, extractor, model, logger=None):
-    """Enhanced hyperparameter tuning with 4-phase pipeline integration."""
+    """Enhanced hyperparameter tuning with 4-phase pipeline integration and Windows resource management."""
     
     # Setup logging if not provided
     if logger is None:
         logger = setup_logging(dataset, extractor, model)
+    
+    # Monitor system resources on Windows
+    initial_memory = None
+    try:
+        import psutil
+        initial_memory = psutil.virtual_memory().percent
+        logger.info(f"Initial memory usage: {initial_memory:.1f}%")
+        
+        # Safety check: abort if memory usage is already too high
+        if initial_memory > 97.0:
+            logger.error(f"Memory usage too high ({initial_memory:.1f}%) - aborting to prevent system crash")
+            return False
+            
+    except ImportError:
+        logger.debug("psutil not available for resource monitoring")
     
     # Suppress sklearn warnings at the start
     import warnings
@@ -536,8 +705,8 @@ def tune(dataset, task, extractor, model, logger=None):
         
         logger.info(f"Loading {dataset} with 4-Phase Enhanced Pipeline...")
         
-        # Load data with FULL 4-phase preprocessing (same as main pipeline)
-        X, y = load_dataset_for_tuner(dataset, task=task)
+        # Load data with FULL 4-phase preprocessing AND fusion (same as main pipeline)
+        X, y = load_dataset_for_tuner_optimized(dataset, task=task)
         
         # Try to get real sample IDs for enhanced CV
         sample_ids = None
@@ -848,7 +1017,7 @@ def tune(dataset, task, extractor, model, logger=None):
                 scoring=scoring,
                 cv=cv_inner,
                 refit=refit_scorer,
-                n_jobs=2,  # Reduced for Windows compatibility
+                n_jobs=1,  # Single job to prevent Windows resource exhaustion
                 verbose=1
             )
         else:
@@ -880,7 +1049,7 @@ def tune(dataset, task, extractor, model, logger=None):
                 scoring = primary_scorer,  # Use primary scorer only for HalvingRandomSearchCV
                 cv = cv_inner,
                 refit = True,  # Always refit for halving search
-                n_jobs = 2,  # Reduced for Windows compatibility
+                n_jobs = 1,  # Single job to prevent Windows resource exhaustion
                 verbose = 1
             )
 
@@ -888,25 +1057,61 @@ def tune(dataset, task, extractor, model, logger=None):
         log_stage(logger, "HYPERPARAMETER_SEARCH", {
             "search_type": "GridSearchCV" if n_combinations <= 20 else "HalvingRandomSearchCV",
             "n_combinations": n_combinations,
-            "n_jobs": 2,
-            "backend": "threading"
+            "n_jobs": 1,
+            "backend": "sequential"
         })
         
         logger.info(f"Starting hyperparameter search for {extractor} + {model}...")
         search_start_time = time.time()
         
-        # Use threading backend for better Windows compatibility and suppress additional warnings
-        with joblib.parallel_backend("threading"):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", UserWarning)
-                warnings.simplefilter("ignore", RuntimeWarning)
-                warnings.simplefilter("ignore", FutureWarning)
+        # Use sequential processing to prevent Windows resource exhaustion
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            warnings.simplefilter("ignore", RuntimeWarning)
+            warnings.simplefilter("ignore", FutureWarning)
+            
+            try:
+                # Force garbage collection and memory check before resource-intensive operation
+                gc.collect()
                 
+                # Additional memory safety check before starting search
                 try:
+                    import psutil
+                    current_memory = psutil.virtual_memory().percent
+                    if current_memory > 96.0:
+                        logger.error(f"Memory usage too high before search ({current_memory:.1f}%) - aborting")
+                        return False
+                    logger.info(f"Memory usage before search: {current_memory:.1f}%")
+                except ImportError:
+                    pass
+                
+                # Set up timeout handler for Windows safety
+                class TimeoutException(Exception):
+                    pass
+                
+                def timeout_handler(signum, frame):
+                    raise TimeoutException("Hyperparameter search timed out")
+                
+                # Set alarm for search timeout (if supported on Windows)
+                try:
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(SEARCH_TIMEOUT_MINUTES * 60)
+                    
                     search.fit(X, y)
-                except Exception as e:
-                    logger.error(f"Hyperparameter search failed: {str(e)}")
-                    return False
+                    
+                    signal.alarm(0)  # Cancel alarm
+                except (AttributeError, OSError):
+                    # SIGALRM not supported on Windows, proceed without timeout
+                    search.fit(X, y)
+                
+                # Force garbage collection after search to free memory
+                gc.collect()
+                
+            except Exception as e:
+                logger.error(f"Hyperparameter search failed: {str(e)}")
+                # Clean up resources on failure
+                gc.collect()
+                return False
         
         search_elapsed = time.time() - search_start_time
         logger.info(f"Hyperparameter search completed in {search_elapsed:.1f} seconds")
@@ -1129,6 +1334,18 @@ def tune(dataset, task, extractor, model, logger=None):
             "total_time_seconds": search_elapsed
         })
         
+        # Final resource cleanup for Windows
+        try:
+            import psutil
+            final_memory = psutil.virtual_memory().percent
+            logger.info(f"Final memory usage: {final_memory:.1f}%")
+            logger.info(f"Memory increase: {final_memory - initial_memory:.1f}%")
+        except (ImportError, NameError):
+            pass
+        
+        # Force final garbage collection
+        gc.collect()
+        
         return True
         
     except Exception as e:
@@ -1145,6 +1362,9 @@ def tune(dataset, task, extractor, model, logger=None):
             "error_type": type(e).__name__,
             "error_message": str(e)
         }, level=logging.ERROR)
+        
+        # Force garbage collection on failure to cleanup resources
+        gc.collect()
         
         return False
 

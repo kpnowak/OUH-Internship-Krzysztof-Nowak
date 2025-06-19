@@ -4,24 +4,23 @@
     "model__penalty": "l1",
     "model__max_iter": 1000,
     "model__class_weight": "balanced",
-    "model__C": 10.0,
-    "extractor__extractor__n_components": 8,
-    "extractor__extractor__gamma": 0.001
+    "model__C": 0.1,
+    "extractor__extractor__n_components": 16
   },
-  "best_score": 0.014869269626397077,
+  "best_score": 0.06859198401118703,
   "dataset": "Breast",
   "task": "clf",
-  "extractor": "KPCA",
+  "extractor": "PLS-DA",
   "model": "LogisticRegression",
   "preprocessing": "4-phase-enhanced",
   "data_shape": [
-    702,
+    703,
     697
   ],
-  "n_parameter_combinations": 768,
+  "n_parameter_combinations": 256,
   "search_method": "HalvingRandomSearchCV",
   "cv_folds": 3,
-  "search_time_seconds": 38.41594576835632,
-  "timestamp": "2025-06-18 08:54:07",
+  "search_time_seconds": 11.570696115493774,
+  "timestamp": "2025-06-18 09:37:11",
   "scoring_method": "Matthews correlation coefficient"
 }

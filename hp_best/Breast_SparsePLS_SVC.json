@@ -1,25 +1,25 @@
 {
   "best_params": {
-    "model__kernel": "linear",
+    "model__kernel": "rbf",
     "model__gamma": 0.01,
-    "model__C": 0.46415888336127786,
-    "extractor__extractor__n_components": 8,
-    "extractor__extractor__gamma": 0.01
+    "model__C": 2.1544346900318834,
+    "extractor__extractor__n_components": 32,
+    "extractor__extractor__alpha": 0.1
   },
   "best_score": 0.0,
   "dataset": "Breast",
   "task": "clf",
-  "extractor": "KPCA",
+  "extractor": "SparsePLS",
   "model": "SVC",
   "preprocessing": "4-phase-enhanced",
   "data_shape": [
-    702,
-    20209
+    707,
+    700
   ],
   "n_parameter_combinations": 384,
   "search_method": "HalvingRandomSearchCV",
   "cv_folds": 3,
-  "search_time_seconds": 51.07703495025635,
-  "timestamp": "2025-06-18 03:18:03",
+  "search_time_seconds": 24.866138458251953,
+  "timestamp": "2025-06-18 09:52:06",
   "scoring_method": "Matthews correlation coefficient"
 }

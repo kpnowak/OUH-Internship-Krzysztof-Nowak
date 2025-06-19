@@ -1,26 +1,28 @@
 {
   "best_params": {
     "model__n_estimators": 100,
-    "model__min_samples_split": 2,
+    "model__min_samples_split": 5,
     "model__min_samples_leaf": 2,
     "model__max_features": "log2",
     "model__max_depth": 5,
-    "extractor__extractor__n_components": 8
+    "extractor__extractor__tol": 0.01,
+    "extractor__extractor__n_components": 4,
+    "extractor__extractor__max_iter": 1000
   },
-  "best_score": 0.015930266452352185,
+  "best_score": 0.0380680874022366,
   "dataset": "Breast",
   "task": "clf",
-  "extractor": "PCA",
+  "extractor": "FA",
   "model": "RandomForestClassifier",
   "preprocessing": "4-phase-enhanced",
   "data_shape": [
-    695,
-    690
+    698,
+    693
   ],
-  "n_parameter_combinations": 192,
+  "n_parameter_combinations": 768,
   "search_method": "HalvingRandomSearchCV",
   "cv_folds": 3,
-  "search_time_seconds": 113.56117463111877,
-  "timestamp": "2025-06-18 08:50:30",
+  "search_time_seconds": 183.37533926963806,
+  "timestamp": "2025-06-18 09:18:23",
   "scoring_method": "Matthews correlation coefficient"
 }

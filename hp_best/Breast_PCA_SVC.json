@@ -1,0 +1,24 @@
+{
+  "best_params": {
+    "model__kernel": "rbf",
+    "model__gamma": 1.0,
+    "model__C": 0.1,
+    "extractor__extractor__n_components": 16
+  },
+  "best_score": 0.0,
+  "dataset": "Breast",
+  "task": "clf",
+  "extractor": "PCA",
+  "model": "SVC",
+  "preprocessing": "4-phase-enhanced",
+  "data_shape": [
+    693,
+    689
+  ],
+  "n_parameter_combinations": 128,
+  "search_method": "HalvingRandomSearchCV",
+  "cv_folds": 3,
+  "search_time_seconds": 7.450682640075684,
+  "timestamp": "2025-06-18 08:45:22",
+  "scoring_method": "Matthews correlation coefficient"
+}

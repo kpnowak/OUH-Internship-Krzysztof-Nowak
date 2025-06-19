@@ -1,26 +1,27 @@
 {
   "best_params": {
-    "model__solver": "saga",
+    "model__solver": "liblinear",
     "model__penalty": "l2",
-    "model__max_iter": 2000,
+    "model__max_iter": 1000,
     "model__class_weight": null,
     "model__C": 0.1,
-    "extractor__extractor__n_components": 32
+    "extractor__extractor__solver": "svd",
+    "extractor__extractor__shrinkage": null
   },
-  "best_score": 0.05187262074274901,
+  "best_score": 0.0551585686556304,
   "dataset": "Breast",
   "task": "clf",
-  "extractor": "PCA",
+  "extractor": "LDA",
   "model": "LogisticRegression",
   "preprocessing": "4-phase-enhanced",
   "data_shape": [
-    706,
+    707,
     700
   ],
   "n_parameter_combinations": 256,
   "search_method": "HalvingRandomSearchCV",
   "cv_folds": 3,
-  "search_time_seconds": 8.861288070678711,
-  "timestamp": "2025-06-18 08:41:57",
+  "search_time_seconds": 81.28575086593628,
+  "timestamp": "2025-06-18 09:23:01",
   "scoring_method": "Matthews correlation coefficient"
 }

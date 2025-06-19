@@ -955,12 +955,9 @@ def load_modality(base_path: Union[str, Path],
     df.index = df.index.astype(str)
     df.columns = df.columns.astype(str)
     
-    # Standardize sample IDs to use hyphens (clinical data format)
-    logger.info(f"Standardizing sample IDs for {modality_name}")
-    id_mapping = standardize_sample_ids(df.columns.tolist(), target_format='hyphen')
-    if id_mapping:
-        df = df.rename(columns=id_mapping)
-        logger.info(f"Standardized {len(id_mapping)} sample IDs in {modality_name}")
+    # CRITICAL FIX: Apply robust sample ID standardization to match clinical data format
+    logger.info(f"Applying robust sample ID standardization for {modality_name}")
+    df = apply_sample_id_standardization(df, target_format='hyphen', modality_name=modality_name)
     
     # OPTIMIZED: Handle duplicates only if they exist
     if df.index.duplicated().any():
@@ -1223,15 +1220,28 @@ def enhanced_sample_recovery(modalities: Dict[str, pd.DataFrame],
         mod_samples = set(df.columns)
         enhanced_df = df.copy()
         
-        # Strategy 1: More aggressive separator normalization
+        # Strategy 1: Robust separator normalization using new standardization function
         id_mapping = {}
+        
+        # First, try to standardize modality IDs to match clinical format (hyphens)
+        modality_id_mapping = robust_sample_id_standardization(list(mod_samples), target_format='hyphen')
+        standardized_mod_samples = {modality_id_mapping.get(mid, mid): mid for mid in mod_samples}
+        
+        # Check for direct matches after standardization
         for missing_id in missing_samples:
-            # Try different separator combinations
+            if missing_id in standardized_mod_samples:
+                original_mod_id = standardized_mod_samples[missing_id]
+                id_mapping[original_mod_id] = missing_id
+                logger.debug(f"Direct standardization recovery: {original_mod_id} -> {missing_id}")
+        
+        # Fallback: Try individual separator combinations for remaining samples
+        remaining_missing = missing_samples - set(id_mapping.values())
+        for missing_id in remaining_missing:
             for sep_combo in [('.', '-'), ('-', '.'), ('_', '-'), ('-', '_')]:
                 test_id = missing_id.replace(sep_combo[0], sep_combo[1])
                 if test_id in mod_samples:
                     id_mapping[test_id] = missing_id
-                    logger.debug(f"Separator recovery: {test_id} -> {missing_id}")
+                    logger.debug(f"Fallback separator recovery: {test_id} -> {missing_id}")
                     break
         
         # Strategy 2: Partial ID matching (first 12 characters for TCGA IDs)
@@ -1713,6 +1723,15 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
         y_series = clinical_df.loc[mask, outcome_col]
         clinical_df = clinical_df.loc[mask]
         logger.info(f"Applied missing target filter: {len(y_series)} samples remain with valid targets")
+    
+    # CRITICAL FIX: Standardize clinical sample IDs to ensure consistent hyphen format
+    logger.info("Standardizing clinical sample IDs to hyphen format")
+    clinical_id_mapping = robust_sample_id_standardization(list(y_series.index), target_format='hyphen')
+    if clinical_id_mapping:
+        # Update both y_series and clinical_df indices
+        y_series.index = [clinical_id_mapping.get(idx, idx) for idx in y_series.index]
+        clinical_df.index = [clinical_id_mapping.get(idx, idx) for idx in clinical_df.index]
+        logger.info(f"Standardized {len(clinical_id_mapping)} clinical sample IDs")
     
     clinical_samples = set(y_series.index)
     logger.info(f"Samples with valid outcomes: {len(clinical_samples)}")
@@ -2481,4 +2500,77 @@ def load_dataset_for_tuner(dataset_name, task=None):
         y = np.nan_to_num(y, nan=0.0, posinf=1e6, neginf=-1e6)
     
     return X, y
+
+def robust_sample_id_standardization(sample_ids: List[str], target_format: str = 'hyphen') -> Dict[str, str]:
+    """
+    Robust sample ID standardization specifically designed for TCGA-style IDs.
+    Handles the common hyphen-to-period format mismatch that causes intersection failures.
+    
+    Parameters
+    ----------
+    sample_ids : List[str]
+        List of sample IDs to standardize
+    target_format : str
+        Target format: 'hyphen' for TCGA-XX-XXXX, 'period' for TCGA.XX.XXXX
+        
+    Returns
+    -------
+    Dict[str, str]
+        Mapping from original ID to standardized ID
+    """
+    target_sep = '-' if target_format == 'hyphen' else '.'
+    mapping = {}
+    
+    for original_id in sample_ids:
+        if not isinstance(original_id, str):
+            continue
+            
+        # Convert all common separators to target format
+        standardized = original_id
+        
+        # Handle the main separators used in TCGA IDs
+        for sep in ['.', '-', '_']:
+            if sep != target_sep:
+                standardized = standardized.replace(sep, target_sep)
+        
+        # Only add to mapping if there was a change
+        if standardized != original_id:
+            mapping[original_id] = standardized
+            logger.debug(f"ID standardization: {original_id} -> {standardized}")
+    
+    return mapping
+
+def apply_sample_id_standardization(df: pd.DataFrame, target_format: str = 'hyphen', 
+                                  modality_name: str = "unknown") -> pd.DataFrame:
+    """
+    Apply sample ID standardization to a DataFrame's columns (sample IDs).
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with sample IDs as column names
+    target_format : str
+        Target format for sample IDs
+    modality_name : str
+        Name of the modality for logging
+        
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with standardized sample IDs
+    """
+    if df.empty:
+        return df
+    
+    # Get sample IDs from column names
+    sample_ids = list(df.columns)
+    id_mapping = robust_sample_id_standardization(sample_ids, target_format)
+    
+    if id_mapping:
+        logger.info(f"Standardizing {len(id_mapping)} sample IDs for {modality_name}")
+        df_standardized = df.rename(columns=id_mapping)
+        return df_standardized
+    else:
+        logger.debug(f"No ID standardization needed for {modality_name}")
+        return df
 

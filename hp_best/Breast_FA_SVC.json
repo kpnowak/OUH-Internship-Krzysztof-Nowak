@@ -1,26 +1,26 @@
 {
   "best_params": {
-    "model__kernel": "linear",
-    "model__gamma": 0.01,
-    "model__C": 10.0,
+    "model__kernel": "rbf",
+    "model__gamma": 0.1,
+    "model__C": 0.46415888336127786,
     "extractor__extractor__tol": 0.001,
-    "extractor__extractor__n_components": 16,
+    "extractor__extractor__n_components": 32,
     "extractor__extractor__max_iter": 1000
   },
-  "best_score": 0.04386470142900348,
+  "best_score": 0.0,
   "dataset": "Breast",
   "task": "clf",
   "extractor": "FA",
   "model": "SVC",
   "preprocessing": "4-phase-enhanced",
   "data_shape": [
-    699,
-    20211
+    703,
+    697
   ],
   "n_parameter_combinations": 512,
   "search_method": "HalvingRandomSearchCV",
   "cv_folds": 3,
-  "search_time_seconds": 943.000431060791,
-  "timestamp": "2025-06-18 03:59:04",
+  "search_time_seconds": 164.11840724945068,
+  "timestamp": "2025-06-18 09:12:27",
   "scoring_method": "Matthews correlation coefficient"
 }
