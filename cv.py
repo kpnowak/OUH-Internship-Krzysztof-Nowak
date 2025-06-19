@@ -956,17 +956,17 @@ def process_cv_fold(
                     operation_name=f"validation {model_name} (fold {fold_idx})"
                 )
                 
+                # Only proceed if we have valid data (check before trying to get lengths)
+                if (final_X_train is None or final_y_train is None or 
+                    final_X_val is None or final_y_val is None):
+                    logger.warning(f"Invalid data for {model_name} in fold {fold_idx}")
+                    continue
+                
                 # Final hard check for alignment - this should never fail now
                 if len(final_X_train) != len(final_y_train):
                     raise ValueError(f"Training X/y length mismatch after synchronization: {len(final_X_train)} vs {len(final_y_train)}")
                 if len(final_X_val) != len(final_y_val):
                     raise ValueError(f"Validation X/y length mismatch after synchronization: {len(final_X_val)} vs {len(final_y_val)}")
-                
-                # Only proceed if we have valid data
-                if (final_X_train is None or final_y_train is None or 
-                    final_X_val is None or final_y_val is None):
-                    logger.warning(f"Invalid data for {model_name} in fold {fold_idx}")
-                    continue
                 
                 # For classification, check class distribution in this specific fold
                 if not is_regression:
@@ -2083,11 +2083,22 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False, sample_ids=
         min_class_count = np.min(counts)
         logger.info(f"After merging: {n_classes} classes, min_count={min_class_count}")
     
-    # Try stratified split first
+    # Try stratified split first with proper warning suppression
     try:
         if n_samples >= CV_CONFIG["min_total_samples_for_stratified"] and min_class_count >= adaptive_min_samples:
-            cv_splitter = StratifiedKFold(n_splits=optimal_splits, shuffle=True, random_state=0)
-            return cv_splitter, optimal_splits, "StratifiedKFold"
+            # Additional safety check: ensure each class has enough samples for the splits
+            if min_class_count >= optimal_splits + 1:  # +1 for safety buffer
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", 
+                                          message="The least populated class in y has only .* members, which is less than n_splits=.*", 
+                                          category=UserWarning)
+                    warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
+                    
+                    cv_splitter = StratifiedKFold(n_splits=optimal_splits, shuffle=True, random_state=0)
+                    return cv_splitter, optimal_splits, "StratifiedKFold"
+            else:
+                logger.debug(f"Insufficient samples per class ({min_class_count}) for StratifiedKFold with {optimal_splits} splits")
     except Exception as e:
         logger.warning(f"StratifiedKFold failed: {e}")
     
@@ -3021,13 +3032,31 @@ def cross_validate_model(X, y, model_name, n_splits=5, random_state=42, out_dir=
     """
     Perform cross-validation for a classification model.
     """
-    from sklearn.model_selection import StratifiedKFold
+    from sklearn.model_selection import StratifiedKFold, KFold
     from sklearn.metrics import accuracy_score, roc_auc_score
     import numpy as np
     import os
+    import warnings
     
-    # Initialize cross-validation
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    # Check if stratification is viable
+    unique_classes, class_counts = np.unique(y, return_counts=True)
+    min_class_count = np.min(class_counts)
+    
+    # Initialize cross-validation with appropriate strategy
+    if min_class_count >= n_splits + 1:  # +1 for safety buffer
+        # Use StratifiedKFold with warning suppression
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", 
+                                  message="The least populated class in y has only .* members, which is less than n_splits=.*", 
+                                  category=UserWarning)
+            warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
+            
+            skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+            logger.debug(f"Using StratifiedKFold for cross_validate_model")
+    else:
+        # Fall back to KFold
+        skf = KFold(n_splits=min(n_splits, len(y) // 2), shuffle=True, random_state=random_state)
+        logger.debug(f"Using KFold for cross_validate_model (insufficient samples for stratification)")
     
     # Initialize metrics storage
     accuracies = []
@@ -3213,12 +3242,13 @@ def check_classification_stratification_viability(y: np.ndarray, n_splits: int =
     min_class_count = np.min(class_counts)
     
     # Need at least min_samples_per_class AND at least n_splits samples per class
-    required_min = max(min_samples_per_class, n_splits)
+    # Add buffer of 1 to be more conservative and avoid edge cases
+    required_min = max(min_samples_per_class, n_splits + 1)  # +1 for safety buffer
     stratification_viable = (min_class_count >= required_min)
     
     if not stratification_viable:
-        logger.warning(f"Classification stratification not viable: smallest class has {min_class_count} samples "
-                      f"(minimum required: {required_min} for {n_splits} splits)")
+        logger.info(f"Classification stratification not viable: smallest class has {min_class_count} samples "
+                   f"(minimum required: {required_min} for {n_splits} splits). Using KFold instead.")
         logger.debug(f"Class distribution: classes={unique_classes}, counts={class_counts}")
     else:
         logger.debug(f"Classification stratification viable: {len(unique_classes)} classes with counts {class_counts}")
@@ -3262,11 +3292,16 @@ def create_enhanced_cv_splitter(y: np.ndarray,
         KFold, StratifiedKFold, GroupKFold, StratifiedGroupKFold
     )
     
-    # Suppress sklearn stratification warnings during CV setup
+    # Suppress sklearn stratification warnings during CV setup - capture all relevant warnings
     with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", 
+                              message="The least populated class in y has only .* members, which is less than n_splits=.*", 
+                              category=UserWarning)
         warnings.filterwarnings("ignore", 
                               message="The least populated class in y has only .* members", 
                               category=UserWarning)
+        # Also suppress the module-specific warnings from sklearn
+        warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
         
         return _create_enhanced_cv_splitter_impl(y, sample_ids, task_type, n_splits, 
                                                 use_stratified_regression, use_grouped_cv, random_state)
@@ -3324,12 +3359,18 @@ def _create_enhanced_cv_splitter_impl(y: np.ndarray,
                     logger.info(f"Using {strategy_desc} for regression CV")
                     return cv_splitter, strategy_desc, y_binned, groups
                 else:
-                    # Stratified only
-                    cv_splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-                    strategy_desc = "StratifiedKFold(quartiles)"
-                    
-                    logger.info(f"Using {strategy_desc} for regression CV")
-                    return cv_splitter, strategy_desc, y_binned, None
+                    # Stratified only with warning suppression
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", 
+                                              message="The least populated class in y has only .* members, which is less than n_splits=.*", 
+                                              category=UserWarning)
+                        warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
+                        
+                        cv_splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+                        strategy_desc = "StratifiedKFold(quartiles)"
+                        
+                        logger.info(f"Using {strategy_desc} for regression CV")
+                        return cv_splitter, strategy_desc, y_binned, None
             else:
                 logger.info("Stratified regression not viable, falling back to non-stratified CV")
         
@@ -3358,12 +3399,18 @@ def _create_enhanced_cv_splitter_impl(y: np.ndarray,
                 logger.info(f"Using {strategy_desc} for classification CV")
                 return cv_splitter, strategy_desc, y, groups
             else:
-                # Standard stratified classification
-                cv_splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-                strategy_desc = "StratifiedKFold"
-                
-                logger.info(f"Using {strategy_desc} for classification CV")
-                return cv_splitter, strategy_desc, y, None
+                                    # Standard stratified classification with warning suppression
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", 
+                                              message="The least populated class in y has only .* members, which is less than n_splits=.*", 
+                                              category=UserWarning)
+                        warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
+                        
+                        cv_splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+                        strategy_desc = "StratifiedKFold"
+                        
+                        logger.info(f"Using {strategy_desc} for classification CV")
+                        return cv_splitter, strategy_desc, y, None
         else:
             logger.info("Classification stratification not viable, falling back to non-stratified CV")
             
@@ -3403,11 +3450,15 @@ def validate_enhanced_cv_strategy(cv_splitter, y_for_cv, groups, n_splits, task_
     """
     import warnings
     
-    # Suppress sklearn stratification warnings during validation
+    # Suppress sklearn stratification warnings during validation - comprehensive suppression
     with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", 
+                              message="The least populated class in y has only .* members, which is less than n_splits=.*", 
+                              category=UserWarning)
         warnings.filterwarnings("ignore", 
                               message="The least populated class in y has only .* members", 
                               category=UserWarning)
+        warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
         
         try:
             # Test the splitter

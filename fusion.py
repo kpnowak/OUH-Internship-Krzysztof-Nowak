@@ -15,6 +15,7 @@ except ImportError:
 import numpy as np
 from typing import List, Optional, Union, Tuple, Dict, Any
 import logging
+import traceback
 from sklearn.metrics import r2_score, roc_auc_score
 from sklearn.model_selection import cross_val_score
 from sklearn.svm import SVC
@@ -2236,12 +2237,29 @@ class LateFusionStacking:
         effective_cv_folds = max(2, effective_cv_folds)  # Minimum 2 folds
         logger.debug(f"Using {effective_cv_folds}-fold CV for meta-feature generation")
         
-        # Create CV splitter
+        # Create CV splitter with enhanced stratification checking
         try:
             if self.is_regression:
                 cv = KFold(n_splits=effective_cv_folds, shuffle=True, random_state=self.random_state)
             else:
-                cv = StratifiedKFold(n_splits=effective_cv_folds, shuffle=True, random_state=self.random_state)
+                # Check if stratification is viable for classification
+                unique_classes, class_counts = np.unique(y, return_counts=True)
+                min_class_count = np.min(class_counts)
+                
+                # Suppress stratification warnings and use KFold if not viable
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", 
+                                          message="The least populated class in y has only .* members, which is less than n_splits=.*", 
+                                          category=UserWarning)
+                    warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
+                    
+                    if min_class_count >= effective_cv_folds + 1:  # +1 for safety buffer
+                        cv = StratifiedKFold(n_splits=effective_cv_folds, shuffle=True, random_state=self.random_state)
+                        logger.debug(f"Using StratifiedKFold CV for meta-feature generation")
+                    else:
+                        cv = KFold(n_splits=effective_cv_folds, shuffle=True, random_state=self.random_state)
+                        logger.debug(f"Using KFold CV for meta-feature generation (insufficient samples for stratification)")
         except Exception as e:
             logger.warning(f"Error creating CV splitter: {str(e)}, falling back to KFold")
             cv = KFold(n_splits=effective_cv_folds, shuffle=True, random_state=self.random_state)
@@ -2952,15 +2970,37 @@ class LearnableWeightedFusion:
                 # Store the model for later use
                 self.models_[modality_idx] = model
                 
-                # Perform cross-validation with error handling
+                # Perform cross-validation with enhanced error handling and warning suppression
                 try:
-                    # Use stratified CV for classification with sufficient samples
-                    if not self.is_regression and len(np.unique(y_clean)) > 1:
-                        from sklearn.model_selection import StratifiedKFold
-                        cv = StratifiedKFold(n_splits=self.cv_folds, shuffle=True, random_state=self.random_state)
-                    else:
-                        from sklearn.model_selection import KFold
-                        cv = KFold(n_splits=self.cv_folds, shuffle=True, random_state=self.random_state)
+                    # Suppress sklearn stratification warnings comprehensively
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", 
+                                              message="The least populated class in y has only .* members, which is less than n_splits=.*", 
+                                              category=UserWarning)
+                        warnings.filterwarnings("ignore", 
+                                              message="The least populated class in y has only .* members", 
+                                              category=UserWarning)
+                        warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
+                        warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection")
+                        
+                        # Check stratification viability for classification
+                        if not self.is_regression and len(np.unique(y_clean)) > 1:
+                            unique_classes, class_counts = np.unique(y_clean, return_counts=True)
+                            min_class_count = np.min(class_counts)
+                            
+                            # Use stratified CV only if viable (each class has enough samples)
+                            if min_class_count >= self.cv_folds + 1:  # +1 for safety buffer
+                                from sklearn.model_selection import StratifiedKFold
+                                cv = StratifiedKFold(n_splits=self.cv_folds, shuffle=True, random_state=self.random_state)
+                                logger.debug(f"Using StratifiedKFold CV for modality {modality_idx}")
+                            else:
+                                from sklearn.model_selection import KFold
+                                cv = KFold(n_splits=self.cv_folds, shuffle=True, random_state=self.random_state)
+                                logger.debug(f"Using KFold CV for modality {modality_idx} (insufficient samples for stratification)")
+                        else:
+                            from sklearn.model_selection import KFold
+                            cv = KFold(n_splits=self.cv_folds, shuffle=True, random_state=self.random_state)
                     
                     # Fit the model on the full dataset for later use
                     model.fit(modality, y_clean)
@@ -3563,9 +3603,18 @@ class SimilarityNetworkFusion:
                         mu=self.mu
                     )
                     
-                    # Apply threshold to reduce sparsity
-                    threshold = np.percentile(affinity[affinity > 0], 10)  # Keep top 90% of connections
-                    affinity[affinity < threshold] = 0
+                    # Apply threshold to reduce sparsity - with safe percentile calculation
+                    positive_values = affinity[affinity > 0]
+                    if len(positive_values) > 0:
+                        # Ensure percentile is valid (between 0 and 100)
+                        percentile_value = max(0, min(100, 10))  # Keep top 90% of connections
+                        try:
+                            threshold = np.percentile(positive_values, percentile_value)
+                            affinity[affinity < threshold] = 0
+                        except Exception as e:
+                            logger.warning(f"Percentile calculation failed for modality {i}: {e}, skipping threshold")
+                    else:
+                        logger.warning(f"No positive values in affinity matrix for modality {i}, skipping threshold")
                     
                     # Normalize to ensure proper probabilities
                     row_sums = affinity.sum(axis=1)
@@ -3618,27 +3667,174 @@ class SimilarityNetworkFusion:
             logger.warning("No valid modalities for SNF")
             self.fitted_ = True
             return self
+            
+        # Preprocess modalities for SNF compatibility
+        processed_modalities = []
+        for i, modality in enumerate(valid_modalities):
+            try:
+                # Clean the data: remove NaN, inf values
+                modality_clean = np.array(modality, dtype=np.float64)
+                
+                # Replace NaN and inf values
+                modality_clean = np.nan_to_num(modality_clean, nan=0.0, posinf=1e6, neginf=-1e6)
+                
+                # Ensure finite values only
+                if not np.all(np.isfinite(modality_clean)):
+                    logger.warning(f"Non-finite values detected in modality {i}, cleaning...")
+                    modality_clean = np.where(np.isfinite(modality_clean), modality_clean, 0.0)
+                
+                # Scale data to prevent extreme values in SNF calculations
+                from sklearn.preprocessing import StandardScaler, MinMaxScaler
+                
+                # Use robust scaling to handle outliers
+                try:
+                    scaler = StandardScaler()
+                    modality_scaled = scaler.fit_transform(modality_clean)
+                    
+                    # Additional clipping to prevent extreme values
+                    modality_scaled = np.clip(modality_scaled, -5, 5)
+                    
+                    # Shift to positive values for SNF (it works better with positive data)
+                    modality_scaled = modality_scaled - np.min(modality_scaled) + 1e-6
+                    
+                except Exception as scaling_error:
+                    logger.warning(f"Standard scaling failed for modality {i}: {scaling_error}, using min-max scaling")
+                    try:
+                        # Fallback to min-max scaling
+                        scaler = MinMaxScaler(feature_range=(1e-6, 1.0))
+                        modality_scaled = scaler.fit_transform(modality_clean)
+                    except Exception as minmax_error:
+                        logger.warning(f"Min-max scaling also failed for modality {i}: {minmax_error}, using raw data")
+                        modality_scaled = modality_clean + 1e-6
+                
+                # Final validation: ensure all values are positive and finite
+                if np.any(modality_scaled <= 0) or not np.all(np.isfinite(modality_scaled)):
+                    logger.warning(f"Modality {i} still has non-positive or non-finite values after preprocessing")
+                    modality_scaled = np.abs(modality_scaled) + 1e-6
+                    modality_scaled = np.nan_to_num(modality_scaled, nan=1e-6, posinf=1.0, neginf=1e-6)
+                
+                processed_modalities.append(modality_scaled)
+                logger.debug(f"Preprocessed modality {i}: shape={modality_scaled.shape}, "
+                           f"range=[{np.min(modality_scaled):.6f}, {np.max(modality_scaled):.6f}]")
+                
+            except Exception as e:
+                logger.error(f"Failed to preprocess modality {i}: {e}")
+                # Skip this modality if preprocessing fails
+                continue
+        
+        if not processed_modalities:
+            logger.error("No modalities could be preprocessed for SNF")
+            self.fitted_ = True
+            return self
         
         # Store training modalities for later projection
-        self.training_modalities_ = [m.copy() for m in valid_modalities]
+        self.training_modalities_ = [m.copy() for m in processed_modalities]
         
-        if len(valid_modalities) < 2:
+        if len(processed_modalities) < 2:
             logger.warning("SNF requires at least 2 modalities, using single modality")
-            self.fused_network_ = valid_modalities[0]
+            self.fused_network_ = processed_modalities[0]
             self.fitted_ = True
             return self
         
         try:
-            # Build similarity networks
-            similarity_networks = self._build_similarity_networks(valid_modalities)
+            # Build similarity networks with better error handling
+            similarity_networks = self._build_similarity_networks(processed_modalities)
             
             if len(similarity_networks) < 2:
                 logger.warning("Not enough similarity networks for SNF")
                 self.fitted_ = True
                 return self
             
-            # Perform SNF
-            self.fused_network_ = snfpy.snf(similarity_networks, K=self.K, t=self.T, alpha=self.alpha)
+            # Validate and preprocess similarity networks before SNF
+            for i, network in enumerate(similarity_networks):
+                if not np.all(np.isfinite(network)):
+                    logger.warning(f"Non-finite values in similarity network {i}, cleaning...")
+                    network = np.nan_to_num(network, nan=0.0, posinf=1.0, neginf=0.0)
+                    similarity_networks[i] = network
+                
+                # Ensure network is symmetric (common requirement for SNF)
+                # Only log warning if networks are very asymmetric (indicates a real issue)
+                if not np.allclose(network, network.T, atol=1e-6):
+                    asymmetry_measure = np.max(np.abs(network - network.T))
+                    if asymmetry_measure > 0.1:  # Only warn for significant asymmetry
+                        logger.debug(f"Similarity network {i} has significant asymmetry (max diff: {asymmetry_measure:.6f}), symmetrizing...")
+                    
+                    # Symmetrize the network
+                    network = (network + network.T) / 2
+                    similarity_networks[i] = network
+            
+            # Perform SNF with comprehensive parameter validation and error handling
+            logger.debug(f"Performing SNF with K={self.K}, t={self.T}, alpha={self.alpha}")
+            
+            # Validate SNF parameters to prevent internal errors
+            validated_K = max(1, min(self.K, len(similarity_networks[0]) - 1))
+            validated_T = max(1, min(self.T, 100))  # Limit iterations to prevent overflow
+            validated_alpha = max(0.1, min(0.9, self.alpha))  # Keep alpha in safe range
+            
+            # Additional validation of similarity networks to prevent snfpy internal errors
+            for i, network in enumerate(similarity_networks):
+                # Ensure diagonal dominance (helps with numerical stability)
+                np.fill_diagonal(network, np.maximum(np.diag(network), network.max(axis=1)))
+                
+                # Ensure all values are in [0, 1] range (SNF expectation)
+                network_min, network_max = network.min(), network.max()
+                if network_min < 0 or network_max > 1:
+                    logger.debug(f"Network {i} values outside [0,1] range: [{network_min:.6f}, {network_max:.6f}], normalizing...")
+                    network = (network - network_min) / (network_max - network_min + 1e-8)
+                    similarity_networks[i] = network
+                
+                # Final safety check: ensure no NaN or inf values
+                if not np.all(np.isfinite(network)):
+                    logger.warning(f"Network {i} has non-finite values after preprocessing, applying final cleanup...")
+                    network = np.nan_to_num(network, nan=0.0, posinf=1.0, neginf=0.0)
+                    similarity_networks[i] = network
+            
+            try:
+                # Call SNF with validated parameters and comprehensive error handling
+                with warnings.catch_warnings():
+                    # Suppress any warnings from snfpy that might be related to percentile calculations
+                    warnings.filterwarnings("ignore", message=".*percentile.*", category=Warning)
+                    warnings.filterwarnings("ignore", message=".*Percentiles.*", category=Warning)
+                    warnings.filterwarnings("ignore", category=RuntimeWarning, module="snf")
+                    
+                    self.fused_network_ = snfpy.snf(
+                        similarity_networks, 
+                        K=validated_K, 
+                        t=validated_T, 
+                        alpha=validated_alpha
+                    )
+                    
+                logger.info(f"SNF completed successfully with validated parameters: K={validated_K}, t={validated_T}, alpha={validated_alpha}")
+                
+            except Exception as snf_error:
+                logger.error(f"SNF library call failed with error: {snf_error}")
+                logger.debug(f"SNF error details: {traceback.format_exc()}")
+                
+                # If SNF fails, try with even more conservative parameters
+                logger.warning("Retrying SNF with conservative parameters...")
+                try:
+                    conservative_K = min(5, len(similarity_networks[0]) - 1)
+                    conservative_T = 10
+                    conservative_alpha = 0.5
+                    
+                    self.fused_network_ = snfpy.snf(
+                        similarity_networks, 
+                        K=conservative_K, 
+                        t=conservative_T, 
+                        alpha=conservative_alpha
+                    )
+                    logger.info(f"SNF succeeded with conservative parameters: K={conservative_K}, t={conservative_T}, alpha={conservative_alpha}")
+                    
+                except Exception as conservative_error:
+                    logger.error(f"Even conservative SNF failed: {conservative_error}")
+                    # Use the first similarity network as fallback
+                    self.fused_network_ = similarity_networks[0].copy()
+                    logger.warning("Using first similarity network as SNF fallback")
+            
+            # Validate the fused network
+            if not np.all(np.isfinite(self.fused_network_)):
+                logger.warning("Non-finite values in fused network, cleaning...")
+                self.fused_network_ = np.nan_to_num(self.fused_network_, nan=0.0, posinf=1.0, neginf=0.0)
             
             # Determine number of clusters if not specified
             if self.n_clusters is None and y is not None:
@@ -3661,16 +3857,21 @@ class SimilarityNetworkFusion:
                 n_features = min(self.n_clusters * 2, self.fused_network_.shape[0] // 2, 50)
                 n_features = max(n_features, 5)  # At least 5 features
                 
-                spectral_embed = SpectralEmbedding(
-                    n_components=n_features,
-                    affinity='precomputed',
-                    random_state=self.random_state
-                )
-                
-                # Get dense spectral embedding instead of sparse one-hot clusters
-                self.spectral_features_ = spectral_embed.fit_transform(self.fused_network_)
-                
-                logger.info(f"SNF with dense spectral embedding applied, {n_features} features")
+                try:
+                    spectral_embed = SpectralEmbedding(
+                        n_components=n_features,
+                        affinity='precomputed',
+                        random_state=self.random_state
+                    )
+                    
+                    # Get dense spectral embedding instead of sparse one-hot clusters
+                    self.spectral_features_ = spectral_embed.fit_transform(self.fused_network_)
+                    
+                    logger.info(f"SNF with dense spectral embedding applied, {n_features} features")
+                except Exception as spectral_error:
+                    logger.warning(f"Spectral embedding failed: {spectral_error}, using fused network directly")
+                    self.spectral_features_ = self.fused_network_
+                    logger.info(f"SNF applied without spectral clustering")
             else:
                 # Use the fused network directly as features (dense similarity matrix)
                 self.spectral_features_ = self.fused_network_
@@ -3680,6 +3881,29 @@ class SimilarityNetworkFusion:
             
         except Exception as e:
             logger.error(f"Error fitting SNF model: {str(e)}")
+            logger.debug(f"SNF error traceback: {traceback.format_exc()}")
+            
+            # Fallback: use simple concatenation
+            try:
+                logger.warning("SNF failed, falling back to simple concatenation")
+                concatenated = np.column_stack(processed_modalities)
+                
+                # Apply PCA for dimensionality reduction as fallback
+                from sklearn.decomposition import PCA
+                n_components = min(50, concatenated.shape[0], concatenated.shape[1])
+                if n_components > 1:
+                    pca = PCA(n_components=n_components, random_state=self.random_state)
+                    self.spectral_features_ = pca.fit_transform(concatenated)
+                    logger.info(f"Fallback PCA applied with {n_components} components")
+                else:
+                    self.spectral_features_ = concatenated
+                    logger.info("Using concatenated features as fallback")
+                    
+            except Exception as fallback_error:
+                logger.error(f"Even fallback failed: {fallback_error}")
+                # Ultimate fallback: use first modality
+                self.spectral_features_ = processed_modalities[0]
+                
             self.fitted_ = True  # Mark as fitted to avoid errors
             
         return self

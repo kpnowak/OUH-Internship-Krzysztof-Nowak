@@ -15,6 +15,7 @@ from functools import wraps
 from contextlib import contextmanager
 import traceback
 import gc
+import inspect
 
 # Configure enhanced logging
 logger = logging.getLogger(__name__)
@@ -612,6 +613,7 @@ def safe_cross_val_score(estimator, X, y, cv=None, scoring=None, n_jobs=None,
         The verbosity level.
     fit_params : dict, optional
         Parameters to pass to the fit method of the estimator.
+        Note: This parameter is kept for compatibility but ignored in newer sklearn versions.
     pre_dispatch : int, or string, optional
         Controls the number of out-of-process workers to use for the computation.
     error_score : 'raise' or numeric
@@ -634,12 +636,24 @@ def safe_cross_val_score(estimator, X, y, cv=None, scoring=None, n_jobs=None,
             safe_scoring = make_scorer(safe_mcc_score, greater_is_better=True)
     
     try:
-        # Use 'raise' to catch errors and handle them
-        scores = cross_val_score(
-            estimator, X, y, cv=cv, scoring=safe_scoring, n_jobs=n_jobs,
-            verbose=verbose, fit_params=fit_params, pre_dispatch=pre_dispatch,
-            error_score='raise'
-        )
+        # Check if cross_val_score supports fit_params (older sklearn versions)
+        cv_signature = inspect.signature(cross_val_score)
+        supports_fit_params = 'fit_params' in cv_signature.parameters
+        
+        if supports_fit_params and fit_params is not None:
+            # Use fit_params for older sklearn versions
+            scores = cross_val_score(
+                estimator, X, y, cv=cv, scoring=safe_scoring, n_jobs=n_jobs,
+                verbose=verbose, fit_params=fit_params, pre_dispatch=pre_dispatch,
+                error_score='raise'
+            )
+        else:
+            # Skip fit_params for newer sklearn versions
+            scores = cross_val_score(
+                estimator, X, y, cv=cv, scoring=safe_scoring, n_jobs=n_jobs,
+                verbose=verbose, pre_dispatch=pre_dispatch,
+                error_score='raise'
+            )
         
         # Replace any non-finite scores with fallback values
         if not np.all(np.isfinite(scores)):

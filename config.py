@@ -917,21 +917,6 @@ REGRESSION_DATASETS = [
         outcome_type="continuous",
         fix_tcga_ids=True
     ).to_dict(),
-    
-    DatasetConfig(
-        name="Sarcoma",
-        base_path="data/sarcoma",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/sarcoma.csv",
-        outcome_col="pathologic_tumor_length",
-        id_col="metsampleID",
-        outcome_type="continuous",
-        fix_tcga_ids=True
-    ).to_dict()
 ]
 
 """
@@ -985,6 +970,23 @@ REGRESSION_DATASETS = [
 
 # Classification datasets
 CLASSIFICATION_DATASETS = [    
+    DatasetConfig(
+        name="Breast",
+        base_path="data/breast",
+        modalities={
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        outcome_file="data/clinical/breast.csv",
+        outcome_col="pathologic_T",
+        id_col="sampleID",
+        outcome_type="class",
+        fix_tcga_ids=True
+    ).to_dict(),
+]
+
+"""
     DatasetConfig(
         name="Colon",
         base_path="data/colon",
@@ -1089,4 +1091,4 @@ CLASSIFICATION_DATASETS = [
         outcome_type="class",
         fix_tcga_ids=True
     ).to_dict()
-]
+"""
