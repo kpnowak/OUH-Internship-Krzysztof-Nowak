@@ -111,7 +111,7 @@ def load_dataset_for_tuner_optimized(dataset_name, task=None):
         logger.info(f"  Raw {modality_name} shape: {X_modality.shape}")
     
     # Apply 4-phase enhanced preprocessing pipeline WITH fusion
-    fusion_method = "snf" if task_type == "classification" else "weighted_concat"
+    fusion_method = "snf" if task_type == "classification" else "early_fusion_pca"  # CURRENT IMPLEMENTATION
     logger.info(f"Applying 4-phase preprocessing with {fusion_method} fusion...")
     
     processed_modalities, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipeline(
@@ -355,10 +355,10 @@ DATASET_INFO = {
 }
 
 # Available extractors and models by task (aligned with main pipeline)
-REGRESSION_EXTRACTORS = ["PCA", "KPCA", "KPLS", "FA", "PLS", "SparsePLS"]  # 6 extractors
-REGRESSION_MODELS = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]
-CLASSIFICATION_EXTRACTORS = ["PCA", "KPCA", "FA", "LDA", "PLS-DA", "SparsePLS"]  # 6 extractors
-CLASSIFICATION_MODELS = ["LogisticRegression", "SVC", "RandomForestClassifier"]
+REGRESSION_EXTRACTORS = ["PCA", "KPCA", "FA", "PLS", "KPLS", "SparsePLS"]  # 6 extractors - CURRENT IMPLEMENTATION
+REGRESSION_MODELS = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]  # 3 models - CURRENT IMPLEMENTATION
+CLASSIFICATION_EXTRACTORS = ["PCA", "KPCA", "FA", "LDA", "PLS-DA", "SparsePLS"]  # 6 extractors - CURRENT IMPLEMENTATION  
+CLASSIFICATION_MODELS = ["LogisticRegression", "RandomForestClassifier", "SVC"]  # 3 models - CURRENT IMPLEMENTATION
 
 # ------------- Dataset type detection ----------------------
 def detect_dataset_task(dataset):

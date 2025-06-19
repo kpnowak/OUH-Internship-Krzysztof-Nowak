@@ -20,7 +20,8 @@ from config import (
 from data_io import load_dataset, load_and_preprocess_data_enhanced
 from models import (
     get_regression_extractors, get_regression_selectors,
-    get_classification_extractors, get_classification_selectors
+    get_classification_extractors, get_classification_selectors,
+    get_regression_models, get_classification_models
 )
 from cv import (
     run_extraction_pipeline, run_selection_pipeline
@@ -391,7 +392,7 @@ def process_regression_datasets(args):
     logger.info("=== REGRESSION BLOCK (AML, Sarcoma) ===")
     reg_extractors = get_regression_extractors()
     reg_selectors = get_regression_selectors()
-    reg_models = ["LinearRegression", "RandomForestRegressor", "ElasticNet"]
+    reg_models = get_regression_models()  # CURRENT IMPLEMENTATION: Use getter function
     n_shared_list = N_VALUES_LIST.copy()  # Shared list for both extraction and selection
     
     # Check if a specific n_val is requested via command line
@@ -434,7 +435,7 @@ def process_regression_datasets(args):
             
             run_extraction_pipeline(
                 ds_name, modalities, common_ids, y_aligned, base_out,
-                reg_extractors, n_shared_list, reg_models, progress_count_reg, reg_total_runs,
+                reg_extractors, n_shared_list, list(reg_models.keys()), progress_count_reg, reg_total_runs,
                 is_regression=True
             )
             
@@ -447,7 +448,7 @@ def process_regression_datasets(args):
             
             run_selection_pipeline(
                 ds_name, modalities, common_ids, y_aligned, base_out,
-                reg_selectors, n_shared_list, reg_models, progress_count_reg, reg_total_runs,
+                reg_selectors, n_shared_list, list(reg_models.keys()), progress_count_reg, reg_total_runs,
                 is_regression=True
             )
             
@@ -724,7 +725,7 @@ def process_single_dataset(target_ds, args):
                     ds_name, result["modalities"], result["common_ids"], 
                     result["y_aligned"], base_out,
                     get_regression_extractors(), n_val_list, 
-                    ["LinearRegression", "RandomForestRegressor", "ElasticNet"], 
+                    list(get_regression_models().keys()),  # CURRENT IMPLEMENTATION: Use getter function
                     [0], 1, is_regression=True
                 )
                 
@@ -732,7 +733,7 @@ def process_single_dataset(target_ds, args):
                     ds_name, result["modalities"], result["common_ids"], 
                     result["y_aligned"], base_out,
                     get_regression_selectors(), n_val_list, 
-                    ["LinearRegression", "RandomForestRegressor", "ElasticNet"], 
+                    list(get_regression_models().keys()),  # CURRENT IMPLEMENTATION: Use getter function
                     [0], 1, is_regression=True
                 )
                 

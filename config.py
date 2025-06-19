@@ -600,6 +600,8 @@ FEATURE_ENGINEERING_CONFIG = {
 FUSION_UPGRADES_CONFIG = {
     "enabled": False,  # Disabled by default, enabled via CLI
     
+    # CURRENT IMPLEMENTATION - Specified fusion strategies only
+    
     # Attention-weighted concatenation configuration
     "attention_weighted": {
         "enabled": True,
@@ -612,7 +614,7 @@ FUSION_UPGRADES_CONFIG = {
         "description": "Sample-specific weighting improved AML R² +0.05 and Colon MCC +0.04"
     },
     
-    # Learnable weighted fusion configuration (NEW)
+    # Learnable weighted fusion configuration
     "learnable_weighted": {
         "enabled": True,
         "cv_folds": 5,           # Cross-validation folds for weight learning
@@ -620,19 +622,37 @@ FUSION_UPGRADES_CONFIG = {
         "description": "OPTIMIZED: Learns optimal modality weights instead of using equal weights"
     },
     
-    # Late-fusion stacking configuration
-    "late_fusion_stacking": {
-        "enabled": False,
-        "cv_folds": 5,           # Cross-validation folds for meta-features
-        "base_models": None,     # Use default models (RF, ElasticNet/Logistic)
+    # Multiple Kernel Learning configuration
+    "mkl": {
+        "enabled": True,
+        "n_components": 10,      # Number of components for kernel fusion
+        "gamma": 1.0,           # Gamma parameter for RBF kernels
         "random_state": 42,
-        "description": "Uses per-omic model predictions as features; helps when one modality dominates"
+        "description": "Multiple Kernel Learning with RBF kernels"
     },
     
-    # Strategy selection
-    "default_strategy": "attention_weighted",  # OPTIMIZED: Changed to learnable weights (attention_weighted → learnable_weighted)
-    "fallback_strategy": "weighted_concat",    # Fallback when upgrades fail
-    "auto_strategy_selection": True,           # Automatically select best strategy based on data
+    # Similarity Network Fusion configuration
+    "snf": {
+        "enabled": True,
+        "K": 30,                # Number of neighbors for similarity network
+        "alpha": 0.8,           # Fusion parameter
+        "T": 30,                # Number of iterations
+        "random_state": 42,
+        "description": "Similarity Network Fusion with spectral clustering"
+    },
+    
+    # Early fusion PCA configuration
+    "early_fusion_pca": {
+        "enabled": True,
+        "n_components": None,    # Automatically determined based on data
+        "random_state": 42,
+        "description": "PCA-based early integration"
+    },
+    
+    # Strategy selection - CURRENT IMPLEMENTATION: Only specified strategies
+    "default_strategy": "attention_weighted",     # Default strategy for clean data
+    "fallback_strategy": "early_fusion_pca",     # Fallback when advanced strategies fail
+    "auto_strategy_selection": True,             # Automatically select best strategy based on data
 }
 
 # Sample retention warning configuration

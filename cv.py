@@ -60,6 +60,7 @@ HP_DIR = pathlib.Path("hp_best")
 def load_best(dataset, extr_nm, model_nm, task):
     """
     Load best hyperparameters for a given dataset, extractor, and model combination.
+    This function is a wrapper around the more comprehensive load_best_hyperparameters from models.py.
     
     Parameters
     ----------
@@ -75,43 +76,24 @@ def load_best(dataset, extr_nm, model_nm, task):
     Returns
     -------
     dict
-        Best hyperparameters, or empty dict if not found
+        Best hyperparameters (raw format for backward compatibility), or empty dict if not found
     """
+    from models import load_best_hyperparameters
     
-    def deserialize_sklearn_objects(params):
-        """
-        Convert string representations of sklearn objects back to actual objects.
-        """
-        from sklearn.preprocessing import PowerTransformer
-        
-        deserialized = {}
-        for key, value in params.items():
-            if isinstance(value, str):
-                # Check for common sklearn objects that were serialized as strings
-                if value == "PowerTransformer()":
-                    deserialized[key] = PowerTransformer()
-                elif "PowerTransformer(" in value:
-                    # Handle PowerTransformer with parameters
-                    deserialized[key] = PowerTransformer()
-                else:
-                    deserialized[key] = value
-            else:
-                deserialized[key] = value
-        return deserialized
+    hyperparams = load_best_hyperparameters(dataset, extr_nm, model_nm, task)
     
-    f = HP_DIR / f"{dataset}_{extr_nm}_{model_nm}.json"
-    if f.exists():
-        params = json.load(open(f))["best_params"]
-        return deserialize_sklearn_objects(params)
+    # Return raw parameters combining both extractor and model parameters for backward compatibility
+    combined_params = {}
     
-    # Fallback: Breast best for other classification, AML best for other regression
-    family_ds = "Breast" if task == "clf" else "AML"
-    f = HP_DIR / f"{family_ds}_{extr_nm}_{model_nm}.json"
-    if f.exists():
-        params = json.load(open(f))["best_params"]
-        return deserialize_sklearn_objects(params)
+    # Add extractor parameters with extractor__extractor__ prefix (to match tuning format)
+    for key, value in hyperparams['extractor_params'].items():
+        combined_params[f'extractor__extractor__{key}'] = value
     
-    return {}
+    # Add model parameters with model__ prefix
+    for key, value in hyperparams['model_params'].items():
+        combined_params[f'model__{key}'] = value
+    
+    return combined_params
 
 # 1. Add a threshold for severe alignment loss at the top of the file:
 SEVERE_ALIGNMENT_LOSS_THRESHOLD = 0.3  # 30%
@@ -233,40 +215,43 @@ def _process_single_modality(
     ncomps: int, 
     idx_to_id: Dict[int, str], 
     fold_idx: Optional[int] = None,
-    is_regression: bool = True
+    is_regression: bool = True,
+    dataset_name: Optional[str] = None  # Added dataset name parameter
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
     """
-    Process a single data modality within a CV fold.
+    Process a single modality's data through extraction pipeline.
     
     Parameters
     ----------
     modality_name : str
-        Name of the modality
+        Name of the modality (e.g., 'exp', 'mirna', 'methy', 'clinical')
     modality_df : pd.DataFrame
-        Modality data, with rows=genes/features, columns=samples
+        Modality data
     id_train : List[str]
-        Training sample IDs (pre-filtered to be available in this modality)
+        Training IDs
     id_val : List[str]
-        Validation sample IDs (pre-filtered to be available in this modality)
+        Validation IDs
     idx_test : np.ndarray
         Test indices
     y_train : np.ndarray
-        Training labels/target values (pre-filtered to match id_train exactly)
+        Training target values
     extr_obj : Any
-        Extractor object, or name of extractor
+        Extractor object
     ncomps : int
-        Number of components to extract
+        Number of components
     idx_to_id : Dict[int, str]
-        Mapping from index to sample ID
+        Mapping from index to ID
     fold_idx : Optional[int]
-        CV fold index
+        Fold index
     is_regression : bool
         Whether this is a regression task
+    dataset_name : Optional[str]
+        Dataset name for hyperparameter loading (e.g., 'AML', 'Breast')
         
     Returns
     -------
     Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]
-        Tuple of (train, validation, test) arrays
+        Training, validation, and test data arrays
     """
     try:
         # Since samples are pre-filtered, all id_train and id_val should be available
@@ -388,7 +373,7 @@ def _process_single_modality(
                 from models import cached_fit_transform_extractor_regression, transform_extractor_regression
                 extractor, X_tr = cached_fit_transform_extractor_regression(
                     df_train.values, y_train, extr_obj, req, 
-                    ds_name=modality_name, fold_idx=fold_idx
+                    ds_name=dataset_name or modality_name, fold_idx=fold_idx, modality_name=modality_name
                 )
                 
                 # Check if extraction was successful
@@ -429,9 +414,10 @@ def _process_single_modality(
         else:
             # Classification
             try:
+                from models import cached_fit_transform_extractor_classification, transform_extractor_classification
                 extractor, X_tr = cached_fit_transform_extractor_classification(
                     df_train.values, y_train, extr_obj, req, 
-                    modality_name=modality_name, fold_idx=fold_idx
+                    ds_name=dataset_name or modality_name, fold_idx=fold_idx, modality_name=modality_name
                 )
                 
                 # Check if extraction was successful
@@ -529,7 +515,7 @@ def process_cv_fold(
     is_regression=True,
     make_plots=True,
     plot_prefix_override=None,
-    integration_technique="weighted_concat"
+    integration_technique="attention_weighted"  # CURRENT IMPLEMENTATION: Use specified fusion strategy
 ):
     """
     Process a single CV fold.
@@ -1092,7 +1078,8 @@ def process_cv_fold(
                         make_plots=make_plots,
                         n_features=original_n_features,
                         train_n_components=train_n_components,
-                        extractor_name=extr_name
+                        extractor_name=extr_name,
+                        dataset_name=ds_name  # Added for hyperparameter loading
                     )
                     model_results[model_name] = metrics
                     model_objects[model_name] = model
@@ -1111,7 +1098,8 @@ def process_cv_fold(
                         make_plots=make_plots,
                         n_features=original_n_features,
                         train_n_components=train_n_components,
-                        extractor_name=extr_name
+                        extractor_name=extr_name,
+                        dataset_name=ds_name  # Added for hyperparameter loading
                     )
                     model_results[model_name] = metrics
                     model_objects[model_name] = model
@@ -1152,7 +1140,7 @@ def run_extraction_pipeline(
     is_regression: bool = True
 ):
     """
-    Run extraction pipeline for a dataset.
+    Run extraction pipeline for a dataset with optimal n_components from hyperparameters.
     
     Parameters
     ----------
@@ -1169,7 +1157,7 @@ def run_extraction_pipeline(
     extractors : Dict[str, Any]
         Dictionary of extractors
     n_comps_list : List[int]
-        List of n_components values
+        List of n_components values (ignored for extraction, uses hyperparameters instead)
     models : List[str]
         List of model names to train
     progress_count : List[int]
@@ -1179,6 +1167,14 @@ def run_extraction_pipeline(
     is_regression : bool
         Whether this is a regression task
     """
+    from models import get_extraction_n_components_list
+    
+    # Get optimal n_components for each extractor from hyperparameters
+    task = "reg" if is_regression else "clf"
+    optimal_n_components = get_extraction_n_components_list(ds_name, extractors, task)
+    
+    logger.info(f"Using optimal n_components from hyperparameters for {ds_name}: {optimal_n_components}")
+    
     _run_pipeline(
         ds_name=ds_name, 
         data_modalities=data_modalities, 
@@ -1186,7 +1182,7 @@ def run_extraction_pipeline(
         y=y, 
         base_out=base_out,
         transformers=extractors, 
-        n_trans_list=n_comps_list, 
+        n_trans_list=optimal_n_components,  # Use extractor-specific optimal values
         models=models,
         progress_count=progress_count, 
         total_runs=total_runs,
@@ -1208,7 +1204,7 @@ def run_selection_pipeline(
     is_regression: bool = True
 ):
     """
-    Run selection pipeline for a dataset.
+    Run selection pipeline for a dataset using specified n_features values [8, 16, 32].
     
     Parameters
     ----------
@@ -1225,7 +1221,7 @@ def run_selection_pipeline(
     selectors : Dict[str, str]
         Dictionary of selectors
     n_feats_list : List[int]
-        List of n_features values
+        List of n_features values to test (typically [8, 16, 32])
     models : List[str]
         List of model names to train
     progress_count : List[int]
@@ -1235,6 +1231,8 @@ def run_selection_pipeline(
     is_regression : bool
         Whether this is a regression task
     """
+    logger.info(f"Using specified n_features values for {ds_name} selection: {n_feats_list}")
+    
     _run_pipeline(
         ds_name=ds_name, 
         data_modalities=data_modalities, 
@@ -1242,7 +1240,7 @@ def run_selection_pipeline(
         y=y, 
         base_out=base_out,
         transformers=selectors, 
-        n_trans_list=n_feats_list, 
+        n_trans_list=n_feats_list,  # Use specified n_features list [8, 16, 32]
         models=models,
         progress_count=progress_count, 
         total_runs=total_runs,
@@ -2208,7 +2206,7 @@ def _run_pipeline(
     y: np.ndarray, 
     base_out: str,
     transformers: Dict[str, Any], 
-    n_trans_list: List[int], 
+    n_trans_list: Union[List[int], Dict[str, List[int]]], 
     models: List[str],
     progress_count: List[int], 
     total_runs: int,
@@ -2235,8 +2233,9 @@ def _run_pipeline(
         Base output directory
     transformers : Dict[str, Any]
         Dictionary of transformers (extractors or selectors)
-    n_trans_list : List[int]
+    n_trans_list : Union[List[int], Dict[str, List[int]]]
         List of parameters for transformers (n_components or n_features)
+        Can be a single list for all transformers, or a dict mapping transformer names to their specific lists
     models : List[str]
         List of model names to train
     progress_count : List[int]
@@ -2255,7 +2254,7 @@ def _run_pipeline(
     # Log pipeline start
     task_type = "regression" if is_regression else "classification"
     log_pipeline_stage(f"{pipeline_type.upper()}_PIPELINE_START", dataset=ds_name, 
-                      details=f"{task_type} with {len(transformers)} transformers, {len(n_trans_list)} parameters")
+                      details=f"{task_type} with {len(transformers)} transformers, {len(n_trans_list) if isinstance(n_trans_list, dict) else len(n_trans_list)} parameters")
     logger.debug(f"[PIPELINE] {ds_name} - Starting {pipeline_type} pipeline for {task_type}")
     
     # Ensure output directories exist
@@ -2390,7 +2389,17 @@ def _run_pipeline(
     all_pipeline_results = []
     
     for trans_name, trans_obj in transformers.items():
-        for n_val in n_trans_list:
+        # Handle both formats: List[int] for uniform n_values, or Dict[str, List[int]] for extractor-specific values
+        if isinstance(n_trans_list, dict):
+            # Use extractor-specific n_components/n_features
+            n_values_for_this_transformer = n_trans_list.get(trans_name, [8])  # Default to [8] if not found
+            logger.info(f"Using extractor-specific values for {trans_name}: {n_values_for_this_transformer}")
+        else:
+            # Use the same n_values for all transformers (backward compatibility)
+            n_values_for_this_transformer = n_trans_list
+            logger.debug(f"Using uniform values for {trans_name}: {n_values_for_this_transformer}")
+        
+        for n_val in n_values_for_this_transformer:
             try:
                 # Update and report progress
                 progress_count[0] += 1
@@ -2847,7 +2856,7 @@ def run_extraction_pipeline(
     is_regression: bool = True
 ):
     """
-    Run extraction pipeline for a dataset.
+    Run extraction pipeline for a dataset with optimal n_components from hyperparameters.
     
     Parameters
     ----------
@@ -2864,7 +2873,7 @@ def run_extraction_pipeline(
     extractors : Dict[str, Any]
         Dictionary of extractors
     n_comps_list : List[int]
-        List of n_components values
+        List of n_components values (ignored for extraction, uses hyperparameters instead)
     models : List[str]
         List of model names to train
     progress_count : List[int]
@@ -2874,6 +2883,14 @@ def run_extraction_pipeline(
     is_regression : bool
         Whether this is a regression task
     """
+    from models import get_extraction_n_components_list
+    
+    # Get optimal n_components for each extractor from hyperparameters
+    task = "reg" if is_regression else "clf"
+    optimal_n_components = get_extraction_n_components_list(ds_name, extractors, task)
+    
+    logger.info(f"Using optimal n_components from hyperparameters for {ds_name}: {optimal_n_components}")
+    
     _run_pipeline(
         ds_name=ds_name, 
         data_modalities=data_modalities, 
@@ -2881,7 +2898,7 @@ def run_extraction_pipeline(
         y=y, 
         base_out=base_out,
         transformers=extractors, 
-        n_trans_list=n_comps_list, 
+        n_trans_list=optimal_n_components,  # Use extractor-specific optimal values
         models=models,
         progress_count=progress_count, 
         total_runs=total_runs,
@@ -2903,7 +2920,7 @@ def run_selection_pipeline(
     is_regression: bool = True
 ):
     """
-    Run selection pipeline for a dataset.
+    Run selection pipeline for a dataset using specified n_features values [8, 16, 32].
     
     Parameters
     ----------
@@ -2920,7 +2937,7 @@ def run_selection_pipeline(
     selectors : Dict[str, str]
         Dictionary of selectors
     n_feats_list : List[int]
-        List of n_features values
+        List of n_features values to test (typically [8, 16, 32])
     models : List[str]
         List of model names to train
     progress_count : List[int]
@@ -2930,6 +2947,8 @@ def run_selection_pipeline(
     is_regression : bool
         Whether this is a regression task
     """
+    logger.info(f"Using specified n_features values for {ds_name} selection: {n_feats_list}")
+    
     _run_pipeline(
         ds_name=ds_name, 
         data_modalities=data_modalities, 
@@ -2937,7 +2956,7 @@ def run_selection_pipeline(
         y=y, 
         base_out=base_out,
         transformers=selectors, 
-        n_trans_list=n_feats_list, 
+        n_trans_list=n_feats_list,  # Use specified n_features list [8, 16, 32]
         models=models,
         progress_count=progress_count, 
         total_runs=total_runs,

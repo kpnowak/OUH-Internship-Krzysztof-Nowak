@@ -8,6 +8,129 @@ import numpy as np
 import pandas as pd
 import warnings
 from typing import Dict, List, Tuple, Any, Optional, Set, Union, Literal
+import json
+import pathlib
+
+# Hyperparameter directory
+HP_DIR = pathlib.Path("hp_best")
+
+def load_best_hyperparameters(dataset, extractor_name, model_name, task):
+    """
+    Load best hyperparameters for a given dataset, extractor, and model combination.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name (e.g., "AML", "Breast")
+    extractor_name : str
+        Extractor name (e.g., "PCA", "KPCA", "FA")
+    model_name : str
+        Model name (e.g., "LinearRegression", "ElasticNet")
+    task : str
+        Task type ("reg" for regression, "clf" for classification)
+        
+    Returns
+    -------
+    dict
+        Best hyperparameters with separate extractor and model params, or empty dict if not found
+    """
+    
+    def deserialize_sklearn_objects(params):
+        """Convert string representations of sklearn objects back to actual objects."""
+        from sklearn.preprocessing import PowerTransformer
+        
+        deserialized = {}
+        for key, value in params.items():
+            if isinstance(value, str):
+                if value == "PowerTransformer()":
+                    deserialized[key] = PowerTransformer()
+                elif "PowerTransformer(" in value:
+                    deserialized[key] = PowerTransformer()
+                else:
+                    deserialized[key] = value
+            else:
+                deserialized[key] = value
+        return deserialized
+    
+    def separate_extractor_model_params(params):
+        """Separate extractor and model parameters."""
+        extractor_params = {}
+        model_params = {}
+        
+        for key, value in params.items():
+            if key.startswith('extractor__extractor__'):
+                # Remove extractor__extractor__ prefix for direct application
+                actual_key = key.replace('extractor__extractor__', '')
+                extractor_params[actual_key] = value
+            elif key.startswith('extractor__'):
+                # Remove extractor__ prefix
+                actual_key = key.replace('extractor__', '')
+                extractor_params[actual_key] = value
+            elif key.startswith('model__'):
+                # Remove model__ prefix
+                actual_key = key.replace('model__', '')
+                model_params[actual_key] = value
+        
+        return extractor_params, model_params
+    
+    # Try exact dataset match first
+    file_path = HP_DIR / f"{dataset}_{extractor_name}_{model_name}.json"
+    if file_path.exists():
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                raw_params = data.get("best_params", {})
+                params = deserialize_sklearn_objects(raw_params)
+                extractor_params, model_params = separate_extractor_model_params(params)
+                
+                logger = logging.getLogger(__name__)
+                logger.info(f"Loaded hyperparameters for {dataset}_{extractor_name}_{model_name}")
+                logger.debug(f"Extractor params: {extractor_params}")
+                logger.debug(f"Model params: {model_params}")
+                
+                return {
+                    'extractor_params': extractor_params,
+                    'model_params': model_params,
+                    'source': f"{dataset}_{extractor_name}_{model_name}"
+                }
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to load hyperparameters from {file_path}: {str(e)}")
+    
+    # Fallback: Use family dataset (Breast for classification, AML for regression)
+    family_dataset = "Breast" if task == "clf" else "AML"
+    if family_dataset != dataset:
+        fallback_path = HP_DIR / f"{family_dataset}_{extractor_name}_{model_name}.json"
+        if fallback_path.exists():
+            try:
+                with open(fallback_path, 'r') as f:
+                    data = json.load(f)
+                    raw_params = data.get("best_params", {})
+                    params = deserialize_sklearn_objects(raw_params)
+                    extractor_params, model_params = separate_extractor_model_params(params)
+                    
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Using fallback hyperparameters from {family_dataset}_{extractor_name}_{model_name} for {dataset}")
+                    logger.debug(f"Extractor params: {extractor_params}")
+                    logger.debug(f"Model params: {model_params}")
+                    
+                    return {
+                        'extractor_params': extractor_params,
+                        'model_params': model_params,
+                        'source': f"{family_dataset}_{extractor_name}_{model_name} (fallback)"
+                    }
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to load fallback hyperparameters from {fallback_path}: {str(e)}")
+    
+    # No hyperparameters found
+    logger = logging.getLogger(__name__)
+    logger.debug(f"No hyperparameters found for {dataset}_{extractor_name}_{model_name}")
+    return {
+        'extractor_params': {},
+        'model_params': {},
+        'source': 'default (no tuned params found)'
+    }
 
 # Suppress sklearn deprecation warning about force_all_finite -> ensure_all_finite
 warnings.filterwarnings("ignore", message=".*force_all_finite.*was renamed to.*ensure_all_finite.*", category=FutureWarning)
@@ -2329,12 +2452,13 @@ def get_regression_extractors() -> Dict[str, Any]:
     """
     Get dictionary of regression feature extractors optimized for genomic data.
     
-    Top 5 algorithms selected based on genomic data characteristics:
+    CURRENT IMPLEMENTATION - 6 extractors as specified:
     1. PCA - Reliable baseline for dimensionality reduction
-    2. KPLS - Supervised non-linear method (when IKPLS available)
+    2. KPCA - Kernel-based non-linear dimensionality reduction
     3. FA - Captures underlying biological factors
     4. PLS - Supervised linear method
-    5. SparsePLS - Sparse supervised extraction
+    5. KPLS - Supervised non-linear method (when IKPLS available)
+    6. SparsePLS - Sparse supervised extraction
     
     Returns
     -------
@@ -2350,8 +2474,24 @@ def get_regression_extractors() -> Dict[str, Any]:
         IKPLS_AVAILABLE = False
     
     extractors = {
-        # TOP 5 ALGORITHMS FOR GENOMIC DATA
+        # SPECIFIED 6 ALGORITHMS FOR REGRESSION
         "PCA": PCA(random_state=42),
+        "KPCA": KernelPCA(
+            kernel="rbf", 
+            random_state=42, 
+            n_jobs=-1,
+            gamma='scale'
+        ),
+        "FA": FactorAnalysis(
+            random_state=42,
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        ),
+        "PLS": PLSRegression(
+            n_components=5,        # Reduced from 8 to 5 for consistency
+            max_iter=5000,  # Increased max iterations
+            tol=1e-3       # Relaxed tolerance
+        ),
         "KPLS": KernelPLSRegression(
             n_components=5,        # Reduced from 8 to 5 for stability
             kernel="rbf",
@@ -2368,16 +2508,6 @@ def get_regression_extractors() -> Dict[str, Any]:
             max_iter=5000,
             tol=1e-3
         ),
-        "FA": FactorAnalysis(
-            random_state=42,
-            max_iter=5000,  # Increased max iterations
-            tol=1e-3       # Relaxed tolerance
-        ),
-        "PLS": PLSRegression(
-            n_components=5,        # Reduced from 8 to 5 for consistency
-            max_iter=5000,  # Increased max iterations
-            tol=1e-3       # Relaxed tolerance
-        ),  # Re-enabled: Stable supervised extractor
         "SparsePLS": SparsePLS(
             n_components=3,        # Reduced from 5 to 3 for consistency
             alpha=0.1,  # FIXED: Reduced from 0.3 to 0.1 to prevent empty arrays
@@ -2410,13 +2540,28 @@ def get_classification_extractors() -> Dict[str, Any]:
     """
     Get dictionary of classification feature extractors optimized for genomic data.
     
+    CURRENT IMPLEMENTATION - 6 extractors as specified:
+    1. PCA - Principal component analysis
+    2. KPCA - Kernel-based non-linear dimensionality reduction  
+    3. FA - Factor analysis
+    4. LDA - Linear discriminant analysis
+    5. PLS-DA - Partial least squares discriminant analysis
+    6. SparsePLS - Sparse partial least squares
+    
     Returns
     -------
     dict
         Dictionary mapping extractor names to initialized extractor objects
     """
     extractors = {
+        # SPECIFIED 6 ALGORITHMS FOR CLASSIFICATION
         "PCA": PCA(random_state=42),
+        "KPCA": KernelPCA(
+            kernel="rbf", 
+            random_state=42, 
+            n_jobs=-1,
+            gamma='scale'
+        ),
         "FA": FactorAnalysis(
             random_state=42,
             max_iter=5000,
@@ -2444,17 +2589,25 @@ def get_classification_selectors() -> Dict[str, str]:
     """
     Get dictionary of classification feature selectors.
     
+    CURRENT IMPLEMENTATION - 5 selectors as specified:
+    1. ElasticNetFS - ElasticNet-based feature selection
+    2. RFImportance - Random Forest importance-based selection
+    3. VarianceFTest - Variance-based F-test selection
+    4. LASSO - L1-regularized feature selection (mapped to LogisticL1)
+    5. LogisticL1 - Logistic regression with L1 penalty
+    
     Returns
     -------
     dict
         Dictionary mapping selector names to selector codes
     """
     return {
+        # SPECIFIED 5 ALGORITHMS FOR CLASSIFICATION SELECTION
         "ElasticNetFS": "elasticnet_classification", 
         "RFImportance": "random_forest_classification",
         "VarianceFTest": "f_classification",
-        "LogisticL1": "lasso_classification",
-        "XGBoostFS": "xgb_clf"
+        "LASSO": "lasso_classification",  # Maps to LogisticL1 implementation
+        "LogisticL1": "lasso_classification"
     }
 
 def get_selector_object(selector_code: str, n_feats: int):
@@ -2527,9 +2680,9 @@ def validate_and_fix_shape_mismatch(X, y, name="data", fold_idx=None, allow_trun
     
     return X, y
 
-def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_name=None, fold_idx=0):
+def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None):
     """
-    Cached version of fit_transform for regression extractors.
+    Cached version of fit_transform for regression extractors with hyperparameter loading.
     
     Parameters
     ----------
@@ -2542,9 +2695,11 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
     n_components : int
         Number of components to extract
     ds_name : str, optional
-        Dataset name for caching
+        Dataset name for caching and hyperparameter loading
     fold_idx : int
         Fold index for caching
+    modality_name : str, optional
+        Modality name (not used for hyperparameter loading in multi-modal setup)
         
     Returns
     -------
@@ -2561,6 +2716,29 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         return cached_result
     
     try:
+        # Load and apply hyperparameters if dataset name is provided
+        if ds_name:
+            # Use a generic model name for extractor-only hyperparameters
+            # We'll try different model combinations to find extractor params
+            model_candidates = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]
+            best_hyperparams = None
+            
+            for model_name in model_candidates:
+                hyperparams = load_best_hyperparameters(ds_name, extractor_name, model_name, "reg")
+                if hyperparams['extractor_params']:
+                    best_hyperparams = hyperparams
+                    break
+            
+            if best_hyperparams and best_hyperparams['extractor_params']:
+                try:
+                    # Apply hyperparameters to extractor
+                    extractor.set_params(**best_hyperparams['extractor_params'])
+                    logger.info(f"Applied tuned extractor hyperparameters for {ds_name}_{extractor_name}: {best_hyperparams['extractor_params']} (source: {best_hyperparams['source']})")
+                except Exception as e:
+                    logger.warning(f"Failed to apply extractor hyperparameters for {ds_name}_{extractor_name}: {str(e)}")
+            else:
+                logger.debug(f"No extractor hyperparameters found for {ds_name}_{extractor_name}")
+        
         # Convert to numpy arrays
         X_arr = np.asarray(X)
         y_arr = np.asarray(y) if y is not None else None
@@ -2581,8 +2759,8 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
                 logger.warning(f"Data alignment failure in extractor for {ds_name}")
                 return None, None
         
-        # Set n_components if the extractor supports it
-        if hasattr(extractor, 'n_components'):
+        # Set n_components if the extractor supports it and it's not already set by hyperparameters
+        if hasattr(extractor, 'n_components') and not hasattr(extractor, '_hyperparams_applied'):
             max_components = min(X_arr.shape[0], X_arr.shape[1])
             effective_components = min(n_components, max_components)
             extractor.n_components = effective_components
@@ -2618,9 +2796,9 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         logger.warning(f"Extractor regression failed for {ds_name}: {str(e)}")
         return None, None
 
-def cached_fit_transform_extractor_classification(X, y, extractor, n_components, ds_name=None, fold_idx=0):
+def cached_fit_transform_extractor_classification(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None):
     """
-    Cached version of fit_transform for classification extractors.
+    Cached version of fit_transform for classification extractors with hyperparameter loading.
     
     Parameters
     ----------
@@ -2633,9 +2811,11 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
     n_components : int
         Number of components to extract
     ds_name : str, optional
-        Dataset name for caching
+        Dataset name for caching and hyperparameter loading
     fold_idx : int
         Fold index for caching
+    modality_name : str, optional
+        Modality name (not used for hyperparameter loading in multi-modal setup)
         
     Returns
     -------
@@ -2652,6 +2832,29 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
         return cached_result
     
     try:
+        # Load and apply hyperparameters if dataset name is provided
+        if ds_name:
+            # Use a generic model name for extractor-only hyperparameters
+            # We'll try different model combinations to find extractor params
+            model_candidates = ["LogisticRegression", "RandomForestClassifier", "SVC"]
+            best_hyperparams = None
+            
+            for model_name in model_candidates:
+                hyperparams = load_best_hyperparameters(ds_name, extractor_name, model_name, "clf")
+                if hyperparams['extractor_params']:
+                    best_hyperparams = hyperparams
+                    break
+            
+            if best_hyperparams and best_hyperparams['extractor_params']:
+                try:
+                    # Apply hyperparameters to extractor
+                    extractor.set_params(**best_hyperparams['extractor_params'])
+                    logger.info(f"Applied tuned extractor hyperparameters for {ds_name}_{extractor_name}: {best_hyperparams['extractor_params']} (source: {best_hyperparams['source']})")
+                except Exception as e:
+                    logger.warning(f"Failed to apply extractor hyperparameters for {ds_name}_{extractor_name}: {str(e)}")
+            else:
+                logger.debug(f"No extractor hyperparameters found for {ds_name}_{extractor_name}")
+        
         # Convert to numpy arrays
         X_arr = np.asarray(X)
         y_arr = np.asarray(y) if y is not None else None
@@ -2672,8 +2875,8 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
                 logger.warning(f"Data alignment failure in extractor for {ds_name}")
                 return None, None
         
-        # Set n_components if the extractor supports it
-        if hasattr(extractor, 'n_components'):
+        # Set n_components if the extractor supports it and it's not already set by hyperparameters
+        if hasattr(extractor, 'n_components') and not hasattr(extractor, '_hyperparams_applied'):
             max_components = min(X_arr.shape[0], X_arr.shape[1])
             
             # Special handling for LDA: max components is min(n_features, n_classes - 1)
@@ -3024,8 +3227,11 @@ def build_extractor(name):
     from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
     
     _EXTRACTOR = {
+        # CURRENT IMPLEMENTATION - Specified extractors only
         "PCA": lambda: PCA(random_state=42),
-        "KPCA": lambda: KernelPCA(kernel="rbf", random_state=42, n_jobs=-1),
+        "KPCA": lambda: KernelPCA(kernel="rbf", random_state=42, n_jobs=-1, gamma='scale'),
+        "FA": lambda: FactorAnalysis(random_state=42, max_iter=5000, tol=1e-3),
+        "PLS": lambda: PLSRegression(n_components=8, max_iter=500, tol=1e-3),
         "KPLS": lambda: KernelPLSRegression(
             n_components=8,
             kernel="rbf",
@@ -3033,20 +3239,12 @@ def build_extractor(name):
             max_iter=500,
             random_state=42
         ),
-        "FA": lambda: FactorAnalysis(random_state=42, max_iter=5000, tol=1e-3),
-        "PLS": lambda: PLSRegression(n_components=8, max_iter=500, tol=1e-3),
         "SparsePLS": lambda: SparsePLS(n_components=8, alpha=0.1, max_iter=500, scale=True),
         "LDA": lambda: LDA(),
         "PLS-DA": lambda: PLSDiscriminantAnalysis(
             n_components=5,
             max_iter=1000,
             tol=1e-6,
-            scale=True
-        ),
-        "Sparse PLS-DA": lambda: SparsePLSDA(
-            n_components=32,
-            alpha=0.05,
-            max_iter=1000,
             scale=True
         ),
     }
@@ -3075,7 +3273,7 @@ def build_model(name, task):
     from sklearn.preprocessing import PowerTransformer
     
     _MODEL = {
-        # Enhanced regression models with automatic parameter selection
+        # CURRENT IMPLEMENTATION - Regression models (3)
         "LinearRegression": lambda: RobustLinearRegressor(
             method='huber',
             random_state=42
@@ -3092,7 +3290,11 @@ def build_model(name, task):
             random_state=42
         ),
 
-        # Classification models (unchanged)
+        # CURRENT IMPLEMENTATION - Classification models (2)
+        "LogisticRegression": lambda: LogisticRegression(
+            max_iter=2000,
+            random_state=42
+        ),
         "RandomForestClassifier": lambda: RandomForestClassifier(
             random_state=42,
             n_jobs=-1,
@@ -3133,3 +3335,159 @@ def get_model_object(name, **kwargs):
         task = "clf"
     
     return build_model(name, task)
+
+# Add these functions after the selector functions
+
+def get_regression_models() -> Dict[str, str]:
+    """
+    Get dictionary of regression models.
+    
+    CURRENT IMPLEMENTATION - 3 models as specified:
+    1. LinearRegression - Linear regression with robust implementation
+    2. ElasticNet - ElasticNet with automatic parameter selection
+    3. RandomForestRegressor - Optimized random forest regressor
+    
+    Returns
+    -------
+    dict
+        Dictionary mapping model names to model names (for consistency with selectors)
+    """
+    return {
+        # SPECIFIED 3 ALGORITHMS FOR REGRESSION MODELS
+        "LinearRegression": "LinearRegression",
+        "ElasticNet": "ElasticNet", 
+        "RandomForestRegressor": "RandomForestRegressor"
+    }
+
+def get_classification_models() -> Dict[str, str]:
+    """
+    Get dictionary of classification models.
+    
+    CURRENT IMPLEMENTATION - 3 models as specified:
+    1. LogisticRegression - Logistic regression with regularization
+    2. RandomForestClassifier - Random forest classifier
+    3. SVC - Support Vector Classifier with probability estimates
+    
+    Returns
+    -------
+    dict
+        Dictionary mapping model names to model names (for consistency with selectors)
+    """
+    return {
+        # SPECIFIED 3 ALGORITHMS FOR CLASSIFICATION MODELS
+        "LogisticRegression": "LogisticRegression",
+        "RandomForestClassifier": "RandomForestClassifier",
+        "SVC": "SVC"
+    }
+
+def get_optimal_n_components_from_hyperparams(dataset, extractor_name, task):
+    """
+    Extract the optimal n_components value from hyperparameter tuning results.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name (e.g., "AML", "Breast")
+    extractor_name : str
+        Extractor name (e.g., "PCA", "KPCA", "FA")
+    task : str
+        Task type ("reg" for regression, "clf" for classification)
+        
+    Returns
+    -------
+    int or None
+        Optimal number of components, or None if not found
+    """
+    # Try different model combinations to find n_components
+    model_candidates = (
+        ["LinearRegression", "ElasticNet", "RandomForestRegressor"] if task == "reg" 
+        else ["LogisticRegression", "RandomForestClassifier", "SVC"]
+    )
+    
+    for model_name in model_candidates:
+        file_path = HP_DIR / f"{dataset}_{extractor_name}_{model_name}.json"
+        if file_path.exists():
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                    best_params = data.get("best_params", {})
+                    
+                    # Look for n_components in different formats
+                    n_components = None
+                    if "extractor__extractor__n_components" in best_params:
+                        n_components = best_params["extractor__extractor__n_components"]
+                    elif "extractor__n_components" in best_params:
+                        n_components = best_params["extractor__n_components"]
+                    
+                    if n_components is not None:
+                        logger = logging.getLogger(__name__)
+                        logger.info(f"Found optimal n_components={n_components} for {dataset}_{extractor_name} from {model_name}")
+                        return int(n_components)
+                        
+            except Exception as e:
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to read n_components from {file_path}: {str(e)}")
+    
+    # Fallback: Use family dataset (Breast for classification, AML for regression)
+    family_dataset = "Breast" if task == "clf" else "AML"
+    if family_dataset != dataset:
+        for model_name in model_candidates:
+            fallback_path = HP_DIR / f"{family_dataset}_{extractor_name}_{model_name}.json"
+            if fallback_path.exists():
+                try:
+                    with open(fallback_path, 'r') as f:
+                        data = json.load(f)
+                        best_params = data.get("best_params", {})
+                        
+                        # Look for n_components in different formats
+                        n_components = None
+                        if "extractor__extractor__n_components" in best_params:
+                            n_components = best_params["extractor__extractor__n_components"]
+                        elif "extractor__n_components" in best_params:
+                            n_components = best_params["extractor__n_components"]
+                        
+                        if n_components is not None:
+                            logger = logging.getLogger(__name__)
+                            logger.info(f"Found fallback optimal n_components={n_components} for {dataset}_{extractor_name} from {family_dataset}_{model_name}")
+                            return int(n_components)
+                            
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Failed to read fallback n_components from {fallback_path}: {str(e)}")
+    
+    # No optimal n_components found
+    logger = logging.getLogger(__name__)
+    logger.debug(f"No optimal n_components found for {dataset}_{extractor_name}")
+    return None
+
+def get_extraction_n_components_list(dataset, extractors, task):
+    """
+    Get list of optimal n_components for each extractor based on hyperparameter tuning.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name (e.g., "AML", "Breast")
+    extractors : Dict[str, Any]
+        Dictionary of extractors
+    task : str
+        Task type ("reg" for regression, "clf" for classification)
+        
+    Returns
+    -------
+    Dict[str, List[int]]
+        Dictionary mapping extractor names to their optimal n_components lists
+    """
+    extraction_n_components = {}
+    
+    for extractor_name in extractors.keys():
+        optimal_n = get_optimal_n_components_from_hyperparams(dataset, extractor_name, task)
+        if optimal_n is not None:
+            extraction_n_components[extractor_name] = [optimal_n]
+        else:
+            # Fallback to default values if no hyperparameters found
+            logger = logging.getLogger(__name__)
+            logger.warning(f"No optimal n_components found for {extractor_name}, using default [8]")
+            extraction_n_components[extractor_name] = [8]
+    
+    return extraction_n_components
