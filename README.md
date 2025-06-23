@@ -93,7 +93,7 @@ REGRESSION_MODELS = [LinearRegression, ElasticNet, RandomForestRegressor]
 # Classification branch algorithms (CURRENT IMPLEMENTATION)
 CLASSIFICATION_EXTRACTORS = [PCA, KPCA, FA, LDA, PLS-DA, SparsePLS]
 CLASSIFICATION_SELECTORS = [ElasticNetFS, RFImportance, VarianceFTest, LASSO, LogisticL1]
-CLASSIFICATION_MODELS = [LogisticRegression, RandomForestClassifier, SVC]
+CLASSIFICATION_MODELS = [LogisticRegression, RandomForestClassifier]
 
 # Missing data-adaptive fusion strategies (CURRENT IMPLEMENTATION)
 FUSION_STRATEGIES_CLEAN_DATA = {

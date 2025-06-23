@@ -316,16 +316,8 @@ class NestedCrossValidator:
             self.outer_splitter = KFold(n_splits=outer_cv, shuffle=True, random_state=random_state)
             self.inner_splitter = KFold(n_splits=inner_cv, shuffle=True, random_state=random_state + 1)
         else:
-            # Use StratifiedKFold with warning suppression for nested CV
-            import warnings
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", 
-                                      message="The least populated class in y has only .* members, which is less than n_splits=.*", 
-                                      category=UserWarning)
-                warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
-                
-                self.outer_splitter = StratifiedKFold(n_splits=outer_cv, shuffle=True, random_state=random_state)
-                self.inner_splitter = StratifiedKFold(n_splits=inner_cv, shuffle=True, random_state=random_state + 1)
+            self.outer_splitter = StratifiedKFold(n_splits=outer_cv, shuffle=True, random_state=random_state)
+            self.inner_splitter = StratifiedKFold(n_splits=inner_cv, shuffle=True, random_state=random_state + 1)
         
         # Initialize metrics calculator
         self.metrics_calculator = EnhancedMetrics(is_regression, use_macro_averaging)

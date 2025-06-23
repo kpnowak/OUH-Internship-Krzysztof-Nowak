@@ -273,15 +273,7 @@ def dynamic_cv(y, max_splits=5, is_regression=False):
         logger.debug(f"Dynamic CV: n_samples={n_samples}, min_class_count={min_class_count}, n_splits={n_splits}")
         
         try:
-            # Use StratifiedKFold with warning suppression
-            import warnings
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", 
-                                      message="The least populated class in y has only .* members, which is less than n_splits=.*", 
-                                      category=UserWarning)
-                warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.model_selection._split")
-                
-                return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+            return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         except Exception as e:
             logger.warning(f"StratifiedKFold failed: {e}, falling back to KFold")
             return KFold(n_splits=n_splits, shuffle=True, random_state=42)

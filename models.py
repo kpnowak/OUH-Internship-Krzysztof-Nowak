@@ -381,11 +381,6 @@ def synchronize_X_y_data(X, y, operation_name="transformation"):
         (X_synchronized, y_synchronized) with matching indices/samples
     """
     try:
-        # Handle None values early
-        if X is None or y is None:
-            logger.error(f"Got None values for X or y in {operation_name}: X={X is None}, y={y is None}")
-            return None, None
-            
         # If both are pandas objects with indices, synchronize them
         if hasattr(X, 'index') and hasattr(y, 'index'):
             # Find common indices
@@ -411,38 +406,22 @@ def synchronize_X_y_data(X, y, operation_name="transformation"):
         
         # If numpy arrays or mixed types, check lengths and truncate if needed
         else:
-            # Safe length calculation with None checks
-            X_len = 0
-            if X is not None:
-                if hasattr(X, '__len__'):
-                    X_len = len(X)
-                elif hasattr(X, 'shape'):
-                    X_len = X.shape[0]
-                    
-            y_len = 0
-            if y is not None:
-                if hasattr(y, '__len__'):
-                    y_len = len(y)
-                elif hasattr(y, 'shape'):
-                    y_len = y.shape[0]
+            X_len = len(X) if hasattr(X, '__len__') else X.shape[0] if hasattr(X, 'shape') else 0
+            y_len = len(y) if hasattr(y, '__len__') else y.shape[0] if hasattr(y, 'shape') else 0
             
             if X_len != y_len:
                 min_len = min(X_len, y_len)
                 logger.warning(f"Length mismatch after {operation_name}: X={X_len}, y={y_len}. Truncating to {min_len}")
                 
-                if min_len == 0:
-                    logger.error(f"Cannot synchronize data with zero length after {operation_name}")
-                    return None, None
-                
                 if hasattr(X, 'iloc'):
                     X_sync = X.iloc[:min_len]
                 else:
-                    X_sync = X[:min_len] if X is not None else None
+                    X_sync = X[:min_len]
                     
                 if hasattr(y, 'iloc'):
                     y_sync = y.iloc[:min_len]
                 else:
-                    y_sync = y[:min_len] if y is not None else None
+                    y_sync = y[:min_len]
                     
                 return X_sync, y_sync
             
@@ -450,7 +429,7 @@ def synchronize_X_y_data(X, y, operation_name="transformation"):
             
     except Exception as e:
         logger.error(f"Error synchronizing X and y after {operation_name}: {str(e)}")
-        return None, None
+        return X, y
 
 def guard_against_target_nans(X, y, operation_name="operation"):
     """
@@ -471,11 +450,6 @@ def guard_against_target_nans(X, y, operation_name="operation"):
         (X_clean, y_clean) with NaN targets removed
     """
     try:
-        # Handle None values early
-        if X is None or y is None:
-            logger.error(f"Got None values for X or y in {operation_name}: X={X is None}, y={y is None}")
-            return None, None
-            
         # Convert y to numpy for NaN checking
         y_values = y.values if hasattr(y, 'values') else np.asarray(y)
         
@@ -510,7 +484,7 @@ def guard_against_target_nans(X, y, operation_name="operation"):
         
     except Exception as e:
         logger.error(f"Error guarding against NaN targets before {operation_name}: {str(e)}")
-        return None, None
+        return X, y
 
 class PLSDiscriminantAnalysis:
     """
@@ -1865,30 +1839,18 @@ class SelectionByCyclicCoordinateDescent(BaseEstimator, RegressorMixin):
     """
     
     def __init__(self, l1_ratio=0.5, cv=5, max_iter=2000, tol=1e-4, 
-                 random_state=42, n_alphas=100, eps=1e-5):
+                 random_state=42, n_alphas=100, eps=1e-3):
         self.l1_ratio = l1_ratio
         self.cv = cv
         self.max_iter = max_iter
         self.tol = tol
         self.random_state = random_state
         self.n_alphas = n_alphas
-        self.eps = eps  # Reduced from 1e-3 to 1e-5 for finer alpha grid
+        self.eps = eps
         
     def fit(self, X, y):
         """Fit the ElasticNet model with automatic alpha selection."""
         try:
-            # Check for constant targets which can cause constant predictions
-            if np.std(y) == 0:
-                logger.warning(f"Target variable has zero variance, ElasticNet may produce constant predictions")
-            
-            # Calculate adaptive alpha bounds based on data scale
-            n_samples, n_features = X.shape
-            alpha_max = np.max(np.abs(X.T @ y)) / n_samples
-            alpha_min = alpha_max * self.eps
-            
-            # Create explicit alpha grid for better control
-            alphas = np.logspace(np.log10(alpha_min), np.log10(alpha_max), self.n_alphas)
-            
             # Use ElasticNetCV for automatic alpha selection
             self.model_ = ElasticNetCV(
                 l1_ratio=self.l1_ratio,
@@ -1896,96 +1858,43 @@ class SelectionByCyclicCoordinateDescent(BaseEstimator, RegressorMixin):
                 max_iter=self.max_iter,
                 tol=self.tol,
                 random_state=self.random_state,
-                alphas=alphas,  # Use explicit alpha grid instead of n_alphas/eps
+                n_alphas=self.n_alphas,
+                eps=self.eps,
                 n_jobs=-1,
                 selection='cyclic'  # Use cyclic coordinate descent
             )
             
-            # Try without target transformation first to avoid PowerTransformer issues
-            try:
-                self.model_.fit(X, y)
-                # Check if we get reasonable coefficients
-                if hasattr(self.model_, 'coef_') and np.std(self.model_.coef_) > 1e-10:
-                    # Coefficients have reasonable variance, no need for target transformation
-                    self.regressor_ = self.model_
-                    use_target_transform = False
-                else:
-                    raise ValueError("Model coefficients have near-zero variance")
-            except:
-                # Fallback to target transformation
-                self.regressor_ = TransformedTargetRegressor(
-                    regressor=self.model_,
-                    transformer=PowerTransformer(method="yeo-johnson", standardize=True)
-                )
-                self.regressor_.fit(X, y)
-                use_target_transform = True
+            # Wrap in TransformedTargetRegressor for target transformation
+            self.regressor_ = TransformedTargetRegressor(
+                regressor=self.model_,
+                transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+            )
+            
+            self.regressor_.fit(X, y)
             
             # Store optimal alpha for inspection
-            self.alpha_ = getattr(self.model_, 'alpha_', 1.0)
-            self.l1_ratio_ = getattr(self.model_, 'l1_ratio', self.l1_ratio)
-            
-            # Store coefficients for SelectFromModel compatibility
-            if hasattr(self.model_, 'coef_'):
-                self.coef_ = self.model_.coef_
-            else:
-                # Fallback: create dummy coefficients
-                self.coef_ = np.ones(X.shape[1])
+            self.alpha_ = self.model_.alpha_
+            self.l1_ratio_ = self.model_.l1_ratio
             
             logger.debug(f"SelectionByCyclicCoordinateDescent: Optimal alpha={self.alpha_:.6f}, "
-                        f"l1_ratio={self.l1_ratio_:.3f}, target_transform={use_target_transform}")
+                        f"l1_ratio={self.l1_ratio_:.3f}")
             
             return self
             
         except Exception as e:
             logger.warning(f"SelectionByCyclicCoordinateDescent fit failed: {e}")
-            # Fallback to regular ElasticNet with less aggressive regularization
-            self.model_ = ElasticNet(
-                alpha=0.1,  # Less aggressive regularization
-                l1_ratio=self.l1_ratio,
-                random_state=self.random_state, 
-                max_iter=self.max_iter
+            # Fallback to regular ElasticNet
+            self.regressor_ = TransformedTargetRegressor(
+                regressor=ElasticNet(random_state=self.random_state, max_iter=self.max_iter),
+                transformer=PowerTransformer(method="yeo-johnson", standardize=True)
             )
-            
-            # Try without target transformation first
-            try:
-                self.model_.fit(X, y)
-                self.regressor_ = self.model_
-                use_target_transform = False
-            except:
-                # Fallback to target transformation
-                self.regressor_ = TransformedTargetRegressor(
-                    regressor=self.model_,
-                    transformer=PowerTransformer(method="yeo-johnson", standardize=True)
-                )
-                self.regressor_.fit(X, y)
-                use_target_transform = True
-            
-            # Store alpha from fallback model
-            self.alpha_ = getattr(self.model_, 'alpha', 0.1)
-            self.l1_ratio_ = getattr(self.model_, 'l1_ratio', self.l1_ratio)
-            
-            # Store coefficients for SelectFromModel compatibility
-            if hasattr(self.model_, 'coef_'):
-                self.coef_ = self.model_.coef_
-            else:
-                # Fallback: create dummy coefficients
-                self.coef_ = np.ones(X.shape[1])
-            
-            logger.debug(f"SelectionByCyclicCoordinateDescent fallback: alpha={self.alpha_:.6f}, "
-                        f"l1_ratio={self.l1_ratio_:.3f}, target_transform={use_target_transform}")
-            
+            self.regressor_.fit(X, y)
+            self.alpha_ = self.regressor_.regressor_.alpha
             return self
     
     def predict(self, X):
         """Make predictions using the fitted model."""
-        predictions = self.regressor_.predict(X)
-        
-        # Check for constant predictions and warn
-        if len(predictions) > 1 and np.std(predictions) == 0:
-            logger.warning(f"ElasticNet produced constant predictions (value={predictions[0]:.6f})")
-            logger.debug(f"ElasticNet used alpha={self.alpha_:.6f}, coefficients variance={np.std(self.coef_):.6f}")
-        
-        return predictions
+        return self.regressor_.predict(X)
     
     def get_params(self, deep=True):
         """Get parameters for this estimator."""
@@ -2047,25 +1956,13 @@ class RobustLinearRegressor(BaseEstimator, RegressorMixin):
                 )
             elif self.method == 'ransac':
                 # Use RANSACRegressor for extreme outlier cases
-                # Handle sklearn version compatibility for base_estimator -> estimator
-                try:
-                    # Try the new parameter name (sklearn >= 1.2)
-                    base_model = RANSACRegressor(
-                        estimator=LinearRegression(),
-                        max_trials=100,
-                        min_samples=None,  # Auto-determine
-                        residual_threshold=None,  # Auto-determine
-                        random_state=self.random_state
-                    )
-                except TypeError:
-                    # Fallback to old parameter name (sklearn < 1.2)
-                    base_model = RANSACRegressor(
-                        base_estimator=LinearRegression(),
-                        max_trials=100,
-                        min_samples=None,  # Auto-determine
-                        residual_threshold=None,  # Auto-determine
-                        random_state=self.random_state
-                    )
+                base_model = RANSACRegressor(
+                    base_estimator=LinearRegression(),
+                    max_trials=100,
+                    min_samples=None,  # Auto-determine
+                    residual_threshold=None,  # Auto-determine
+                    random_state=self.random_state
+                )
             else:
                 # Fallback to regular LinearRegression
                 base_model = LinearRegression()
@@ -2156,99 +2053,51 @@ class OptimizedExtraTreesRegressor(BaseEstimator, RegressorMixin):
     def fit(self, X, y):
         """Fit the Extra Trees model."""
         try:
-            # Check for constant targets which can cause constant predictions
-            if np.std(y) == 0:
-                logger.warning(f"Target variable has zero variance, RandomForestRegressor may produce constant predictions")
+            # Adapt parameters based on sample size
+            n_samples = X.shape[0]
             
-            # Adapt parameters based on sample size and feature count
-            n_samples, n_features = X.shape
-            
-            # More conservative parameter adaptation to prevent constant predictions
+            # For very small datasets, reduce complexity
             if n_samples < 50:
-                n_estimators = min(100, max(50, self.n_estimators // 2))  # At least 50 trees
-                min_samples_split = max(2, min(5, n_samples // 8))  # More conservative
-                min_samples_leaf = max(1, min(2, n_samples // 20))  # More conservative
-            elif n_samples < 100:
-                n_estimators = min(150, self.n_estimators)
-                min_samples_split = max(2, min(8, n_samples // 10))
-                min_samples_leaf = max(1, min(3, n_samples // 15))
+                n_estimators = min(100, self.n_estimators)
+                min_samples_split = max(2, min(self.min_samples_split, n_samples // 5))
+                min_samples_leaf = max(1, min(self.min_samples_leaf, n_samples // 10))
             else:
                 n_estimators = self.n_estimators
                 min_samples_split = self.min_samples_split
                 min_samples_leaf = self.min_samples_leaf
             
-            # Ensure sufficient randomness by using bootstrap unless explicitly disabled
-            use_bootstrap = True if n_samples > 20 else self.bootstrap
-            
-            # Choose max_features to ensure sufficient variability
-            if self.max_features == 'sqrt':
-                max_features = max(1, min(int(np.sqrt(n_features)), n_features // 2))
-            elif self.max_features == 'log2':
-                max_features = max(1, min(int(np.log2(n_features)), n_features // 3))
-            elif isinstance(self.max_features, (int, float)):
-                if isinstance(self.max_features, float):
-                    max_features = max(1, int(self.max_features * n_features))
-                else:
-                    max_features = min(self.max_features, n_features)
-            else:
-                max_features = max(1, n_features // 3)  # Default to 1/3 of features
-            
-            # Use RandomForestRegressor instead of ExtraTreesRegressor for better stability
-            self.model_ = RandomForestRegressor(
+            self.model_ = ExtraTreesRegressor(
                 n_estimators=n_estimators,
-                max_features=max_features,
-                bootstrap=use_bootstrap,
+                max_features=self.max_features,
+                bootstrap=self.bootstrap,
                 random_state=self.random_state,
                 min_samples_split=min_samples_split,
                 min_samples_leaf=min_samples_leaf,
                 max_depth=self.max_depth,
-                n_jobs=self.n_jobs,
-                oob_score=use_bootstrap  # Enable OOB scoring if using bootstrap
+                n_jobs=self.n_jobs
             )
             
             self.model_.fit(X, y)
             
-            # Check if fitted model produces reasonable variance in training predictions
-            train_predictions = self.model_.predict(X)
-            if len(train_predictions) > 1 and np.std(train_predictions) == 0:
-                logger.warning(f"RandomForestRegressor produced constant training predictions, trying fallback...")
-                raise ValueError("Constant training predictions detected")
-            
             logger.debug(f"OptimizedExtraTreesRegressor: n_estimators={n_estimators}, "
-                        f"max_features={max_features}, bootstrap={use_bootstrap}, "
-                        f"train_pred_std={np.std(train_predictions):.6f}")
+                        f"max_features={self.max_features}, bootstrap={self.bootstrap}")
             
             return self
             
         except Exception as e:
             logger.warning(f"OptimizedExtraTreesRegressor fit failed: {e}")
-            # Fallback to simpler RandomForestRegressor with minimal constraints
+            # Fallback to RandomForestRegressor
             self.model_ = RandomForestRegressor(
-                n_estimators=max(50, min(100, n_samples)),  # Adaptive number of trees
-                max_features='sqrt',  # Use sqrt for better generalization
-                bootstrap=True,  # Always use bootstrap for randomness
+                n_estimators=100,
                 random_state=self.random_state,
-                min_samples_split=2,  # Minimal constraint
-                min_samples_leaf=1,   # Minimal constraint
-                max_depth=None,       # No depth limit
                 n_jobs=self.n_jobs
             )
             self.model_.fit(X, y)
-            self.fallback_used_ = True
             return self
     
     def predict(self, X):
         """Make predictions using the fitted model."""
-        predictions = self.model_.predict(X)
-        
-        # Check for constant predictions and warn
-        if len(predictions) > 1 and np.std(predictions) == 0:
-            logger.warning(f"RandomForestRegressor produced constant predictions (value={predictions[0]:.6f})")
-            logger.debug(f"RandomForestRegressor parameters: n_estimators={getattr(self.model_, 'n_estimators', 'unknown')}, "
-                        f"max_features={getattr(self.model_, 'max_features', 'unknown')}, "
-                        f"fallback_used={getattr(self, 'fallback_used_', False)}")
-        
-        return predictions
+        return self.model_.predict(X)
     
     def get_params(self, deep=True):
         """Get parameters for this estimator."""
@@ -2631,7 +2480,7 @@ def get_regression_extractors() -> Dict[str, Any]:
             kernel="rbf", 
             random_state=42, 
             n_jobs=-1,
-            gamma=None  # Use default gamma (1/n_features)
+            gamma='scale'
         ),
         "FA": FactorAnalysis(
             random_state=42,
@@ -2711,7 +2560,7 @@ def get_classification_extractors() -> Dict[str, Any]:
             kernel="rbf", 
             random_state=42, 
             n_jobs=-1,
-            gamma=None  # Use default gamma (1/n_features)
+            gamma='scale'
         ),
         "FA": FactorAnalysis(
             random_state=42,
@@ -2777,93 +2626,12 @@ def get_selector_object(selector_code: str, n_feats: int):
     selector object
         Configured feature selector
     """
-    from sklearn.feature_selection import SelectKBest, f_regression, f_classif, SelectFromModel
-    from sklearn.linear_model import LogisticRegression
-    import numpy as np
+    from sklearn.feature_selection import SelectKBest, f_regression, f_classif
     
     if selector_code == "f_regression":
         return SelectKBest(score_func=f_regression, k=n_feats)
     elif selector_code == "f_classification":
         return SelectKBest(score_func=f_classif, k=n_feats)
-    elif selector_code == "elasticnet_regression":
-        # Use SelectFromModel with ElasticNet for regression feature selection
-        elasticnet_model = SelectionByCyclicCoordinateDescent(
-            l1_ratio=0.5, 
-            cv=3,  # Reduced CV folds for speed
-            max_iter=1000,
-            random_state=42
-        )
-        return SelectFromModel(
-            estimator=elasticnet_model, 
-            max_features=n_feats,
-            threshold=-np.inf  # Select top n_feats features
-        )
-    elif selector_code == "elasticnet_classification":
-        # Use SelectFromModel with LogisticRegression (ElasticNet penalty) for classification
-        logistic_model = LogisticRegression(
-            penalty='elasticnet',
-            solver='saga',
-            l1_ratio=0.5,
-            max_iter=1000,
-            random_state=42,
-            C=1.0
-        )
-        return SelectFromModel(
-            estimator=logistic_model,
-            max_features=n_feats,
-            threshold=-np.inf  # Select top n_feats features
-        )
-    elif selector_code == "lasso_regression":
-        # Use SelectFromModel with Lasso for regression
-        from sklearn.linear_model import Lasso
-        lasso_model = Lasso(alpha=0.01, max_iter=1000, random_state=42)
-        return SelectFromModel(
-            estimator=lasso_model,
-            max_features=n_feats,
-            threshold=-np.inf
-        )
-    elif selector_code == "lasso_classification":
-        # Use SelectFromModel with LogisticRegression (L1 penalty) for classification
-        logistic_l1_model = LogisticRegression(
-            penalty='l1',
-            solver='liblinear',
-            max_iter=1000,
-            random_state=42,
-            C=1.0
-        )
-        return SelectFromModel(
-            estimator=logistic_l1_model,
-            max_features=n_feats,
-            threshold=-np.inf
-        )
-    elif selector_code == "random_forest_regression":
-        # Use SelectFromModel with RandomForest for regression
-        from sklearn.ensemble import RandomForestRegressor
-        rf_model = RandomForestRegressor(
-            n_estimators=100,
-            max_depth=10,
-            random_state=42,
-            n_jobs=-1
-        )
-        return SelectFromModel(
-            estimator=rf_model,
-            max_features=n_feats,
-            threshold=-np.inf
-        )
-    elif selector_code == "random_forest_classification":
-        # Use SelectFromModel with RandomForest for classification
-        from sklearn.ensemble import RandomForestClassifier
-        rf_model = RandomForestClassifier(
-            n_estimators=100,
-            max_depth=10,
-            random_state=42,
-            n_jobs=-1
-        )
-        return SelectFromModel(
-            estimator=rf_model,
-            max_features=n_feats,
-            threshold=-np.inf
-        )
     else:
         # Default fallback
         return SelectKBest(score_func=f_regression, k=n_feats)
@@ -3026,21 +2794,7 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         
     except Exception as e:
         logger.warning(f"Extractor regression failed for {ds_name}: {str(e)}")
-        # Instead of returning None, create a fallback using PCA
-        try:
-            logger.info(f"Attempting PCA fallback for failed {extractor.__class__.__name__} in {ds_name}")
-            from sklearn.decomposition import PCA
-            fallback_extractor = PCA(n_components=min(n_components, X_arr.shape[0], X_arr.shape[1]), random_state=42)
-            fallback_extractor.fit(X_arr)
-            X_transformed = fallback_extractor.transform(X_arr)
-            
-            logger.info(f"PCA fallback successful for {ds_name}: {X_arr.shape} -> {X_transformed.shape}")
-            result = (fallback_extractor, X_transformed)
-            _extractor_cache['ext_reg'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
-            return result
-        except Exception as fallback_error:
-            logger.error(f"Even PCA fallback failed for {ds_name}: {str(fallback_error)}")
-            return None, None
+        return None, None
 
 def cached_fit_transform_extractor_classification(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None):
     """
@@ -3163,21 +2917,7 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
         
     except Exception as e:
         logger.warning(f"Extractor classification failed for {ds_name}: {str(e)}")
-        # Instead of returning None, create a fallback using PCA
-        try:
-            logger.info(f"Attempting PCA fallback for failed {extractor.__class__.__name__} in {ds_name}")
-            from sklearn.decomposition import PCA
-            fallback_extractor = PCA(n_components=min(n_components, X_arr.shape[0], X_arr.shape[1]), random_state=42)
-            fallback_extractor.fit(X_arr)
-            X_transformed = fallback_extractor.transform(X_arr)
-            
-            logger.info(f"PCA fallback successful for {ds_name}: {X_arr.shape} -> {X_transformed.shape}")
-            result = (fallback_extractor, X_transformed)
-            _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
-            return result
-        except Exception as fallback_error:
-            logger.error(f"Even PCA fallback failed for {ds_name}: {str(fallback_error)}")
-            return None, None
+        return None, None
 
 def transform_extractor_regression(X, fitted_extractor):
     """
