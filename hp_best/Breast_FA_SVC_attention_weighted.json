@@ -1,0 +1,44 @@
+{
+  "best_params": {
+    "extractor__extractor__max_iter": 50,
+    "extractor__extractor__n_components": 8,
+    "extractor__extractor__tol": 0.1,
+    "model__C": 100.0,
+    "model__class_weight": "balanced",
+    "model__gamma": 0.0001,
+    "model__kernel": "rbf"
+  },
+  "best_score": -0.017093636368120165,
+  "dataset": "Breast",
+  "task": "clf",
+  "model": "SVC",
+  "fusion_method": "attention_weighted",
+  "n_features": null,
+  "preprocessing": "fixed-feature-selection-4-phase-enhanced",
+  "data_shape": {
+    "total_samples": 700,
+    "n_features_per_modality": null,
+    "n_modalities": 3,
+    "total_features_after_selection": "Variable (extractor-dependent)",
+    "modality_shapes_before_selection": {
+      "mirna": [
+        700,
+        142
+      ],
+      "exp": [
+        700,
+        1425
+      ],
+      "methy": [
+        700,
+        1900
+      ]
+    }
+  },
+  "n_parameter_combinations": 30,
+  "search_method": "Custom Fixed Feature Selection Grid Search",
+  "cv_folds": 3,
+  "search_time_seconds": 40.8379545211792,
+  "timestamp": "2025-06-25 15:30:30",
+  "scoring_method": "Matthews correlation coefficient"
+}
