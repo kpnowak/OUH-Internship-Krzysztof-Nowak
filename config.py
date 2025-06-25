@@ -278,7 +278,6 @@ MEMORY_OPTIMIZATION = {
     "chunk_size": 10000,  # Much larger chunks for high-memory systems
     "cache_dir": "./.cache",  # Cache directory
     "cache_size": "8GB",  # Increased cache size per type for 60GB system
-    "total_cache_limit": "8GB",  # Use ~50% of available RAM for caching
     #"total_cache_limit": "32GB",  # Use ~50% of available RAM for caching
     "auto_clear_threshold": 0.85,  # Higher threshold for high-memory systems
     "memory_monitor_interval": 60,  # Less frequent monitoring for stable systems
@@ -917,71 +916,7 @@ REGRESSION_DATASETS = [
         outcome_type="continuous",
         fix_tcga_ids=True
     ).to_dict(),
-    
-    DatasetConfig(
-        name="Sarcoma",
-        base_path="data/sarcoma",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/sarcoma.csv",
-        outcome_col="pathologic_tumor_length",
-        id_col="metsampleID",
-        outcome_type="continuous",
-        fix_tcga_ids=True
-    ).to_dict()
 ]
-
-"""
-        DatasetConfig(
-        name="TestRegression",
-        base_path="test_data/regression",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="clinical.csv",  # Fixed: should be in the same directory as modalities
-        outcome_col="survival_time",
-        id_col="sample_id",
-        outcome_type="continuous",
-        output_dir="output_regression",
-        fix_tcga_ids=False  # Fixed: test data doesn't need TCGA ID fixing
-    ).to_dict(),
-
-    DatasetConfig(
-        name="AML",
-        base_path="data/aml",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/aml.csv",
-        outcome_col="lab_procedure_bone_marrow_blast_cell_outcome_percent_value",
-        id_col="sampleID",
-        outcome_type="continuous",
-        fix_tcga_ids=True
-    ).to_dict(),
-    
-    DatasetConfig(
-        name="Sarcoma",
-        base_path="data/sarcoma",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/sarcoma.csv",
-        outcome_col="pathologic_tumor_length",
-        id_col="metsampleID",
-        outcome_type="continuous",
-        fix_tcga_ids=True
-    ).to_dict()
-]
-"""
 
 # Classification datasets
 CLASSIFICATION_DATASETS = [    
@@ -999,94 +934,4 @@ CLASSIFICATION_DATASETS = [
         outcome_type="class",
         fix_tcga_ids=True
     ).to_dict(),
-    
-    DatasetConfig(
-        name="Breast",
-        base_path="data/breast",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/breast.csv",
-        outcome_col="pathologic_T",
-        id_col="sampleID",
-        outcome_type="class",
-        fix_tcga_ids=True
-    ).to_dict(),
-    
-    DatasetConfig(
-        name="Kidney",
-        base_path="data/kidney",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/kidney.csv",
-        outcome_col="pathologic_T",
-        id_col="submitter_id.samples",
-        outcome_type="class",
-        fix_tcga_ids=True
-    ).to_dict(),
-    
-    DatasetConfig(
-        name="Liver",
-        base_path="data/liver",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/liver.csv",
-        outcome_col="pathologic_T",
-        id_col="sampleID",
-        outcome_type="class",
-        fix_tcga_ids=True
-    ).to_dict(),
-    
-    DatasetConfig(
-        name="Lung",
-        base_path="data/lung",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/lung.csv",
-        outcome_col="pathologic_T",
-        id_col="sampleID",
-        outcome_type="class",
-        fix_tcga_ids=True
-    ).to_dict(),
-    
-    DatasetConfig(
-        name="Melanoma",
-        base_path="data/melanoma",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/melanoma.csv",
-        outcome_col="pathologic_T",
-        id_col="sampleID",
-        outcome_type="class",
-        fix_tcga_ids=True
-    ).to_dict(),
-    
-    DatasetConfig(
-        name="Ovarian",
-        base_path="data/ovarian",
-        modalities={
-            "Gene Expression": "exp.csv",
-            "miRNA": "mirna.csv",
-            "Methylation": "methy.csv"
-        },
-        outcome_file="data/clinical/ovarian.csv",
-        outcome_col="clinical_stage",
-        id_col="sampleID",
-        outcome_type="class",
-        fix_tcga_ids=True
-    ).to_dict()
 ]

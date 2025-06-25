@@ -697,7 +697,7 @@ class DataQualityAnalyzer:
                     task_type=task_type,
                     dataset_name=dataset_name,
                     enable_early_quality_check=True,
-                    enable_fusion_aware_order=True,
+                    enable_feature_first_order=True,
                     enable_centralized_missing_data=True,
                     enable_coordinated_validation=True
                 )
@@ -1697,13 +1697,13 @@ class DataQualityAnalyzer:
                 modalities_data, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipeline(
                     modality_data_dict=modality_data_dict,
                     y=y_raw.values,
-                    fusion_method=fusion_method,
-                    task_type=task_type,
-                    dataset_name=dataset_name,
-                    enable_early_quality_check=True,
-                    enable_fusion_aware_order=True,
-                    enable_centralized_missing_data=True,
-                    enable_coordinated_validation=True
+                                    fusion_method=fusion_method,
+                task_type=task_type,
+                dataset_name=dataset_name,
+                enable_early_quality_check=True,
+                enable_feature_first_order=True,
+                enable_centralized_missing_data=True,
+                enable_coordinated_validation=True
                 )
                 
                 logger.info(f" 4-Phase Enhanced Pipeline completed successfully")

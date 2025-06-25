@@ -91,7 +91,7 @@ def demo_enhanced_pipeline():
             "name": "🔥 Full Enhanced Pipeline (All Phases)",
             "config": {
                 "enable_early_quality_check": True,
-                "enable_fusion_aware_order": True,
+                "enable_feature_first_order": True,
                 "enable_centralized_missing_data": True,
                 "enable_coordinated_validation": True,
                 "fail_fast": False  # Don't fail on warnings for demo
@@ -102,7 +102,7 @@ def demo_enhanced_pipeline():
             "name": "⚡ Fusion-Aware Only",
             "config": {
                 "enable_early_quality_check": False,
-                "enable_fusion_aware_order": True,
+                "enable_feature_first_order": True,
                 "enable_centralized_missing_data": False,
                 "enable_coordinated_validation": False
             },
@@ -112,7 +112,7 @@ def demo_enhanced_pipeline():
             "name": " Quality + Missing Data Focus",
             "config": {
                 "enable_early_quality_check": True,
-                "enable_fusion_aware_order": False,
+                "enable_feature_first_order": False,
                 "enable_centralized_missing_data": True,
                 "enable_coordinated_validation": True
             },

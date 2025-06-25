@@ -71,6 +71,25 @@ This multi-modal approach captures different layers of biological information, p
 - **Numerical Stability**: Automatic removal of problematic features that cause NaN/inf values
 - **Preprocessing Guidance**: Data-driven recommendations for optimal preprocessing strategies
 
+### 🎯 **Task-Appropriate Cross-Validation Strategies**
+- **Regression CV**: Adaptive strategies based on dataset size
+  - Small datasets (<100 samples): `RepeatedKFold(2-3 splits, 5 repeats)`
+  - Medium datasets (100-200 samples): `KFold(3-5 splits)`
+  - Large datasets (>200 samples): `KFold(5 splits)`
+  - With patient groups: `GroupKFold`
+- **Classification CV**: Proper stratified approaches
+  - Standard: `StratifiedKFold` for balanced class distribution
+  - With patient groups: `StratifiedGroupKFold`
+  - Fallbacks: `KFold/GroupKFold` when stratification not viable
+
+### 🛡️ **Enhanced Algorithm Robustness**
+- **ElasticNet Optimization**: Small dataset detection with fallback strategies
+  - Small datasets (<200 samples): Fixed alpha ElasticNet with StandardScaler
+  - Large datasets: ElasticNetCV with PowerTransformer
+  - Multi-level fallbacks: ElasticNetCV → ElasticNet → LinearRegression
+- **Numerical Stability**: Safe attribute access with robust error handling
+- **Cross-Validation Compatibility**: Proper sklearn usage without forced adaptations
+
 ### ⚡ **Performance Optimizations**
 - **Enhanced Feature Selection**: MAD thresholds (0.05), correlation removal (0.90), sparsity filtering (0.9)
 - **Stricter Regularization**: ElasticNet alpha range (0.1-0.5) for better generalization
@@ -93,7 +112,7 @@ REGRESSION_MODELS = [LinearRegression, ElasticNet, RandomForestRegressor]
 # Classification branch algorithms (CURRENT IMPLEMENTATION)
 CLASSIFICATION_EXTRACTORS = [PCA, KPCA, FA, LDA, PLS-DA, SparsePLS]
 CLASSIFICATION_SELECTORS = [ElasticNetFS, RFImportance, VarianceFTest, LASSO, LogisticL1]
-CLASSIFICATION_MODELS = [LogisticRegression, RandomForestClassifier]
+CLASSIFICATION_MODELS = [LogisticRegression, RandomForestClassifier, SVC]
 
 # Missing data-adaptive fusion strategies (CURRENT IMPLEMENTATION)
 FUSION_STRATEGIES_CLEAN_DATA = {
@@ -110,7 +129,7 @@ FUSION_STRATEGIES_MISSING_DATA = {
     'early_fusion_pca': 'PCA-based early integration (robust)'
 }
 
-# CORRECTED Experimental loop for each dataset - Fusion FIRST, then Feature Processing
+# CORRECTED Experimental loop for each dataset - FEATURE PROCESSING FIRST, then Fusion
 for MISSING in [0, 0.20, 0.50]:  # Missing data scenarios first
     # STEP 1: Select fusion strategy based on missing data percentage
             if MISSING == 0:
@@ -119,21 +138,21 @@ for MISSING in [0, 0.20, 0.50]:  # Missing data scenarios first
     else:  # missing data scenarios
         INTEGRATIONS = [mkl, snf, early_fusion_pca]  # 3 robust methods for missing data
             
-    for INTEGRATION in INTEGRATIONS:  # Apply fusion to raw modalities FIRST
-        for ALGORITHM in EXTRACTORS + SELECTORS:  # Then apply feature processing to fused data
+    for ALGORITHM in EXTRACTORS + SELECTORS:  # Apply feature processing to raw modalities FIRST
             for N_FEATURES in [8, 16, 32]:  # For selection methods only
+            for INTEGRATION in INTEGRATIONS:  # Then apply fusion to processed features SECOND
                 for MODEL in TASK_SPECIFIC_MODELS:
                     run_experiment(
-                        # CORRECTED ORDER: Fusion → Feature Processing → Model Training
+                        # NEW ORDER: Feature Processing → Fusion → Model Training
                         missing_rate=MISSING,           # 1. Missing data scenario
-                        integration=INTEGRATION,        # 2. Fusion applied to raw modalities FIRST
-                        algorithm=ALGORITHM,            # 3. Feature processing applied to fused data SECOND
+                        algorithm=ALGORITHM,            # 2. Feature processing applied to raw modalities FIRST
                         n_features=N_FEATURES if ALGORITHM in SELECTORS else None,  # Fixed for selectors
                         n_components=None if ALGORITHM in SELECTORS else "optimized",  # Tuned for extractors
-                        model=MODEL,                    # 4. Model training on processed fused data
+                        integration=INTEGRATION,        # 3. Fusion applied to processed features SECOND
+                        model=MODEL,                    # 4. Model training on fused processed features
                         # Pipeline configuration
                         enable_early_quality_check=True,
-                        enable_fusion_first_order=True,  # Fusion applied to raw modalities first
+                        enable_feature_first_order=True,  # Feature processing applied to raw modalities first
                         enable_centralized_missing_data=True,
                         enable_coordinated_validation=True
                     )
@@ -141,8 +160,8 @@ for MISSING in [0, 0.20, 0.50]:  # Missing data scenarios first
 
 ### Current Experimental Features:
 - **Missing Data-Based Strategy Selection**: 5 fusion methods for clean data (0% missing); 3 robust methods for missing data scenarios
-- **Corrected Pipeline Order**: Fusion applied FIRST to raw modalities, then feature processing applied to fused data
-- **4-Phase Pipeline Integration**: Early quality assessment, fusion-first processing, centralized missing data, coordinated validation
+- **Corrected Pipeline Order**: Feature processing applied FIRST to raw modalities, then fusion applied to processed features
+- **4-Phase Pipeline Integration**: Early quality assessment, feature processing, fusion, coordinated validation
 - **Enhanced Data Quality Analysis**: Comprehensive data quality assessment with automated reporting
 - **Modality-Specific Processing**: Tailored preprocessing configurations for gene expression, miRNA, and methylation data
 - **Robust Cross-Validation**: Enhanced CV with patient-level grouping and numerical stability checks
@@ -155,7 +174,7 @@ This comprehensive experimental design ensures systematic evaluation across:
   - **Extraction methods**: Optimal number of components determined through hyperparameter tuning
 - **Missing data scenarios** (0%, 20%, 50% missing modalities)
 - **Missing data-adaptive integration strategies** (5 methods for clean data, 3 methods for missing data scenarios)
-- **Corrected Pipeline Architecture**: Fusion → Feature Processing → Model Training (optimal order for multi-modal genomics)
+- **Corrected Pipeline Architecture**: Feature Processing → Fusion → Model Training (optimal order for multi-modal genomics)
 - **Predictive models** with hyperparameter optimization and numerical stability
 
 ## Deliverables
@@ -175,8 +194,8 @@ This comprehensive experimental design ensures systematic evaluation across:
    - Sample ID standardization and alignment across modalities
    - Quality-based preprocessing guidance and strategy recommendations
 
-2. **Phase 2 - Fusion-First Processing**:
-   - Fusion applied to raw modalities before any feature processing
+2. **Phase 2 - Feature-First Processing**:
+   - Feature extraction/selection applied to each raw modality separately
    - Modality-specific preprocessing configurations (gene expression, miRNA, methylation)
    - Numerical stability checks with automatic problematic feature removal
    - Robust biomedical preprocessing pipeline with enhanced sparsity handling
@@ -188,29 +207,32 @@ This comprehensive experimental design ensures systematic evaluation across:
    - Cross-validation compatible missing data handling
 
 4. **Phase 4 - Coordinated Validation Framework**:
-   - Enhanced cross-validation with patient-level grouping when applicable
-   - Numerical stability validation throughout the pipeline
-   - Sample alignment verification across processing steps
-   - Final data quality validation before model training
+   - **Task-Appropriate CV Strategies**: Proper regression (KFold/RepeatedKFold) vs classification (StratifiedKFold) approaches
+   - **Adaptive CV Selection**: Dataset size-based strategy selection for optimal stability
+   - **Enhanced Patient Grouping**: GroupKFold and StratifiedGroupKFold for patient-level validation
+   - **Numerical Stability**: Comprehensive validation throughout the pipeline
+   - **Sample Alignment**: Verification across processing steps with robust error handling
 
-5. **Missing Data-Adaptive Fusion** (Applied FIRST - to Raw Modalities):
+5. **Feature Extraction/Selection** (Applied FIRST - to Raw Modalities):
+   - **Extraction Pipeline**: Dimensionality reduction (PCA, KPCA, PLS, KPLS, SparsePLS, Factor Analysis) applied to each modality separately
+   - **Selection Pipeline**: Feature selection (ElasticNetFS, Random Forest Importance, Variance F-test, LASSO) applied to each modality separately
+   - **Modality-Specific Processing**: Each modality processed independently with optimal parameters
+   - **Intelligent Caching**: Cached results for expensive extraction/selection operations
+
+6. **Missing Data-Adaptive Fusion** (Applied SECOND - to Processed Features):
    - **Clean Data (0% missing)**: 5 fusion methods tested - attention_weighted, learnable_weighted, mkl, snf, early_fusion_pca
    - **Missing Data (>0% missing)**: 3 robust fusion methods - mkl, snf, early_fusion_pca  
    - **Strategy Selection**: Automatic based on missing data percentage, not task type
-   - **Raw Data Fusion**: Fusion applied to raw modality data before any feature processing
+   - **Processed Feature Fusion**: Fusion applied to already-processed features from each modality
    - **Robust Fallbacks**: Graceful degradation when advanced fusion methods fail
 
-6. **Feature Extraction/Selection** (Applied SECOND - to Fused Data):
-   - **Extraction Pipeline**: Dimensionality reduction (PCA, KPCA, PLS, KPLS, SparsePLS, Factor Analysis) with optimal components via hyperparameter tuning
-   - **Selection Pipeline**: Feature selection (ElasticNetFS, Random Forest Importance, Variance F-test, LASSO) with fixed 8, 16, 32 features
-   - **Applied to Fused Data**: Feature processing applied to already-fused multi-modal data
-   - **Intelligent Caching**: Cached results for expensive extraction/selection operations
-
 7. **Model Training & Evaluation**:
-   - Enhanced cross-validation with patient-level grouping and robust fold creation
+   - **Task-Appropriate Cross-Validation**: Regression uses KFold/RepeatedKFold, classification uses StratifiedKFold
+   - **Adaptive CV Strategy**: Dataset size-based selection for optimal stability and reliability
+   - **Enhanced Patient Grouping**: GroupKFold and StratifiedGroupKFold for patient-level validation
    - **Hyperparameter Optimization**: Pre-tuned parameters from `hp_best/` including optimal component counts for extraction methods
    - **Systematic Feature Evaluation**: Fixed feature counts (8, 16, 32) for selection methods to enable fair comparison
-   - Numerical stability checks to prevent NaN/inf values in predictions
+   - **Algorithm Robustness**: Multi-level fallbacks (ElasticNetCV → ElasticNet → LinearRegression) for numerical stability
    - Comprehensive evaluation metrics with enhanced AUC calculation for imbalanced datasets
 
 8. **Results Analysis & Visualization**:
@@ -297,8 +319,17 @@ data/
 ### Basic Execution
 
 Run the complete pipeline with all datasets and algorithms:
+
+#### Feature-First Architecture (DEFAULT)
 ```bash
+# Use the standard Feature Processing → Fusion → Model Training order
 python main.py
+```
+
+#### Fusion-First Architecture (LEGACY)
+```bash
+# Use the legacy Fusion → Feature Processing → Model Training order
+python main.py --fusion-first
 ```
 
 ### Execution Options
@@ -350,11 +381,15 @@ python main.py
 
 #### Combined Options
 ```bash
-# Example: Run only AML dataset with debug logging and 16 components
+# Example: Run only AML dataset with debug logging (feature-first by default)
 python main.py --dataset AML --debug --n-val 16
 
-# Example: Run only classification with verbose logging, skip MAD
+# Example: Run only classification with verbose logging, skip MAD (feature-first by default)
 python main.py --classification-only --verbose --skip-mad
+
+# Example: Compare both architectures on the same dataset
+python main.py --dataset Breast                # Feature-first (default)
+python main.py --dataset Breast --fusion-first # Fusion-first (legacy)
 ```
 
 ### Advanced Configuration
@@ -570,11 +605,20 @@ python main.py --mad-only
    - Reduce `CACHE_CONFIG["total_limit_mb"]` in `config.py`
    - Use `--n-val 8` for smaller parameter space
 
+5. **Cross-Validation Warnings**:
+   - The pipeline now uses proper CV strategies (no more StratifiedKFold warnings for regression)
+   - ElasticNet errors are handled with automatic fallbacks
+
+6. **Small Dataset Issues**:
+   - Automatic detection and optimization for datasets <200 samples
+   - Enhanced numerical stability with appropriate preprocessing
+
 #### Getting Help
 
 - Check the installation test output: `python setup_and_info/test_installation.py`
 - Review log files: `debug.log` (created during execution)
 - Enable debug mode: `python main.py --debug`
+- Recent improvements address most sklearn compatibility warnings
 
 ## Output Structure
 
@@ -617,7 +661,10 @@ output/
 - **Early Stopping**: Prevents overfitting in neural networks and iterative algorithms
 
 ### Enhanced Efficiency Features
+- **Task-Appropriate CV**: Proper regression/classification strategies eliminate warnings and improve stability
+- **Adaptive Algorithm Selection**: Automatic detection of small datasets (<200 samples) for optimal preprocessing
 - **Numerical Stability**: Automatic detection and removal of problematic features reduces computational overhead
+- **Robust Error Handling**: Multi-level fallbacks prevent pipeline failures from algorithm-specific issues
 - **Adaptive Preprocessing**: Modality-specific optimizations reduce processing time
 - **Sample Alignment**: Robust handling of dimension mismatches prevents pipeline failures
 - **Sparse Data Optimization**: Efficient handling of high-sparsity genomic data (>90% zeros)
@@ -706,7 +753,21 @@ OUH-Internship-Krzysztof-Nowak/
 
 ## Recent Pipeline Enhancements
 
-### Version 3.0 - 4-Phase Enhanced Pipeline Architecture (CURRENT)
+### Version 4.0 - Feature-First Architecture Implementation (CURRENT)
+- ✅ **NEW: Feature-First Architecture**: Complete implementation of Feature Processing → Fusion → Model Training pipeline order
+- ✅ **Dual Architecture Support**: Feature-first as default, legacy fusion-first via `--fusion-first` flag
+- ✅ **Modality-Specific Processing**: Apply extractors/selectors to each modality independently before fusion
+- ✅ **Enhanced Experimental Loop**: Algorithm → Features → Fusion → Model order for comprehensive evaluation
+- ✅ **Backward Compatibility**: Legacy fusion-first architecture remains available for comparison
+
+### Version 3.1 - Enhanced CV Strategies & Algorithm Robustness
+- ✅ **Task-Appropriate Cross-Validation**: Proper regression (KFold/RepeatedKFold) vs classification (StratifiedKFold) strategies
+- ✅ **Adaptive CV Selection**: Dataset size-based strategy selection for optimal numerical stability
+- ✅ **ElasticNet Robustness**: Small dataset detection with multi-level fallback strategies (ElasticNetCV → ElasticNet → LinearRegression)
+- ✅ **Enhanced Error Handling**: Safe attribute access and robust sklearn compatibility
+- ✅ **Numerical Stability**: Comprehensive safeguards throughout the pipeline
+
+### Version 3.0 - 4-Phase Enhanced Pipeline Architecture
 - ✅ **4-Phase Integration**: Early quality assessment, fusion-first processing, centralized missing data, coordinated validation
 - ✅ **Corrected Pipeline Order**: Fusion applied FIRST to raw modalities, then feature processing applied to fused data
 - ✅ **Missing Data-Adaptive Fusion**: 5 fusion methods for clean data, 3 robust methods for missing data scenarios
@@ -725,6 +786,36 @@ OUH-Internship-Krzysztof-Nowak/
 - ✅ **Fusion-First Architecture**: Fusion applied to raw modalities before feature processing
 - ✅ **Performance Monitoring**: Real-time memory usage tracking and computational efficiency optimization
 - ✅ **Intelligent Caching**: LRU caching system for expensive extraction/selection operations
+
+## Architecture Comparison
+
+### Feature-First vs Fusion-First
+
+| Aspect | Feature-First (NEW) | Fusion-First (LEGACY) |
+|--------|---------------------|------------------------|
+| **Pipeline Order** | Raw Data → Feature Processing → Fusion → Model Training | Raw Data → Fusion → Feature Processing → Model Training |
+| **Processing Scope** | Each modality processed independently | Fused data processed as single unit |
+| **Feature Quality** | Modality-specific feature optimization | Generic feature processing on fused data |
+| **Computational Efficiency** | Parallel modality processing possible | Sequential processing required |
+| **Interpretability** | Clear modality contributions | Mixed modality features harder to interpret |
+| **Scalability** | Better for large feature spaces | Can struggle with high-dimensional fused data |
+| **Fusion Quality** | Works with optimized features | Works with raw noisy data |
+| **Usage** | `python main.py` (default) | `python main.py --fusion-first` |
+
+### When to Use Feature-First Architecture
+
+- **Large feature spaces**: When individual modalities have thousands of features
+- **Modality-specific optimization**: When different data types need specialized processing
+- **Interpretable results**: When understanding individual modality contributions is important
+- **Computational constraints**: When parallel processing of modalities is beneficial
+- **Quality fusion**: When fusion should work with clean, optimized features
+
+### When to Use Fusion-First Architecture
+
+- **Legacy compatibility**: When reproducing previous results
+- **Simple fusion methods**: When using basic concatenation or averaging
+- **Small datasets**: When computational efficiency is not a concern
+- **Exploratory analysis**: When testing different fusion strategies quickly
 
 ## Contributing
 
@@ -754,3 +845,173 @@ If you use this pipeline in your research, please cite:
 - Research supervisors and collaborators
 - The Cancer Genome Atlas (TCGA) for providing the datasets
 - Open-source scientific Python community 
+
+## Version 4.0 - Sequential Processing Architecture
+
+This pipeline supports multiple processing architectures:
+
+### Processing Architectures
+
+| Architecture | Processing Order | Usage | Memory Management |
+|-------------|------------------|-------|-------------------|
+| **Feature-First** (DEFAULT) | Raw Data -> Feature Processing -> Fusion -> Model Training | `python main.py` | Efficient, processes all modalities together |
+| **Sequential** (NEW) | Raw Data -> One Extractor/Selector -> All Fusion Techniques -> All Models (repeat) | `python main.py --sequential` | Memory-friendly, processes one algorithm at a time |
+| **Fusion-First** (LEGACY) | Raw Data -> Fusion -> Feature Processing -> Model Training | `python main.py --fusion-first` | Legacy compatibility |
+
+### Sequential Processing Benefits
+
+The new **Sequential Processing** mode provides:
+
+1. **Better Memory Management**: Processes one extractor/selector at a time, preventing out-of-memory errors
+2. **Clear Progress Tracking**: Shows exactly which algorithm and fusion technique is being processed
+3. **Systematic Processing**: Completes all fusion techniques and models for one algorithm before moving to the next
+4. **Terminal Visibility**: Clear progress indicators showing current processing status
+
+### Sequential Processing Order
+
+When using `--sequential`, the pipeline processes in this order:
+
+```
+Dataset (e.g., AML regression)
+├── Missing Percentage: 0%
+│   ├── Extractor: PCA
+│   │   ├── Parameter: 8 components
+│   │   │   ├── Fusion: attention_weighted -> Models: [LinearRegression, ElasticNet, RandomForest]
+│   │   │   ├── Fusion: learnable_weighted -> Models: [LinearRegression, ElasticNet, RandomForest]
+│   │   │   ├── Fusion: mkl -> Models: [LinearRegression, ElasticNet, RandomForest]
+│   │   │   ├── Fusion: average -> Models: [LinearRegression, ElasticNet, RandomForest]
+│   │   │   ├── Fusion: sum -> Models: [LinearRegression, ElasticNet, RandomForest]
+│   │   │   └── Fusion: early_fusion_pca -> Models: [LinearRegression, ElasticNet, RandomForest]
+│   │   ├── Parameter: 16 components
+│   │   │   └── (same fusion techniques and models)
+│   │   └── Parameter: 32 components
+│   │       └── (same fusion techniques and models)
+│   ├── Extractor: KPCA
+│   │   └── (same parameter and fusion processing)
+│   └── (continue for all extractors)
+├── Missing Percentage: 20%
+│   └── (same processing with missing-data compatible fusion techniques)
+└── Missing Percentage: 50%
+    └── (same processing with missing-data compatible fusion techniques)
+```
+
+### Terminal Output Example
+
+```bash
+================================================================================
+🚀 STARTING SEQUENTIAL EXTRACTION PIPELINE
+📊 Dataset: AML (regression)
+🔧 Transformers: ['PCA', 'KPCA', 'PLS', 'SparsePLS', 'FA']
+🎯 Models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
+================================================================================
+
+📈 PROCESSING MISSING DATA: 0%
+────────────────────────────────────────────────────────────────
+
+🔧 PROCESSING TRANSFORMER: PCA
+────────────────────────────────────────
+
+  📊 Processing PCA-8
+  🎯 [EXTRACT-REG CV] 1/45 => AML | PCA-8 | Missing: 0%
+    🔗 Fusion techniques for 0% missing: 6 methods
+
+    🔗 [1/6] Fusion: attention_weighted
+      🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
+        [1/3] Model: LinearRegression -> R2=0.234
+        [2/3] Model: ElasticNet -> R2=0.189
+        [3/3] Model: RandomForestRegressor -> R2=0.267
+      ✅ Completed fusion: attention_weighted
+
+    🔗 [2/6] Fusion: learnable_weighted
+      🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
+        [1/3] Model: LinearRegression -> R2=0.241
+        [2/3] Model: ElasticNet -> R2=0.195
+        [3/3] Model: RandomForestRegressor -> R2=0.273
+      ✅ Completed fusion: learnable_weighted
+
+  ✅ Completed PCA-8
+
+✅ Completed transformer: PCA
+✅ Completed missing percentage: 0%
+
+🎉 SEQUENTIAL PIPELINE COMPLETED FOR AML
+================================================================================
+```
+
+## Usage Examples
+
+### Basic Usage
+```bash
+# Default feature-first processing
+python main.py
+
+# Sequential processing (memory-friendly)
+python main.py --sequential
+
+# Legacy fusion-first processing
+python main.py --fusion-first
+```
+
+### Advanced Usage
+```bash
+# Sequential processing for specific dataset
+python main.py --sequential --dataset AML
+
+# Sequential processing for regression only
+python main.py --sequential --regression-only
+
+# Sequential processing with specific n_val
+python main.py --sequential --n-val 32
+```
+
+## Configuration
+
+### Dataset Configuration
+
+The pipeline supports both regression and classification datasets:
+
+- **Regression datasets**: AML, Sarcoma, etc. (continuous outcomes)
+- **Classification datasets**: Breast, Colon, Kidney, etc. (categorical outcomes)
+
+### Feature Extraction and Selection
+
+- **Extractors**: PCA, Kernel PCA, PLS, Sparse PLS, Factor Analysis
+- **Selectors**: Univariate selection, RFE, LASSO-based selection
+- **Components/Features**: Configurable via `N_VALUES_LIST` in `config.py`
+
+### Fusion Techniques
+
+- **For clean data (0% missing)**: attention_weighted, learnable_weighted, mkl, average, sum, early_fusion_pca
+- **For missing data (>0% missing)**: mkl, average, sum, early_fusion_pca
+
+### Machine Learning Models
+
+- **Regression**: Linear Regression, Elastic Net, Random Forest Regressor
+- **Classification**: Logistic Regression, SVM, Random Forest Classifier
+
+## Memory Management
+
+The sequential processing mode addresses memory issues by:
+
+1. **Processing one algorithm at a time**: Prevents memory accumulation from parallel processing
+2. **Clearing memory between algorithms**: Explicit garbage collection between major processing steps
+3. **Reduced concurrent operations**: Minimizes simultaneous memory-intensive operations
+4. **Progress tracking**: Clear indication of current processing status to identify memory bottlenecks
+
+## Output Structure
+
+```
+output/
+├── AML/
+│   ├── models/
+│   │   ├── best_model_extraction_LinearRegression_PCA_8_0.0_attention_weighted.pkl
+│   │   ├── best_model_extraction_ElasticNet_PCA_8_0.0_attention_weighted.pkl
+│   │   └── ...
+│   ├── metrics/
+│   │   ├── AML_best_fold_extraction_PCA_8_0.0_attention_weighted_metrics.csv
+│   │   └── ...
+│   └── plots/
+│       ├── AML_best_fold_extraction_PCA_8_LinearRegression_0.0_attention_weighted_scatter.png
+│       └── ...
+└── ...
+``` 

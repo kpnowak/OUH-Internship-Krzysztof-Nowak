@@ -91,7 +91,7 @@ def test_fusion_restrictions():
 
     print('\n=== Summary ===')
     print(' weighted_concat: Only works with 0% missing data')
-    print(' learnable_weighted, mkl, snf, early_fusion_pca: Work with 0%, 20%, and 50% missing data')
+    print(' learnable_weighted, mkl, average, sum, early_fusion_pca: Work with 0%, 20%, and 50% missing data')
     print(' average and sum fusion techniques: COMMENTED OUT')
     print(' Training mode returns (data, fitted_object) tuples')
     print(' Validation mode returns just data arrays')

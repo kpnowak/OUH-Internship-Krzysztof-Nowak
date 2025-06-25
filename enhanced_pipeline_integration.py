@@ -25,7 +25,7 @@ class EnhancedPipelineCoordinator:
                  fusion_method: str = "snf",
                  task_type: str = "classification",
                  enable_early_quality_check: bool = True,
-                 enable_fusion_aware_order: bool = True,
+                 enable_feature_first_order: bool = True,
                  enable_centralized_missing_data: bool = True,
                  enable_coordinated_validation: bool = True,
                  fail_fast: bool = True):
@@ -33,7 +33,7 @@ class EnhancedPipelineCoordinator:
         self.fusion_method = fusion_method
         self.task_type = task_type
         self.enable_early_quality_check = enable_early_quality_check
-        self.enable_fusion_aware_order = enable_fusion_aware_order
+        self.enable_feature_first_order = enable_feature_first_order
         self.enable_centralized_missing_data = enable_centralized_missing_data
         self.enable_coordinated_validation = enable_coordinated_validation
         self.fail_fast = fail_fast
@@ -82,10 +82,10 @@ class EnhancedPipelineCoordinator:
                 logger.info("Phase 3: Handling missing data")
                 processed_modalities = self._handle_missing_data(modality_data_dict)
             
-            # Phase 2: Fusion-Aware Preprocessing
-            if self.enable_fusion_aware_order:
-                logger.info("Phase 2: Applying fusion-aware preprocessing")
-                final_data, y_aligned = self._apply_fusion_aware_preprocessing(processed_modalities, y)
+            # Phase 2: Feature-First Processing
+            if self.enable_feature_first_order:
+                logger.info("Phase 2: Applying feature-first processing")
+                final_data, y_aligned = self._apply_feature_first_preprocessing(processed_modalities, y)
             else:
                 # Fallback to simple concatenation
                 logger.info("Using simple concatenation fallback")
@@ -104,7 +104,7 @@ class EnhancedPipelineCoordinator:
                 'quality_score': self.quality_report_.get('overall_quality_score', 0.8),
                 'phases_enabled': {
                     'early_quality_check': self.enable_early_quality_check,
-                    'fusion_aware_order': self.enable_fusion_aware_order,
+                    'feature_first_order': self.enable_feature_first_order,
                     'centralized_missing_data': self.enable_centralized_missing_data,
                     'coordinated_validation': self.enable_coordinated_validation
                 }
@@ -150,8 +150,107 @@ class EnhancedPipelineCoordinator:
             logger.warning(f"Missing data handling failed: {e}, using original data")
             return modality_data_dict
     
+    def _apply_feature_first_preprocessing(self, modality_data_dict, y):
+        """Run Phase 2: Feature-First Processing (NEW ARCHITECTURE)."""
+        try:
+            logger.info("Applying correct feature-first architecture: Preprocessing → Return Separate Modalities")
+            logger.info("Note: Feature extraction/selection will be applied to each modality separately later")
+            
+            # Step 1: Apply preprocessing to each modality separately
+            processed_modalities = {}
+            for modality_name, (X, sample_ids) in modality_data_dict.items():
+                # Apply robust preprocessing to each modality
+                processed_X = self._apply_modality_specific_preprocessing(X, modality_name)
+                processed_modalities[modality_name] = processed_X
+                logger.info(f"Preprocessing for {modality_name}: {X.shape} -> {processed_X.shape}")
+            
+            # Step 2: Return separate processed modalities (DO NOT FUSE YET)
+            # Fusion will happen later after feature extraction/selection is applied to each modality
+            
+            # Align targets to match processed data
+            n_samples = list(processed_modalities.values())[0].shape[0]
+            y_aligned = y[:n_samples] if len(y) >= n_samples else y
+            
+            logger.info("Preprocessing completed. Returning separate modalities for feature extraction/selection.")
+            return processed_modalities, y_aligned
+            
+        except Exception as e:
+            logger.warning(f"Feature-first preprocessing failed: {e}, using fallback")
+            return self._simple_preprocessing_fallback(modality_data_dict, y)
+    
+    def _apply_modality_specific_preprocessing(self, X, modality_name):
+        """Apply feature processing to a single modality."""
+        try:
+            from preprocessing import robust_biomedical_preprocessing_pipeline
+            
+            # Determine modality type
+            if 'exp' in modality_name.lower() or 'gene' in modality_name.lower():
+                modality_type = 'gene_expression'
+            elif 'mirna' in modality_name.lower():
+                modality_type = 'mirna'
+            elif 'methy' in modality_name.lower():
+                modality_type = 'methylation'
+            else:
+                modality_type = 'unknown'
+            
+            # Apply preprocessing
+            result = robust_biomedical_preprocessing_pipeline(X, modality_type=modality_type)
+            if len(result) == 3:
+                X_processed, transformers, report = result
+            elif len(result) == 2:
+                X_processed, transformers = result
+            else:
+                X_processed = result
+                
+            return X_processed
+            
+        except Exception as e:
+            logger.warning(f"Modality preprocessing failed for {modality_name}: {e}")
+            return X
+    
+    def _apply_fusion_to_processed_features(self, processed_modalities):
+        """
+        Apply fusion methods to processed features from each modality.
+        
+        Note: This method is now used only for fallbacks. 
+        The main pipeline now returns separate modalities for feature extraction/selection first.
+        """
+        try:
+            from fusion import merge_modalities
+            
+            # Convert to list of arrays for fusion
+            modality_arrays = list(processed_modalities.values())
+            
+            if len(modality_arrays) == 1:
+                return modality_arrays[0]
+            
+            # Apply fusion strategy
+            fused_result = merge_modalities(
+                *modality_arrays,
+                strategy=self.fusion_method,
+                is_train=True
+            )
+            
+            if isinstance(fused_result, tuple):
+                fused_data, fitted_fusion = fused_result
+            else:
+                fused_data = fused_result
+                
+            return fused_data
+            
+        except Exception as e:
+            logger.warning(f"Fusion of processed features failed: {e}, using concatenation")
+            # Fallback to concatenation
+            modality_arrays = list(processed_modalities.values())
+            if modality_arrays:
+                import numpy as np
+                return np.column_stack(modality_arrays)
+            else:
+                import numpy as np
+                return np.array([])
+    
     def _apply_fusion_aware_preprocessing(self, modality_data_dict, y):
-        """Run Phase 2: Fusion-Aware Preprocessing."""
+        """Run Phase 2: Fusion-Aware Preprocessing (LEGACY METHOD)."""
         try:
             from fusion_aware_preprocessing import determine_optimal_fusion_order
             optimal_order = determine_optimal_fusion_order(self.fusion_method)

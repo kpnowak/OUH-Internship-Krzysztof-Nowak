@@ -338,12 +338,12 @@ def fix_malformed_data_file(file_path: Path, modality_name: str) -> Optional[pd.
         # Strategy 1: Try reading without header, then manually assign columns
         try:
             df_data = pd.read_csv(file_path, sep=None, engine='python', header=None, 
-                                skiprows=1, index_col=0, low_memory=False)
+                                skiprows=1, index_col=0)
             logger.debug(f"Successfully read data part: {df_data.shape}")
         except Exception as e:
             logger.debug(f"Strategy 1 failed: {str(e)}")
         
-        # Strategy 2: If that fails, try with specific delimiter
+        # Strategy 2: If that fails, try with specific delimiter and c engine
         if df_data is None:
             for delimiter in [',', '\t', ' ']:
                 try:
@@ -1282,11 +1282,11 @@ def enhanced_sample_recovery(modalities: Dict[str, pd.DataFrame],
     # Filter modalities to enhanced common samples
     final_enhanced_modalities = {}
     for mod_name, df in enhanced_modalities.items():
-        available_samples = [col for col in enhanced_common if col in df.columns]
+        available_samples = sorted([col for col in enhanced_common if col in df.columns])  # Sort for deterministic order
         if available_samples:
             final_enhanced_modalities[mod_name] = df[available_samples]
     
-    enhanced_common_list = sorted(list(enhanced_common))
+    enhanced_common_list = sorted(list(enhanced_common))  # Ensure deterministic ordering
     
     logger.info(f"Enhanced recovery result: {len(current_common_ids)} -> {len(enhanced_common_list)} samples")
     
@@ -1410,7 +1410,7 @@ def optimize_sample_intersection(modalities: Dict[str, pd.DataFrame],
     # Filter modalities to only include common samples
     filtered_modalities = {}
     for mod_name, df in modalities.items():
-        available_samples = [col for col in common_ids if col in df.columns]
+        available_samples = sorted([col for col in common_ids if col in df.columns])  # Sort for deterministic order
         if available_samples:
             filtered_modalities[mod_name] = df[available_samples]
             logger.info(f"Filtered {mod_name}: {df.shape[0]} features x {len(available_samples)} samples")
@@ -1551,14 +1551,24 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
                  task_type: str = 'classification', 
                  parallel: bool = True, 
                  use_cache: bool = True, 
-                 min_class_size: int = 5) -> Tuple[Dict[str, pd.DataFrame], pd.Series, List[str]]:
+                 min_class_size: int = 5) -> Tuple[Dict[str, pd.DataFrame], pd.Series, List[str], bool]:
     """
     Load dataset with comprehensive optimizations for all cancer types.
     Enhanced with parallel processing and caching for maximum performance.
     Now supports min_class_size as a parameter.
     """
-    logger.info(f"=== LOADING DATASET: {ds_name.upper()} ===")
-    logger.info(f"Modalities: {modalities}")
+    # Ensure deterministic behavior for consistent sample counts
+    import numpy as np
+    np.random.seed(42)  # Fixed seed for reproducible sample recovery and processing
+    
+    # Print to both logger and console for better visibility
+    dataset_info = f"=== LOADING DATASET: {ds_name.upper()} ==="
+    logger.info(dataset_info)
+    print(f"{dataset_info}")
+    
+    modalities_info = f"Modalities: {modalities}"
+    logger.info(modalities_info)
+    print(f"{modalities_info}")
     
     # If outcome_col is None, get it from configuration
     if outcome_col is None:
@@ -1570,8 +1580,17 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
         else:
             raise ValueError(f"No configuration found for dataset {ds_name} and no outcome_col specified")
     
-    logger.info(f"Outcome column: {outcome_col}")
-    logger.info(f"Task type: {task_type}")
+    outcome_info = f"Outcome column: {outcome_col}"
+    logger.info(outcome_info)
+    print(f"{outcome_info}")
+    
+    task_info = f"Task type: {task_type}"
+    logger.info(task_info)
+    print(f"{task_info}")
+    
+    # STEP 1: Detect task type early and consistently
+    is_regression = (task_type.lower() == 'regression')
+    logger.info(f"Task type detection: is_regression={is_regression}")
     
     # Load clinical data first
     clinical_path = Path(f"data/clinical/{ds_name}.csv")
@@ -1801,26 +1820,50 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
     )
     
     # Final validation and statistics
-    logger.info(f"\\n=== FINAL DATASET STATISTICS ===")
-    logger.info(f"Common samples found: {len(common_ids)}")
-    logger.info(f"Modalities loaded: {list(filtered_modalities.keys())}")
+    final_stats_info = f"\\n=== FINAL DATASET STATISTICS ==="
+    logger.info(final_stats_info)
+    print(f"{final_stats_info}")
+    
+    common_samples_info = f"Common samples found: {len(common_ids)}"
+    logger.info(common_samples_info)
+    print(f"{common_samples_info}")
+    
+    modalities_loaded_info = f"Modalities loaded: {list(filtered_modalities.keys())}"
+    logger.info(modalities_loaded_info)
+    print(f"{modalities_loaded_info}")
     
     # Calculate retention rate
     initial_samples = intersection_stats['initial_clinical_samples']
     retention_rate = (len(common_ids) / initial_samples) * 100 if initial_samples > 0 else 0
-    logger.info(f"Sample retention rate: {retention_rate:.1f}%")
+    retention_info = f"Sample retention rate: {retention_rate:.1f}%"
+    logger.info(retention_info)
+    print(f"{retention_info}")
     
-    # Optimize class distribution for better CV performance (classification only)
-    if task_type == 'classification':
-        logger.info(f"\n=== CLASS DISTRIBUTION OPTIMIZATION ===")
-        from preprocessing import _remap_labels
-        y_series = _remap_labels(y_series, ds_name)
-        y_optimized, optimized_ids = optimize_class_distribution(
-            y_series, common_ids, task_type, min_class_size=min_class_size
+    # STEP 4: Consolidate class optimization for classification only using new unified function
+    if not is_regression:
+        class_opt_info = f"\n=== CLASSIFICATION: CONSOLIDATED CLASS OPTIMIZATION ==="
+        logger.info(class_opt_info)
+        print(f"{class_opt_info}")
+        
+        from preprocessing import consolidated_rare_class_handler
+        # CRITICAL FIX: Filter y_series to common_ids BEFORE class optimization
+        y_filtered_for_optimization = y_series.loc[common_ids]
+        filtering_info = f"Filtering y_series from {len(y_series)} to {len(y_filtered_for_optimization)} samples for class optimization"
+        logger.info(filtering_info)
+        print(f"{filtering_info}")
+        
+        y_optimized_series = consolidated_rare_class_handler(
+            y_filtered_for_optimization, ds_name, min_class_size=min_class_size, merge_strategy='auto'
         )
+        # Filter samples to match the optimized classes (ensure consistency)
+        optimized_ids = y_optimized_series.index.tolist()
+        y_optimized = y_optimized_series
+        optimization_complete_info = f"Consolidated classification optimization complete: {len(optimized_ids)} samples retained"
+        logger.info(optimization_complete_info)
+        print(f"{optimization_complete_info}")
     else:
-        # For regression, just filter to common_ids
-        logger.info(f"\\n=== REGRESSION DATA FILTERING ===")
+        # For regression, just filter to common_ids without class optimization
+        logger.info(f"\n=== REGRESSION: DATA FILTERING (NO CLASS OPTIMIZATION) ===")
         logger.info(f"y_series type before filtering: {type(y_series)}")
         logger.info(f"y_series dtype before filtering: {y_series.dtype}")
         
@@ -1836,6 +1879,7 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
         
         logger.info(f"y_optimized type after filtering: {type(y_optimized)}")
         logger.info(f"y_optimized dtype after filtering: {y_optimized.dtype}")
+        logger.info(f"Regression filtering complete: {len(optimized_ids)} samples retained")
     
         # Update modalities to match optimized sample set
     if len(optimized_ids) != len(common_ids):
@@ -1848,6 +1892,16 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
     # CRITICAL FIX: Filter outcome data to match common_ids exactly
     y_filtered = y_optimized.loc[common_ids]
     logger.info(f"Final outcome data filtered to {len(y_filtered)} samples matching common_ids")
+    
+    # CRITICAL VALIDATION: Ensure all data dimensions are consistent
+    logger.info(f"DATA CONSISTENCY CHECK:")
+    logger.info(f"  - common_ids length: {len(common_ids)}")
+    logger.info(f"  - y_filtered length: {len(y_filtered)}")
+    for mod_name, mod_df in filtered_modalities.items():
+        logger.info(f"  - {mod_name} samples: {mod_df.shape[1]}")
+        if mod_df.shape[1] != len(common_ids):
+            logger.error(f"CONSISTENCY ERROR: {mod_name} has {mod_df.shape[1]} samples but common_ids has {len(common_ids)}")
+            raise ValueError(f"Data inconsistency detected: {mod_name} sample count mismatch")
     
     # CRITICAL DEBUG: Check if y_filtered is being corrupted
     if isinstance(y_filtered, str):
@@ -1868,7 +1922,7 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
     logger.info(f"Final outcome distribution: {y_filtered.value_counts().to_dict()}")
     
     # CRITICAL FIX: Convert string labels to numeric for classification
-    if task_type == 'classification' and y_filtered.dtype == 'object':
+    if not is_regression and y_filtered.dtype == 'object':
         logger.info("Converting string class labels to numeric labels for classification")
         unique_classes = sorted(y_filtered.unique())
         label_mapping = {class_label: idx for idx, class_label in enumerate(unique_classes)}
@@ -2157,9 +2211,12 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
             logger.error("No valid numeric samples remaining for regression task")
             raise ValueError("No valid numeric samples found for regression outcome")
     
-    logger.info(f"=== DATASET {ds_name.upper()} LOADED SUCCESSFULLY ===")
+    success_info = f"=== DATASET {ds_name.upper()} LOADED SUCCESSFULLY ==="
+    logger.info(success_info)
+    print(f"{success_info}")
+    print(f"Final Summary: {len(common_ids)} samples across {len(filtered_modalities)} modalities")
     
-    return filtered_modalities, y_filtered, common_ids
+    return filtered_modalities, y_filtered, common_ids, is_regression
 
 def save_results(results_df: pd.DataFrame, output_dir: Union[str, Path], filename: str) -> None:
     """
@@ -2211,7 +2268,7 @@ def load_multimodal_data(dataset_name: str, task_type: str) -> Tuple[Optional[Di
             return None, None
         
         # Load dataset using existing load_dataset function
-        modality_data, outcome_series, common_ids = load_dataset(
+        modality_data, outcome_series, common_ids, is_regression = load_dataset(
             ds_name=dataset_name,
             modalities=config['modalities'],
             outcome_col=config['outcome_col'],
@@ -2294,7 +2351,7 @@ def load_and_preprocess_data_enhanced(
     logger.info(f"Loading and preprocessing {dataset_name} dataset for {task_type}")
     
     # Load the dataset with sample IDs using configuration-based outcome columns
-    modalities, y_series, common_ids = load_dataset(
+    modalities, y_series, common_ids, is_regression = load_dataset(
         dataset_name.lower(), 
         modalities=['exp', 'methy', 'mirna'], 
         outcome_col=None,  # Let load_dataset determine from config
@@ -2326,7 +2383,7 @@ def load_and_preprocess_data_enhanced(
                 task_type=task_type,
                 dataset_name=dataset_name,
                 enable_early_quality_check=True,
-                enable_fusion_aware_order=True,
+                enable_feature_first_order=True,
                 enable_centralized_missing_data=True,
                 enable_coordinated_validation=True
             )
@@ -2374,10 +2431,21 @@ def load_and_preprocess_data_enhanced(
         # Return sample_ids as common_ids
         sample_ids = common_ids[:len(y_aligned)]
     else:
-        # Basic preprocessing without improvements
-        processed_modalities, y_aligned, sample_ids, report = basic_preprocessing_pipeline(
-            modalities, y_series, common_ids
-        )
+        # Basic preprocessing without improvements - convert to expected format
+        processed_modalities = {}
+        for modality_name, modality_df in modalities.items():
+            # Convert DataFrame to numpy array (transpose to get samples x features)
+            X = modality_df.T.values  # modality_df is features x samples
+            processed_modalities[modality_name] = X
+        
+        y_aligned = y_series.values
+        sample_ids = common_ids
+        report = {
+            'preprocessing_method': 'basic',
+            'n_samples': len(y_aligned),
+            'n_modalities': len(processed_modalities),
+            'total_features': sum(X.shape[1] for X in processed_modalities.values())
+        }
     
     logger.info(f"Preprocessing completed successfully for {dataset_name}")
     return processed_modalities, y_aligned, sample_ids, report

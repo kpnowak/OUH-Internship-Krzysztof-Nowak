@@ -64,7 +64,7 @@ def test_real_data_pipeline():
             task_type="regression",
             dataset_name="AML_real_test",
             enable_early_quality_check=True,
-            enable_fusion_aware_order=True,
+            enable_feature_first_order=True,
             enable_centralized_missing_data=True,
             enable_coordinated_validation=True
         )

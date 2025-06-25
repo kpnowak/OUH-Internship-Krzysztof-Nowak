@@ -14,6 +14,32 @@ import pathlib
 # Hyperparameter directory
 HP_DIR = pathlib.Path("hp_best")
 
+def _map_extractor_class_to_hyperparameter_name(extractor_class_name):
+    """
+    Map sklearn class names to hyperparameter file naming convention.
+    
+    Parameters
+    ----------
+    extractor_class_name : str
+        The class name from extractor.__class__.__name__
+        
+    Returns
+    -------
+    str
+        The corresponding hyperparameter file prefix
+    """
+    mapping = {
+        'KernelPCA': 'KPCA',
+        'LinearDiscriminantAnalysis': 'LDA',
+        'PLSDiscriminantAnalysis': 'PLS-DA',
+        'PLSRegression': 'PLS',
+        'FactorAnalysis': 'FA',
+        'KernelPLSRegression': 'KPLS',
+        'SparsePLS': 'SparsePLS',
+        'PCA': 'PCA'
+    }
+    return mapping.get(extractor_class_name, extractor_class_name)
+
 def load_best_hyperparameters(dataset, extractor_name, model_name, task):
     """
     Load best hyperparameters for a given dataset, extractor, and model combination.
@@ -23,7 +49,7 @@ def load_best_hyperparameters(dataset, extractor_name, model_name, task):
     dataset : str
         Dataset name (e.g., "AML", "Breast")
     extractor_name : str
-        Extractor name (e.g., "PCA", "KPCA", "FA")
+        Extractor name (e.g., "PCA", "KPCA", "FA") - can be class name or hyperparameter file name
     model_name : str
         Model name (e.g., "LinearRegression", "ElasticNet")
     task : str
@@ -34,6 +60,9 @@ def load_best_hyperparameters(dataset, extractor_name, model_name, task):
     dict
         Best hyperparameters with separate extractor and model params, or empty dict if not found
     """
+    
+    # Map class names to hyperparameter file names if needed
+    mapped_extractor_name = _map_extractor_class_to_hyperparameter_name(extractor_name)
     
     def deserialize_sklearn_objects(params):
         """Convert string representations of sklearn objects back to actual objects."""
@@ -74,7 +103,7 @@ def load_best_hyperparameters(dataset, extractor_name, model_name, task):
         return extractor_params, model_params
     
     # Try exact dataset match first
-    file_path = HP_DIR / f"{dataset}_{extractor_name}_{model_name}.json"
+    file_path = HP_DIR / f"{dataset}_{mapped_extractor_name}_{model_name}.json"
     if file_path.exists():
         try:
             with open(file_path, 'r') as f:
@@ -84,14 +113,14 @@ def load_best_hyperparameters(dataset, extractor_name, model_name, task):
                 extractor_params, model_params = separate_extractor_model_params(params)
                 
                 logger = logging.getLogger(__name__)
-                logger.info(f"Loaded hyperparameters for {dataset}_{extractor_name}_{model_name}")
+                logger.info(f"Loaded hyperparameters for {dataset}_{mapped_extractor_name}_{model_name}")
                 logger.debug(f"Extractor params: {extractor_params}")
                 logger.debug(f"Model params: {model_params}")
                 
                 return {
                     'extractor_params': extractor_params,
                     'model_params': model_params,
-                    'source': f"{dataset}_{extractor_name}_{model_name}"
+                    'source': f"{dataset}_{mapped_extractor_name}_{model_name}"
                 }
         except Exception as e:
             logger = logging.getLogger(__name__)
@@ -100,7 +129,7 @@ def load_best_hyperparameters(dataset, extractor_name, model_name, task):
     # Fallback: Use family dataset (Breast for classification, AML for regression)
     family_dataset = "Breast" if task == "clf" else "AML"
     if family_dataset != dataset:
-        fallback_path = HP_DIR / f"{family_dataset}_{extractor_name}_{model_name}.json"
+        fallback_path = HP_DIR / f"{family_dataset}_{mapped_extractor_name}_{model_name}.json"
         if fallback_path.exists():
             try:
                 with open(fallback_path, 'r') as f:
@@ -110,14 +139,14 @@ def load_best_hyperparameters(dataset, extractor_name, model_name, task):
                     extractor_params, model_params = separate_extractor_model_params(params)
                     
                     logger = logging.getLogger(__name__)
-                    logger.info(f"Using fallback hyperparameters from {family_dataset}_{extractor_name}_{model_name} for {dataset}")
+                    logger.info(f"Using fallback hyperparameters from {family_dataset}_{mapped_extractor_name}_{model_name} for {dataset}")
                     logger.debug(f"Extractor params: {extractor_params}")
                     logger.debug(f"Model params: {model_params}")
                     
                     return {
                         'extractor_params': extractor_params,
                         'model_params': model_params,
-                        'source': f"{family_dataset}_{extractor_name}_{model_name} (fallback)"
+                        'source': f"{family_dataset}_{mapped_extractor_name}_{model_name} (fallback)"
                     }
             except Exception as e:
                 logger = logging.getLogger(__name__)
@@ -125,7 +154,7 @@ def load_best_hyperparameters(dataset, extractor_name, model_name, task):
     
     # No hyperparameters found
     logger = logging.getLogger(__name__)
-    logger.debug(f"No hyperparameters found for {dataset}_{extractor_name}_{model_name}")
+    logger.debug(f"No hyperparameters found for {dataset}_{mapped_extractor_name}_{model_name} (original: {extractor_name})")
     return {
         'extractor_params': {},
         'model_params': {},
@@ -140,6 +169,7 @@ from sklearn.linear_model import (
     LinearRegression, Lasso, ElasticNet, ElasticNetCV, LogisticRegression,
     HuberRegressor, RANSACRegressor
 )
+from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
 from sklearn.ensemble import (
     RandomForestRegressor, RandomForestClassifier,
     ExtraTreesRegressor, ExtraTreesClassifier,
@@ -213,6 +243,78 @@ except ImportError:
     SPARSE_PLS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_extractor_hyperparameters(extractor, extractor_name, hyperparams):
+    """
+    Sanitize and validate hyperparameters before applying to extractor.
+    
+    Parameters
+    ----------
+    extractor : object
+        The extractor object
+    extractor_name : str
+        Name of the extractor (for logging)
+    hyperparams : dict
+        Raw hyperparameters to sanitize
+        
+    Returns
+    -------
+    dict
+        Sanitized hyperparameters safe to apply
+    """
+    validated_params = {}
+    
+    for param_name, param_value in hyperparams.items():
+        if hasattr(extractor, param_name):
+            # Special handling for KernelPCA gamma parameter
+            if param_name == 'gamma' and extractor_name == 'KernelPCA':
+                if isinstance(param_value, str) and param_value in ['scale', 'auto']:
+                    # Convert deprecated string values to numeric defaults
+                    param_value = 1.0  # Use median heuristic-like value
+                    logger.info(f"Converted deprecated gamma='{param_value}' to gamma=1.0 for KPCA")
+                elif isinstance(param_value, (int, float)) and param_value > 0:
+                    # Valid numeric gamma
+                    pass
+                else:
+                    # Invalid gamma, use default
+                    param_value = 1.0
+                    logger.warning(f"Invalid gamma value {param_value}, using default 1.0")
+            validated_params[param_name] = param_value
+        else:
+            logger.debug(f"Skipping unknown parameter {param_name} for {extractor_name}")
+    
+    return validated_params
+
+
+def _safe_cv(y, task_type, n_splits=5, seed=42):
+    """
+    Create a safe CV splitter that avoids the 'least populated class has only 1 member' warning.
+    
+    For regression: Uses KFold (no stratification needed)
+    For classification: Uses StratifiedKFold (but caller should ensure classes are merged first)
+    
+    Parameters
+    ----------
+    y : array-like
+        Target values (not used for regression, kept for API consistency)
+    task_type : str
+        Either "regression" or "classification" 
+    n_splits : int, default=5
+        Number of cross-validation folds
+    seed : int, default=42
+        Random state for reproducibility
+        
+    Returns
+    -------
+    cv_splitter : sklearn CV splitter
+        KFold for regression, StratifiedKFold for classification
+    """
+    if task_type == "regression":
+        return KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    else:  # classification
+        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+
 
 # Try to import IKPLS for Kernel Partial Least Squares
 try:
@@ -1096,25 +1198,47 @@ class SparsePLS:
         Returns
         -------
         X_transformed : array-like, shape (n_samples, n_components)
-            Transformed data
+            Transformed data with consistent dimensions
         """
         X = np.asarray(X, dtype=np.float64)
         
         # Check if model was fitted properly
         if not hasattr(self, 'x_weights_') or self.x_weights_.size == 0:
             logger.warning("SparsePLS: Model not fitted properly, returning zero array")
-            return np.zeros((X.shape[0], 1))
+            return np.zeros((X.shape[0], 1))  # Minimal fallback, should not happen in normal flow
         
         if hasattr(self, 'x_scaler_'):
             X = self.x_scaler_.transform(X)
         else:
             X = X - np.mean(X, axis=0)
             
-        # Ensure we don't return empty arrays
+        # Transform using fitted components
         result = X @ self.x_weights_
         if result.size == 0:
             logger.warning("SparsePLS: Transform resulted in empty array, returning zero array")
-            return np.zeros((X.shape[0], 1))
+            return np.zeros((X.shape[0], 1))  # Minimal fallback, should not happen in normal flow
+        
+        # CRITICAL FIX: Ensure consistent output dimensions across all modalities
+        # Use a GLOBAL fixed target for all modalities to ensure fusion consistency
+        actual_components = result.shape[1] if len(result.shape) > 1 else 1
+        
+        # For genomic data with 200-ish samples, use a conservative global target
+        # This must be the same for mirna, exp, and methy to work with fusion
+        n_samples_for_calc = result.shape[0]
+        global_target_components = min(n_samples_for_calc // 5, 2)  # Conservative: max 2 components
+        global_target_components = max(1, global_target_components)
+        
+        if actual_components < global_target_components:
+            # Pad with zero columns to match the global target
+            missing_components = global_target_components - actual_components
+            zero_padding = np.zeros((n_samples_for_calc, missing_components))
+            result = np.column_stack([result, zero_padding])
+            
+            logger.debug(f"SparsePLS: Padded output from {actual_components} to {global_target_components} components for fusion consistency")
+        elif actual_components > global_target_components:
+            # Truncate to global target
+            result = result[:, :global_target_components]
+            logger.debug(f"SparsePLS: Truncated output from {actual_components} to {global_target_components} components")
             
         return result
         
@@ -1839,7 +1963,7 @@ class SelectionByCyclicCoordinateDescent(BaseEstimator, RegressorMixin):
     """
     
     def __init__(self, l1_ratio=0.5, cv=5, max_iter=2000, tol=1e-4, 
-                 random_state=42, n_alphas=100, eps=1e-3):
+                 random_state=42, n_alphas=100, eps=1e-3, task_type="regression"):
         self.l1_ratio = l1_ratio
         self.cv = cv
         self.max_iter = max_iter
@@ -1847,34 +1971,109 @@ class SelectionByCyclicCoordinateDescent(BaseEstimator, RegressorMixin):
         self.random_state = random_state
         self.n_alphas = n_alphas
         self.eps = eps
+        self.task_type = task_type
         
     def fit(self, X, y):
         """Fit the ElasticNet model with automatic alpha selection."""
         try:
-            # Use ElasticNetCV for automatic alpha selection
-            self.model_ = ElasticNetCV(
-                l1_ratio=self.l1_ratio,
-                cv=self.cv,
-                max_iter=self.max_iter,
-                tol=self.tol,
-                random_state=self.random_state,
-                n_alphas=self.n_alphas,
-                eps=self.eps,
-                n_jobs=-1,
-                selection='cyclic'  # Use cyclic coordinate descent
-            )
+            # Create safe CV splitter that avoids 'least populated class' warnings
+            cv_splits = self.cv if isinstance(self.cv, int) else 5
+            cv_obj = _safe_cv(y, self.task_type, n_splits=cv_splits, seed=self.random_state)
             
-            # Wrap in TransformedTargetRegressor for target transformation
-            self.regressor_ = TransformedTargetRegressor(
-                regressor=self.model_,
-                transformer=PowerTransformer(method="yeo-johnson", standardize=True)
-            )
-            
-            self.regressor_.fit(X, y)
-            
-            # Store optimal alpha for inspection
-            self.alpha_ = self.model_.alpha_
-            self.l1_ratio_ = self.model_.l1_ratio
+            # For small datasets, use adaptive alpha selection to avoid over-regularization
+            n_samples = X.shape[0]
+            if n_samples < 200:
+                # Use adaptive alpha selection instead of fixed alpha to prevent constant predictions
+                logger.debug(f"Small dataset ({n_samples} samples), using adaptive alpha selection")
+                
+                # Alpha candidates from least to most regularization
+                alpha_candidates = [0.001, 0.01, 0.05, 0.1, 0.2]
+                best_score = -np.inf
+                best_alpha = alpha_candidates[0]
+                
+                for alpha_test in alpha_candidates:
+                    try:
+                        # Test each alpha with cross-validation
+                        test_model = ElasticNet(
+                            alpha=alpha_test,
+                            l1_ratio=self.l1_ratio,
+                            max_iter=self.max_iter,
+                            tol=self.tol,
+                            random_state=self.random_state,
+                            selection='cyclic'
+                        )
+                        
+                        # Use light cross-validation to select best alpha
+                        cv_scores = cross_val_score(
+                            test_model, X, y, 
+                            cv=min(3, cv_splits),  # Use 3-fold for speed on small data
+                            scoring='neg_mean_squared_error',
+                            n_jobs=1  # Single job for stability
+                        )
+                        
+                        avg_score = np.mean(cv_scores)
+                        logger.debug(f"Alpha {alpha_test:.3f}: CV score = {avg_score:.4f}")
+                        
+                        if avg_score > best_score:
+                            best_score = avg_score
+                            best_alpha = alpha_test
+                            
+                    except Exception as alpha_error:
+                        logger.debug(f"Alpha {alpha_test:.3f} failed: {alpha_error}")
+                        continue
+                
+                logger.info(f"Selected optimal alpha = {best_alpha:.3f} (CV score = {best_score:.4f})")
+                
+                # Use the best alpha found
+                base_model = ElasticNet(
+                    alpha=best_alpha,
+                    l1_ratio=self.l1_ratio,
+                    max_iter=self.max_iter,
+                    tol=self.tol,
+                    random_state=self.random_state,
+                    selection='cyclic'
+                )
+                
+                # Use lighter target transformation for small datasets
+                self.regressor_ = TransformedTargetRegressor(
+                    regressor=base_model,
+                    transformer=StandardScaler()  # Use StandardScaler instead of PowerTransformer
+                )
+                
+                self.regressor_.fit(X, y)
+                self.alpha_ = base_model.alpha
+                self.l1_ratio_ = base_model.l1_ratio
+                
+            else:
+                # Use ElasticNetCV for larger datasets (unchanged)
+                self.model_ = ElasticNetCV(
+                    l1_ratio=self.l1_ratio,
+                    cv=cv_obj,  # Use our safe CV splitter instead of raw integer
+                    max_iter=self.max_iter,
+                    tol=self.tol,
+                    random_state=self.random_state,
+                    n_alphas=self.n_alphas,
+                    eps=self.eps,
+                    n_jobs=-1,
+                    selection='cyclic'  # Use cyclic coordinate descent
+                )
+                
+                # Wrap in TransformedTargetRegressor for target transformation
+                self.regressor_ = TransformedTargetRegressor(
+                    regressor=self.model_,
+                    transformer=PowerTransformer(method="yeo-johnson", standardize=True)
+                )
+                
+                self.regressor_.fit(X, y)
+                
+                # Safely access alpha_ with fallback
+                if hasattr(self.model_, 'alpha_') and self.model_.alpha_ is not None:
+                    self.alpha_ = self.model_.alpha_
+                    self.l1_ratio_ = self.model_.l1_ratio
+                else:
+                    logger.warning("ElasticNetCV fit succeeded but alpha_ not available, using default")
+                    self.alpha_ = 0.1
+                    self.l1_ratio_ = self.l1_ratio
             
             logger.debug(f"SelectionByCyclicCoordinateDescent: Optimal alpha={self.alpha_:.6f}, "
                         f"l1_ratio={self.l1_ratio_:.3f}")
@@ -1883,13 +2082,37 @@ class SelectionByCyclicCoordinateDescent(BaseEstimator, RegressorMixin):
             
         except Exception as e:
             logger.warning(f"SelectionByCyclicCoordinateDescent fit failed: {e}")
-            # Fallback to regular ElasticNet
-            self.regressor_ = TransformedTargetRegressor(
-                regressor=ElasticNet(random_state=self.random_state, max_iter=self.max_iter),
-                transformer=PowerTransformer(method="yeo-johnson", standardize=True)
-            )
-            self.regressor_.fit(X, y)
-            self.alpha_ = self.regressor_.regressor_.alpha
+            # Fallback to regular ElasticNet with conservative settings
+            try:
+                fallback_model = ElasticNet(
+                    alpha=0.1, 
+                    l1_ratio=self.l1_ratio,
+                    max_iter=self.max_iter, 
+                    random_state=self.random_state,
+                    selection='cyclic'
+                )
+                
+                # Use simple StandardScaler for fallback to avoid numerical issues
+                self.regressor_ = TransformedTargetRegressor(
+                    regressor=fallback_model,
+                    transformer=StandardScaler()
+                )
+                
+                self.regressor_.fit(X, y)
+                self.alpha_ = fallback_model.alpha
+                self.l1_ratio_ = fallback_model.l1_ratio
+                
+                logger.debug(f"Using fallback ElasticNet: alpha={self.alpha_:.6f}")
+                
+            except Exception as fallback_error:
+                logger.error(f"Even fallback ElasticNet failed: {fallback_error}")
+                # Ultimate fallback - simple linear regression
+                from sklearn.linear_model import LinearRegression
+                self.regressor_ = LinearRegression()
+                self.regressor_.fit(X, y)
+                self.alpha_ = 0.0
+                self.l1_ratio_ = 0.0
+                
             return self
     
     def predict(self, X):
@@ -1905,7 +2128,8 @@ class SelectionByCyclicCoordinateDescent(BaseEstimator, RegressorMixin):
             'tol': self.tol,
             'random_state': self.random_state,
             'n_alphas': self.n_alphas,
-            'eps': self.eps
+            'eps': self.eps,
+            'task_type': self.task_type
         }
     
     def set_params(self, **params):
@@ -2318,7 +2542,7 @@ def _generate_cache_key(ds_name, fold_idx, name, obj_type, n_val, input_shape=No
     return hash_obj.hexdigest()
 
 # Update cache functions to use the new key generation and caching strategy
-def cached_fit_transform_selector_regression(selector, X, y, n_feats, fold_idx=None, ds_name=None):
+def cached_fit_transform_selector_regression(X, y, selector, n_feats, ds_name=None, modality_name=None, fold_idx=0):
     """
     Cached version of fit_transform for regression selectors.
     
@@ -2480,7 +2704,7 @@ def get_regression_extractors() -> Dict[str, Any]:
             kernel="rbf", 
             random_state=42, 
             n_jobs=-1,
-            gamma='scale'
+            gamma=1.0  # Fixed: Use compatible numeric default instead of string
         ),
         "FA": FactorAnalysis(
             random_state=42,
@@ -2560,7 +2784,7 @@ def get_classification_extractors() -> Dict[str, Any]:
             kernel="rbf", 
             random_state=42, 
             n_jobs=-1,
-            gamma='scale'
+            gamma=1.0  # Fixed: Use compatible numeric default instead of string
         ),
         "FA": FactorAnalysis(
             random_state=42,
@@ -2680,7 +2904,7 @@ def validate_and_fix_shape_mismatch(X, y, name="data", fold_idx=None, allow_trun
     
     return X, y
 
-def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None):
+def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None):
     """
     Cached version of fit_transform for regression extractors with hyperparameter loading.
     
@@ -2706,9 +2930,10 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
     Tuple[object, np.ndarray]
         Fitted extractor and transformed data
     """
-    # Generate cache key
+    # Generate cache key including model name for model-specific hyperparameters
     extractor_name = extractor.__class__.__name__
-    key = _generate_cache_key(ds_name, fold_idx, extractor_name, "ext_reg", n_components, X.shape if X is not None else None)
+    cache_name = f"{extractor_name}_{model_name}" if model_name else extractor_name
+    key = _generate_cache_key(ds_name, fold_idx, cache_name, "ext_reg", n_components, X.shape if X is not None else None)
     
     # Check cache
     cached_result = _extractor_cache['ext_reg'].get(key)
@@ -2717,25 +2942,42 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
     
     try:
         # Load and apply hyperparameters if dataset name is provided
-        if ds_name:
-            # Use a generic model name for extractor-only hyperparameters
-            # We'll try different model combinations to find extractor params
-            model_candidates = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]
-            best_hyperparams = None
+        if ds_name and model_name:
+            # Use the specific model name to load appropriate hyperparameters
+            hyperparams = load_best_hyperparameters(ds_name, extractor_name, model_name, "reg")
             
-            for model_name in model_candidates:
-                hyperparams = load_best_hyperparameters(ds_name, extractor_name, model_name, "reg")
-                if hyperparams['extractor_params']:
-                    best_hyperparams = hyperparams
-                    break
+            if hyperparams['extractor_params']:
+                best_hyperparams = hyperparams
+            else:
+                # Fallback: try other model combinations if specific one not found
+                model_candidates = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]
+                best_hyperparams = None
+                
+                for fallback_model in model_candidates:
+                    if fallback_model == model_name:
+                        continue  # Skip the one we already tried
+                    hyperparams = load_best_hyperparameters(ds_name, extractor_name, fallback_model, "reg")
+                    if hyperparams['extractor_params']:
+                        best_hyperparams = hyperparams
+                        logger.warning(f"Using fallback hyperparameters from {fallback_model} for {model_name}")
+                        break
             
             if best_hyperparams and best_hyperparams['extractor_params']:
                 try:
-                    # Apply hyperparameters to extractor
-                    extractor.set_params(**best_hyperparams['extractor_params'])
-                    logger.info(f"Applied tuned extractor hyperparameters for {ds_name}_{extractor_name}: {best_hyperparams['extractor_params']} (source: {best_hyperparams['source']})")
+                    # Sanitize hyperparameters before applying
+                    validated_params = _sanitize_extractor_hyperparameters(
+                        extractor, extractor_name, best_hyperparams['extractor_params']
+                    )
+                    
+                    if validated_params:
+                        extractor.set_params(**validated_params)
+                        extractor._hyperparams_applied = True  # Mark as applied
+                        logger.info(f"Applied tuned extractor hyperparameters for {ds_name}_{extractor_name}: {validated_params} (source: {best_hyperparams['source']})")
+                    else:
+                        logger.debug(f"No valid hyperparameters to apply for {ds_name}_{extractor_name}")
                 except Exception as e:
                     logger.warning(f"Failed to apply extractor hyperparameters for {ds_name}_{extractor_name}: {str(e)}")
+                    logger.debug(f"Original params: {best_hyperparams['extractor_params']}")
             else:
                 logger.debug(f"No extractor hyperparameters found for {ds_name}_{extractor_name}")
         
@@ -2793,10 +3035,33 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         return result
         
     except Exception as e:
-        logger.warning(f"Extractor regression failed for {ds_name}: {str(e)}")
+        error_msg = str(e)
+        logger.warning(f"Extractor regression failed for {ds_name}: {error_msg}")
+        
+        # Special handling for KPCA zero-size array error
+        if "zero-size array to reduction operation maximum" in error_msg and 'KernelPCA' in extractor.__class__.__name__:
+            logger.warning("KPCA encountered zero-size eigenvalue array - falling back to PCA")
+            try:
+                # Fall back to regular PCA with conservative components
+                from sklearn.decomposition import PCA
+                safe_components = min(n_components // 2, X.shape[0] - 2, X.shape[1] // 4, 8)
+                safe_components = max(1, safe_components)  # Ensure at least 1 component
+                
+                fallback_extractor = PCA(n_components=safe_components, random_state=42)
+                fallback_extractor.fit(X_arr)
+                X_transformed = fallback_extractor.transform(X_arr)
+                
+                logger.info(f"KPCA fallback to PCA successful with {safe_components} components")
+                result = (fallback_extractor, X_transformed)
+                _extractor_cache['ext_reg'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
+                return result
+                
+            except Exception as fallback_error:
+                logger.error(f"KPCA fallback also failed: {fallback_error}")
+        
         return None, None
 
-def cached_fit_transform_extractor_classification(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None):
+def cached_fit_transform_extractor_classification(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None):
     """
     Cached version of fit_transform for classification extractors with hyperparameter loading.
     
@@ -2822,9 +3087,10 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
     Tuple[object, np.ndarray]
         Fitted extractor and transformed data
     """
-    # Generate cache key
+    # Generate cache key including model name for model-specific hyperparameters
     extractor_name = extractor.__class__.__name__
-    key = _generate_cache_key(ds_name, fold_idx, extractor_name, "ext_clf", n_components, X.shape if X is not None else None)
+    cache_name = f"{extractor_name}_{model_name}" if model_name else extractor_name
+    key = _generate_cache_key(ds_name, fold_idx, cache_name, "ext_clf", n_components, X.shape if X is not None else None)
     
     # Check cache
     cached_result = _extractor_cache['ext_clf'].get(key)
@@ -2833,25 +3099,42 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
     
     try:
         # Load and apply hyperparameters if dataset name is provided
-        if ds_name:
-            # Use a generic model name for extractor-only hyperparameters
-            # We'll try different model combinations to find extractor params
-            model_candidates = ["LogisticRegression", "RandomForestClassifier", "SVC"]
-            best_hyperparams = None
+        if ds_name and model_name:
+            # Use the specific model name to load appropriate hyperparameters
+            hyperparams = load_best_hyperparameters(ds_name, extractor_name, model_name, "clf")
             
-            for model_name in model_candidates:
-                hyperparams = load_best_hyperparameters(ds_name, extractor_name, model_name, "clf")
-                if hyperparams['extractor_params']:
-                    best_hyperparams = hyperparams
-                    break
+            if hyperparams['extractor_params']:
+                best_hyperparams = hyperparams
+            else:
+                # Fallback: try other model combinations if specific one not found
+                model_candidates = ["LogisticRegression", "RandomForestClassifier", "SVC"]
+                best_hyperparams = None
+                
+                for fallback_model in model_candidates:
+                    if fallback_model == model_name:
+                        continue  # Skip the one we already tried
+                    hyperparams = load_best_hyperparameters(ds_name, extractor_name, fallback_model, "clf")
+                    if hyperparams['extractor_params']:
+                        best_hyperparams = hyperparams
+                        logger.warning(f"Using fallback hyperparameters from {fallback_model} for {model_name}")
+                        break
             
             if best_hyperparams and best_hyperparams['extractor_params']:
                 try:
-                    # Apply hyperparameters to extractor
-                    extractor.set_params(**best_hyperparams['extractor_params'])
-                    logger.info(f"Applied tuned extractor hyperparameters for {ds_name}_{extractor_name}: {best_hyperparams['extractor_params']} (source: {best_hyperparams['source']})")
+                    # Sanitize hyperparameters before applying
+                    validated_params = _sanitize_extractor_hyperparameters(
+                        extractor, extractor_name, best_hyperparams['extractor_params']
+                    )
+                    
+                    if validated_params:
+                        extractor.set_params(**validated_params)
+                        extractor._hyperparams_applied = True  # Mark as applied
+                        logger.info(f"Applied tuned extractor hyperparameters for {ds_name}_{extractor_name}: {validated_params} (source: {best_hyperparams['source']})")
+                    else:
+                        logger.debug(f"No valid hyperparameters to apply for {ds_name}_{extractor_name}")
                 except Exception as e:
                     logger.warning(f"Failed to apply extractor hyperparameters for {ds_name}_{extractor_name}: {str(e)}")
+                    logger.debug(f"Original params: {best_hyperparams['extractor_params']}")
             else:
                 logger.debug(f"No extractor hyperparameters found for {ds_name}_{extractor_name}")
         
@@ -2916,7 +3199,30 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
         return result
         
     except Exception as e:
-        logger.warning(f"Extractor classification failed for {ds_name}: {str(e)}")
+        error_msg = str(e)
+        logger.warning(f"Extractor classification failed for {ds_name}: {error_msg}")
+        
+        # Special handling for KPCA zero-size array error
+        if "zero-size array to reduction operation maximum" in error_msg and 'KernelPCA' in extractor.__class__.__name__:
+            logger.warning("KPCA encountered zero-size eigenvalue array - falling back to PCA")
+            try:
+                # Fall back to regular PCA with conservative components
+                from sklearn.decomposition import PCA
+                safe_components = min(n_components // 2, X.shape[0] - 2, X.shape[1] // 4, 8)
+                safe_components = max(1, safe_components)  # Ensure at least 1 component
+                
+                fallback_extractor = PCA(n_components=safe_components, random_state=42)
+                fallback_extractor.fit(X_arr, y_arr) if requires_y else fallback_extractor.fit(X_arr)
+                X_transformed = fallback_extractor.transform(X_arr)
+                
+                logger.info(f"KPCA fallback to PCA successful with {safe_components} components")
+                result = (fallback_extractor, X_transformed)
+                _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
+                return result
+                
+            except Exception as fallback_error:
+                logger.error(f"KPCA fallback also failed: {fallback_error}")
+        
         return None, None
 
 def transform_extractor_regression(X, fitted_extractor):
@@ -3212,47 +3518,108 @@ def transform_selector_classification(X, selected_features):
 
 def build_extractor(name):
     """
-    Build feature extractor by name for tuner_halving.py compatibility.
-   
+    Build an extractor based on its name.
+    
     Parameters
     ----------
     name : str
-        Name of the extractor to build
-       
+        Name of the extractor
+        
     Returns
     -------
-    extractor object
-        Configured feature extractor instance
+    object
+        Configured extractor object
     """
-    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+    # Check if the name is valid
+    regression_extractors = get_regression_extractors()
+    classification_extractors = get_classification_extractors()
     
-    _EXTRACTOR = {
-        # CURRENT IMPLEMENTATION - Specified extractors only
-        "PCA": lambda: PCA(random_state=42),
-        "KPCA": lambda: KernelPCA(kernel="rbf", random_state=42, n_jobs=-1, gamma='scale'),
-        "FA": lambda: FactorAnalysis(random_state=42, max_iter=5000, tol=1e-3),
-        "PLS": lambda: PLSRegression(n_components=8, max_iter=500, tol=1e-3),
-        "KPLS": lambda: KernelPLSRegression(
-            n_components=8,
-            kernel="rbf",
-            gamma="auto",
-            max_iter=500,
-            random_state=42
-        ),
-        "SparsePLS": lambda: SparsePLS(n_components=8, alpha=0.1, max_iter=500, scale=True),
-        "LDA": lambda: LDA(),
-        "PLS-DA": lambda: PLSDiscriminantAnalysis(
-            n_components=5,
-            max_iter=1000,
-            tol=1e-6,
-            scale=True
-        ),
-    }
-   
-    if name not in _EXTRACTOR:
-        raise ValueError(f"Unknown extractor: {name}. Available: {list(_EXTRACTOR.keys())}")
-   
-    return _EXTRACTOR[name]()
+    if name in regression_extractors:
+        return regression_extractors[name]
+    elif name in classification_extractors:
+        return classification_extractors[name]
+    else:
+        raise ValueError(f"Unknown extractor: {name}")
+
+def build_selector(name, n_features=16):
+    """
+    Build a feature selector based on its name and number of features.
+    
+    Parameters
+    ----------
+    name : str
+        Name of the selector (e.g., 'ElasticNetFS', 'RFImportance', etc.)
+    n_features : int
+        Number of features to select
+        
+    Returns
+    -------
+    object
+        Configured selector object
+    """
+    from sklearn.feature_selection import SelectKBest, f_regression, f_classif, SelectFromModel
+    from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+    from sklearn.linear_model import ElasticNet, Lasso, LogisticRegression
+    
+    # Get available selectors
+    regression_selectors = get_regression_selectors()
+    classification_selectors = get_classification_selectors()
+    
+    # Determine if this is a regression or classification selector
+    if name in regression_selectors:
+        selector_code = regression_selectors[name]
+        task = "regression"
+    elif name in classification_selectors:
+        selector_code = classification_selectors[name]
+        task = "classification"
+    else:
+        raise ValueError(f"Unknown selector: {name}")
+    
+    # Create selector object based on the selector code
+    if selector_code == "f_regression":
+        return SelectKBest(score_func=f_regression, k=n_features)
+    
+    elif selector_code == "f_classification":
+        return SelectKBest(score_func=f_classif, k=n_features)
+    
+    elif selector_code == "elasticnet_regression":
+        # ElasticNet-based feature selection for regression
+        base_estimator = ElasticNet(random_state=42, max_iter=2000)
+        return SelectFromModel(base_estimator, max_features=n_features)
+    
+    elif selector_code == "elasticnet_classification":
+        # ElasticNet-based feature selection for classification
+        base_estimator = LogisticRegression(penalty='elasticnet', solver='saga', l1_ratio=0.5, 
+                                          random_state=42, max_iter=2000)
+        return SelectFromModel(base_estimator, max_features=n_features)
+    
+    elif selector_code == "random_forest_regression":
+        # Random Forest importance-based selection for regression
+        base_estimator = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        return SelectFromModel(base_estimator, max_features=n_features)
+    
+    elif selector_code == "random_forest_classification":
+        # Random Forest importance-based selection for classification
+        base_estimator = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        return SelectFromModel(base_estimator, max_features=n_features)
+    
+    elif selector_code == "lasso_regression":
+        # LASSO-based feature selection for regression
+        base_estimator = Lasso(random_state=42, max_iter=2000)
+        return SelectFromModel(base_estimator, max_features=n_features)
+    
+    elif selector_code == "lasso_classification":
+        # L1-regularized logistic regression for classification
+        base_estimator = LogisticRegression(penalty='l1', solver='liblinear', random_state=42, max_iter=2000)
+        return SelectFromModel(base_estimator, max_features=n_features)
+    
+    else:
+        # Fallback to univariate selection
+        if task == "regression":
+            return SelectKBest(score_func=f_regression, k=n_features)
+        else:
+            return SelectKBest(score_func=f_classif, k=n_features)
+
 def build_model(name, task):
     """
     Build ML model by name and task for tuner_halving.py compatibility.
@@ -3281,7 +3648,8 @@ def build_model(name, task):
         "ElasticNet": lambda: SelectionByCyclicCoordinateDescent(
             l1_ratio=0.5,
             cv=5,
-            random_state=42
+            random_state=42,
+            task_type="regression"  # Always regression for ElasticNet
         ),
         "RandomForestRegressor": lambda: OptimizedExtraTreesRegressor(
             n_estimators=200,

@@ -1,6 +1,8 @@
 """
 Enhanced Halving tuner: finds best hyper-params for any dataset with 4-phase preprocessing
-and saves them to hp_best/<dataset>_<extractor>_<model>.json
+Supports two approaches:
+1. Extractor approach: Tunes extractor + model parameters -> hp_best/<dataset>_<extractor>_<model>_<fusion>.json
+2. Selector approach: Tunes model parameters with fixed feature selection -> hp_best/<dataset>_<model>_<fusion>_<n_features>f.json
 
 Features:
 - 4-Phase Enhanced Pipeline Integration (preprocessing before tuning)
@@ -14,7 +16,7 @@ Features:
 """
 
 import json, pathlib, argparse, numpy as np, joblib, time, sys, subprocess, warnings
-import logging, gc, signal
+import logging, gc, signal, pickle, hashlib
 from datetime import datetime
 from itertools import product
 from sklearn.experimental import enable_halving_search_cv  # Enable experimental feature
@@ -26,14 +28,19 @@ from data_io import load_dataset_for_tuner
 # Optimized loader for already processed data
 def load_dataset_for_tuner_optimized(dataset_name, task=None):
     """
-    Load dataset with FULL 4-phase preprocessing AND fusion for tuner_halving.py.
+    Load dataset with FULL 4-phase preprocessing for tuner_halving.py in FEATURE-FIRST format.
     
-    This loads the SAME fused and processed data that the main pipeline uses,
-    resulting in much smaller feature counts for efficient hyperparameter tuning.
+    This loads preprocessed modalities SEPARATELY (not fused) to match the main pipeline's 
+    feature-first architecture where:
+    1. Each modality is preprocessed separately (miRNA->150, exp->1500, methy->2000 features)
+    2. Feature extraction/selection is applied to each modality separately
+    3. Fusion is applied to processed features
+    4. Model training on fused features
     
-    Expected feature counts after 4-phase + fusion:
-    - Breast: ~142 features per modality → ~200-500 fused features (vs 20,000+)
-    - Colon: ~142 features per modality → ~200-500 fused features
+    Expected feature counts after 4-phase preprocessing:
+    - miRNA: 377 -> 150 features (aggressive dimensionality reduction)
+- Gene Expression: 4987 -> 1500 features (aggressive dimensionality reduction)
+- Methylation: 3956 -> 2000 features (aggressive dimensionality reduction)
     
     Parameters
     ----------
@@ -44,8 +51,8 @@ def load_dataset_for_tuner_optimized(dataset_name, task=None):
         
     Returns
     -------
-    Tuple[np.ndarray, np.ndarray]
-        Fully processed and fused features (X) and targets (y) as numpy arrays
+    Tuple[Dict[str, np.ndarray], np.ndarray]
+        Preprocessed modalities as separate arrays (for feature-first pipeline) and targets
     """
     import numpy as np
     from config import DatasetConfig
@@ -53,7 +60,7 @@ def load_dataset_for_tuner_optimized(dataset_name, task=None):
     import logging
     
     logger = logging.getLogger(__name__)
-    logger.info(f"Loading dataset {dataset_name} with 4-phase preprocessing AND fusion (task: {task})")
+    logger.info(f"Loading dataset {dataset_name} with 4-phase preprocessing for FEATURE-FIRST pipeline (task: {task})")
     
     # Determine task type
     if task is None:
@@ -88,7 +95,7 @@ def load_dataset_for_tuner_optimized(dataset_name, task=None):
     
     # Load raw dataset first
     from data_io import load_dataset
-    modalities_data, y_series, common_ids = load_dataset(
+    modalities_data, y_series, common_ids, is_regression = load_dataset(
         ds_name=dataset_name.lower(),
         modalities=modality_short_names,
         outcome_col=config['outcome_col'],
@@ -96,6 +103,8 @@ def load_dataset_for_tuner_optimized(dataset_name, task=None):
         parallel=True,
         use_cache=True
     )
+    
+    logger.info(f"Load dataset result: modalities_data={modalities_data is not None}, y_series={y_series is not None}, is_regression={is_regression}")
     
     if not modalities_data or y_series is None:
         raise ValueError(f"Failed to load data for {dataset_name}")
@@ -110,67 +119,63 @@ def load_dataset_for_tuner_optimized(dataset_name, task=None):
         modality_data_dict[modality_name] = (X_modality, common_ids)
         logger.info(f"  Raw {modality_name} shape: {X_modality.shape}")
     
-    # Apply 4-phase enhanced preprocessing pipeline WITH fusion
-    fusion_method = "snf" if task_type == "classification" else "early_fusion_pca"  # CURRENT IMPLEMENTATION
-    logger.info(f"Applying 4-phase preprocessing with {fusion_method} fusion...")
+    # Apply 4-phase enhanced preprocessing pipeline WITHOUT fusion (feature-first approach)
+    # NOTE: We don't want fusion here - we want separate preprocessed modalities
+    logger.info(f"Applying 4-phase preprocessing WITHOUT fusion for feature-first architecture...")
     
     processed_modalities, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipeline(
         modality_data_dict=modality_data_dict,
         y=y_series.values,
-        fusion_method=fusion_method,
+        fusion_method="average",  # Any fusion method - feature_first_order=True returns separate modalities
         task_type=task_type,
         dataset_name=dataset_name,
         enable_early_quality_check=True,
-        enable_fusion_aware_order=True,
+        enable_feature_first_order=True,  # CRITICAL: This returns separate modalities (not fused)
         enable_centralized_missing_data=True,
         enable_coordinated_validation=True
     )
     
     logger.info(f"4-phase preprocessing completed with quality score: {pipeline_metadata.get('quality_score', 'N/A')}")
+    logger.info(f"Preprocessed modalities (separate arrays for feature-first):")
     
-    # The processed_modalities should now be fused and ready for tuning
-    # Each modality should have been processed and potentially fused together
-    if len(processed_modalities) == 1:
-        # Single fused modality
-        modality_name = list(processed_modalities.keys())[0]
-        X = processed_modalities[modality_name]
-        logger.info(f"Single fused modality: {modality_name} shape {X.shape}")
-    else:
-        # Multiple processed modalities - concatenate them (they should be much smaller now)
-        X_parts = []
-        modality_info = []
+    # The processed_modalities should now contain separate preprocessed modalities
+    # with the target feature counts applied: miRNA->150, exp->1500, methy->2000
+    for modality_name, modality_array in processed_modalities.items():
+        logger.info(f"  Preprocessed {modality_name} shape: {modality_array.shape}")
         
-        for modality_name, modality_array in processed_modalities.items():
-            X_parts.append(modality_array)
-            modality_info.append(f"{modality_name}: {modality_array.shape[1]} features")
-            logger.info(f"  Processed {modality_name} shape: {modality_array.shape}")
+        # Validate expected feature counts
+        expected_features = {
+            'mirna': 150,
+            'exp': 1500, 
+            'methy': 2000
+        }
         
-        # Concatenate horizontally (samples x all_processed_features)
-        X = np.concatenate(X_parts, axis=1)
-        logger.info(f"Concatenated processed modalities: {', '.join(modality_info)}")
+        if modality_name in expected_features:
+            actual_features = modality_array.shape[1]
+            expected = expected_features[modality_name]
+            if actual_features > expected * 1.5:  # Allow some tolerance
+                logger.warning(f"  {modality_name}: Expected ~{expected} features, got {actual_features}")
+            else:
+                logger.info(f"  {modality_name}: Feature count within expected range (~{expected})")
     
     y = y_aligned
     
-    logger.info(f"Dataset {dataset_name} loaded with 4-phase preprocessing + fusion:")
-    logger.info(f"  Final X shape: {X.shape}")
-    logger.info(f"  Final y shape: {y.shape}")
-    logger.info(f"  Fusion method: {fusion_method}")
+    logger.info(f"Dataset {dataset_name} loaded with 4-phase preprocessing for feature-first pipeline:")
+    logger.info(f"  Preprocessed modalities: {list(processed_modalities.keys())}")
+    logger.info(f"  Total samples: {len(y)}")
     logger.info(f"  Quality score: {pipeline_metadata.get('quality_score', 'N/A')}")
     
-    # Calculate original feature count
-    original_features = sum(arr[0].shape[1] for arr in modality_data_dict.values())
-    logger.info(f"  Feature reduction: {original_features} → {X.shape[1]} features ({original_features - X.shape[1]} reduced)")
-    
     # Final validation
-    if np.any(np.isnan(X)) or np.any(np.isinf(X)):
-        logger.warning("Found NaN/Inf values in processed data, cleaning...")
-        X = np.nan_to_num(X, nan=0.0, posinf=1e6, neginf=-1e6)
+    for modality_name, X_mod in processed_modalities.items():
+        if np.any(np.isnan(X_mod)) or np.any(np.isinf(X_mod)):
+            logger.warning(f"Found NaN/Inf values in processed {modality_name}, cleaning...")
+            processed_modalities[modality_name] = np.nan_to_num(X_mod, nan=0.0, posinf=1e6, neginf=-1e6)
     
     if np.any(np.isnan(y)) or np.any(np.isinf(y)):
         logger.warning("Found NaN/Inf values in target, cleaning...")
         y = np.nan_to_num(y, nan=0.0, posinf=1e6, neginf=-1e6)
     
-    return X, y
+    return processed_modalities, y
 from samplers import safe_sampler
 from models import build_extractor, build_model
 from sklearn.preprocessing import PowerTransformer
@@ -208,6 +213,7 @@ warnings.filterwarnings('ignore',
 # Create directories
 HP_DIR = pathlib.Path("hp_best"); HP_DIR.mkdir(exist_ok=True)
 LOG_DIR = pathlib.Path("tuner_logs"); LOG_DIR.mkdir(exist_ok=True)
+CACHE_DIR = pathlib.Path("preprocessing_cache"); CACHE_DIR.mkdir(exist_ok=True)
 
 SEED   = 42
 N_ITER = 32          # candidates; Halving keeps ~⅓ each rung
@@ -218,8 +224,110 @@ SEARCH_TIMEOUT_MINUTES = 10  # Timeout for individual hyperparameter search
 # Minimum samples per fold for reliable metrics
 MIN_SAMPLES_PER_FOLD = 5
 
+# Preprocessing cache settings
+ENABLE_PREPROCESSING_CACHE = True
+CACHE_VERSION = "v1.0"  # Increment when preprocessing changes
+
 # Initialize a default logger for cases where logger is not available
 logger = logging.getLogger(__name__)
+
+# ------------- Preprocessing Cache System ----------------------
+def get_cache_key(dataset_name, task):
+    """Generate a unique cache key for dataset + task + preprocessing version."""
+    key_data = f"{dataset_name}_{task}_{CACHE_VERSION}"
+    return hashlib.md5(key_data.encode()).hexdigest()
+
+def save_preprocessing_cache(dataset_name, task, processed_modalities, y, sample_ids, baseline_mae):
+    """Save preprocessed data to cache."""
+    if not ENABLE_PREPROCESSING_CACHE:
+        return
+    
+    try:
+        cache_key = get_cache_key(dataset_name, task)
+        cache_file = CACHE_DIR / f"{cache_key}.pkl"
+        
+        cache_data = {
+            'dataset_name': dataset_name,
+            'task': task,
+            'processed_modalities': processed_modalities,
+            'y': y,
+            'sample_ids': sample_ids,
+            'baseline_mae': baseline_mae,
+            'timestamp': time.time(),
+            'cache_version': CACHE_VERSION
+        }
+        
+        with open(cache_file, 'wb') as f:
+            pickle.dump(cache_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        logger.info(f"Preprocessing cache saved: {cache_file}")
+        
+    except Exception as e:
+        logger.warning(f"Failed to save preprocessing cache: {e}")
+
+def load_preprocessing_cache(dataset_name, task):
+    """Load preprocessed data from cache if available."""
+    if not ENABLE_PREPROCESSING_CACHE:
+        return None
+    
+    try:
+        cache_key = get_cache_key(dataset_name, task)
+        cache_file = CACHE_DIR / f"{cache_key}.pkl"
+        
+        if not cache_file.exists():
+            return None
+        
+        with open(cache_file, 'rb') as f:
+            cache_data = pickle.load(f)
+        
+        # Validate cache version
+        if cache_data.get('cache_version') != CACHE_VERSION:
+            logger.info(f"Cache version mismatch, ignoring cache: {cache_file}")
+            return None
+        
+        # Check if cache is not too old (7 days)
+        cache_age = time.time() - cache_data.get('timestamp', 0)
+        if cache_age > 7 * 24 * 3600:  # 7 days
+            logger.info(f"Cache too old ({cache_age/3600:.1f}h), ignoring: {cache_file}")
+            return None
+        
+        logger.info(f"Preprocessing cache loaded: {cache_file}")
+        return cache_data
+        
+    except Exception as e:
+        logger.warning(f"Failed to load preprocessing cache: {e}")
+        return None
+
+def load_dataset_for_tuner_cached(dataset_name, task=None):
+    """
+    Load dataset with caching support to avoid redundant preprocessing.
+    
+    This function first checks if preprocessed data exists in cache.
+    If not, it runs the full preprocessing and caches the result.
+    """
+    # Try to load from cache first
+    cache_data = load_preprocessing_cache(dataset_name, task)
+    if cache_data is not None:
+        logger.info(f"Using cached preprocessing for {dataset_name} (task: {task})")
+        return (
+            cache_data['processed_modalities'],
+            cache_data['y'],
+            cache_data.get('sample_ids'),
+            cache_data.get('baseline_mae')
+        )
+    
+    # Cache miss - run full preprocessing
+    logger.info(f"Cache miss for {dataset_name} (task: {task}), running full preprocessing...")
+    processed_modalities, y = load_dataset_for_tuner_optimized(dataset_name, task)
+    
+    # Calculate baseline MAE and sample IDs
+    sample_ids = list(range(len(y)))  # Simple sample IDs
+    baseline_mae = np.mean(np.abs(y - np.mean(y))) if len(y) > 0 else 0.0
+    
+    # Save to cache for future use
+    save_preprocessing_cache(dataset_name, task, processed_modalities, y, sample_ids, baseline_mae)
+    
+    return processed_modalities, y, sample_ids, baseline_mae
 
 # Setup comprehensive logging
 def setup_logging(dataset_name=None, extractor=None, model=None, log_level=logging.INFO):
@@ -338,6 +446,9 @@ def log_error_with_context(logger, error, context=None):
     logger.error(traceback.format_exc())
     logger.error("=" * 80)
 
+# Fixed feature counts for main pipeline integration
+FEATURE_COUNTS = [8, 16, 32]  # Fixed feature selection counts from main pipeline
+
 # Available datasets and their tasks (from config.py)
 DATASET_INFO = {
     # Regression datasets (survival/continuous outcomes) 
@@ -354,10 +465,13 @@ DATASET_INFO = {
     "Ovarian": "clf"   # clinical_stage
 }
 
-# Available extractors and models by task (aligned with main pipeline)
+# Available extractors, selectors, and models by task (aligned with main pipeline)
 REGRESSION_EXTRACTORS = ["PCA", "KPCA", "FA", "PLS", "KPLS", "SparsePLS"]  # 6 extractors - CURRENT IMPLEMENTATION
+REGRESSION_SELECTORS = ["ElasticNetFS", "RFImportance", "VarianceFTest", "LASSO", "f_regressionFS"]  # 5 selectors - OPTION B IMPLEMENTATION
 REGRESSION_MODELS = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]  # 3 models - CURRENT IMPLEMENTATION
-CLASSIFICATION_EXTRACTORS = ["PCA", "KPCA", "FA", "LDA", "PLS-DA", "SparsePLS"]  # 6 extractors - CURRENT IMPLEMENTATION  
+
+CLASSIFICATION_EXTRACTORS = ["PCA", "KPCA", "FA", "LDA", "PLS-DA", "SparsePLS"]  # 6 extractors - CURRENT IMPLEMENTATION
+CLASSIFICATION_SELECTORS = ["ElasticNetFS", "RFImportance", "VarianceFTest", "LASSO", "LogisticL1"]  # 5 selectors - OPTION B IMPLEMENTATION  
 CLASSIFICATION_MODELS = ["LogisticRegression", "RandomForestClassifier", "SVC"]  # 3 models - CURRENT IMPLEMENTATION
 
 # ------------- Dataset type detection ----------------------
@@ -382,23 +496,18 @@ def detect_dataset_task(dataset):
     # Default to regression if uncertain
     return "reg"
 
-# ------------- Enhanced search space for 4-phase preprocessed data ----------------------------------
-def param_space(extr, mdl, X_shape=None):
+# ------------- Parameter space functions for both approaches ----------------------------------
+def param_space_extractors(extr, mdl, X_shape=None):
     """
-    Ultra-conservative parameter space for Windows resource management.
+    Parameter space for EXTRACTOR-based tuning (original approach).
     
-    Since data is now fully preprocessed with:
-    - Phase 1: Early Data Quality Assessment
-    - Phase 2: Fusion-Aware Preprocessing  
-    - Phase 3: Centralized Missing Data Management
-    - Phase 4: Coordinated Validation Framework
-    
-    We use ultra-conservative parameter ranges to prevent Windows system crashes.
+    Tunes both extractor parameters (n_components, etc.) and model parameters.
+    This is for the traditional feature extraction pipeline.
     
     Parameters
     ----------
     extr : str
-        Extractor name
+        Extractor name (PCA, KPCA, FA, etc.)
     mdl : str
         Model name
     X_shape : tuple, optional
@@ -406,175 +515,415 @@ def param_space(extr, mdl, X_shape=None):
     """
     p = {}
     
-    # No more high-risk restrictions needed due to proper preprocessing reducing features dramatically
-    is_high_risk = False  # All combinations are now safe with 700-feature data instead of 20,000+
+    # Feature extraction parameter tuning (original approach)
+    n_samples = X_shape[0] if X_shape is not None else 100
+    n_features = X_shape[1] if X_shape is not None else 3650
     
-    # Adaptive component selection based on actual data dimensions
-    if X_shape is not None:
-        n_samples, n_features = X_shape
-        
-        # Calculate cross-validation fold size for safety constraints
-        cv_fold_size = n_samples // CV_INNER
-        
-        # Reasonable component ranges now that we have properly preprocessed data (~700 features)
-        # Much more aggressive than before since feature count is 96.5% smaller
-        if n_samples >= 150:
-            # Good range for larger datasets: [4, 8, 16, 32]
-            base_components = [4, 8, 16, 32]
-        else:
-            # Standard range for smaller datasets: [2, 4, 8, 16]  
-            base_components = [2, 4, 8, 16]
-        
-        # Apply safety constraints while maintaining reasonable minimums
-        # For KPCA and kernel methods, be more conservative due to numerical issues
-        min_cv_samples = max(1, cv_fold_size // 2)  # More conservative for stability
-        max_safe_components = min(min_cv_samples - 1, n_features // 2, 32)  # More conservative cap
-        
-        # Special handling for kernel methods that are prone to numerical issues
-        if extr in {"KPCA", "KPLS"}:
-            # Be extra conservative with kernel methods
-            max_safe_components = min(max_safe_components, cv_fold_size // 3, 16)
-            
-        # Filter components based on constraints, but keep at least one valid option
-        component_options = [c for c in base_components if c <= max_safe_components]
-        
-        # Fallback logic - ensure we always have at least one reasonable option
-        if not component_options:
-            if max_safe_components >= 4:
-                component_options = [4]
-            elif max_safe_components >= 2:
-                component_options = [2]
-            else:
-                component_options = [1]  # Last resort for very small datasets
-        
-        # Add smaller component as fallback only if needed
-        if component_options and min(component_options) > 4 and max_safe_components >= 4:
-            component_options = [4] + component_options
-            
-        # Log component selection reasoning
-        current_logger = logging.getLogger(__name__)
-        current_logger.debug(f"Component selection for {extr}: samples={n_samples}, features={n_features}, "
-                    f"cv_fold_size={cv_fold_size}, max_safe={max_safe_components}, "
-                    f"selected={component_options}")
+    current_logger = logging.getLogger(__name__)
+    current_logger.debug(f"Extractor+Model parameter space: {extr}+{mdl}, samples={n_samples}, features={n_features}")
+    
+    # Calculate cross-validation fold size for safety constraints
+    cv_fold_size = n_samples // CV_INNER
+    
+    # Component ranges adapted for datasets and cross-validation stability
+    if n_samples >= 150:
+        base_components = [8, 16, 32, 64, 128]
+    elif n_samples >= 100:
+        base_components = [4, 8, 16, 32, 64]
+    elif n_samples >= 50:
+        base_components = [2, 4, 8, 16, 32]
+    elif n_samples >= 20:
+        base_components = [1, 2, 4, 8]
     else:
-        # Default ranges when no shape provided - use reasonable baseline
-        component_options = [2, 4, 8, 16]  # Standard range for preprocessed data
+        base_components = [1, 2]
     
-    # Extractor parameters - adaptive for preprocessed data
-    # Note: Parameters now have extractor__extractor__ prefix due to SafeExtractorWrapper
+    # Safety constraints for cross-validation
+    min_cv_samples = max(3, cv_fold_size // 2)
+    max_safe_components = min(
+        min_cv_samples - 1,
+        n_features // 2,
+        64
+    )
+    
+    if n_samples < 30:
+        max_safe_components = min(max_safe_components, n_samples // 4, 8)
+    
+    # Special handling for kernel methods
+    if extr in {"KPCA", "KPLS"}:
+        max_safe_components = min(max_safe_components, cv_fold_size // 2, 64)
+    
+    # Filter components based on constraints
+    component_options = [c for c in base_components if c <= max_safe_components]
+    
+    if not component_options:
+        if max_safe_components >= 8:
+            component_options = [8]
+        elif max_safe_components >= 4:
+            component_options = [4]
+        elif max_safe_components >= 2:
+            component_options = [2]
+        else:
+            component_options = [1]
+    
+    # Add smaller component as fallback
+    if component_options and min(component_options) > 8 and max_safe_components >= 8:
+        component_options = [8] + component_options
+    
+    # Extractor parameters (with extractor__extractor__ prefix due to SafeExtractorWrapper)
     if extr in {"PCA","KPCA","KPLS","PLS","SparsePLS","PLS-DA","Sparse PLS-DA"}:
         p["extractor__extractor__n_components"] = component_options
     
     if extr in {"KPCA","KPLS"}:
-        # Conservative gamma range for kernel methods to avoid numerical issues
-        # Avoid very small gamma values that can cause singular matrices
-        if X_shape is not None:
-            n_samples = X_shape[0]
-            # Scale gamma based on data size - smaller datasets need larger gamma
-            if n_samples < 100:
-                # For small datasets, use more conservative gamma range
-                p["extractor__extractor__gamma"] = [0.01, 0.1, 1.0]
-            else:
-                # For larger datasets, can use wider range but still conservative
-                p["extractor__extractor__gamma"] = [0.001, 0.01, 0.1, 1.0]
-        else:
-            # Default conservative range
+        if n_samples < 100:
             p["extractor__extractor__gamma"] = [0.01, 0.1, 1.0]
+        else:
+            p["extractor__extractor__gamma"] = [0.001, 0.01, 0.1, 1.0]
     
     if extr in {"SparsePLS","Sparse PLS-DA"}:
-        # Conservative alpha values for sparse methods to reduce resource usage
-        p["extractor__extractor__alpha"] = np.logspace(-1, 0, 3)  # Further reduced: 3 values instead of 4
+        p["extractor__extractor__alpha"] = np.logspace(-1, 0, 3)
     
-    # Reasonable parameters for FA with preprocessed data
     if extr == "FA":
         p["extractor__extractor__n_components"] = component_options
-        p["extractor__extractor__max_iter"] = [1000, 3000]  # Restored to 2 options
-        p["extractor__extractor__tol"] = [1e-3, 1e-2]  # Restored to 2 options
+        p["extractor__extractor__max_iter"] = [1000, 3000]
+        p["extractor__extractor__tol"] = [1e-3, 1e-2]
     
-    # LDA parameters with compatibility fixes for preprocessed data
     if extr == "LDA":
-        # Use lsqr solver which supports shrinkage for better hyperparameter exploration
-        p["extractor__extractor__solver"] = ["lsqr", "svd"]  # Both solvers
-        p["extractor__extractor__shrinkage"] = [None, "auto"]  # Shrinkage options (only with lsqr)
+        p["extractor__extractor__solver"] = ["lsqr", "svd", "eigen"]
+        p["extractor__extractor__shrinkage"] = [None, "auto"]
     
-    # Model parameters - enhanced for preprocessed data
+    # Model parameters for extractor-based approach
+    _add_model_parameters(p, mdl, n_samples)
+    
+    return p
+
+def param_space_selectors(selector, mdl, n_features=None, X_shape=None):
+    """
+    Parameter space for SELECTOR-based tuning (Option B implementation).
+    
+    Optimizes model hyperparameters separately for each selector type, recognizing that
+    different selectors produce features with different statistical properties.
+    
+    Parameters
+    ----------
+    selector : str
+        Selector name (ElasticNetFS, RFImportance, VarianceFTest, LASSO, f_regressionFS/LogisticL1)
+    mdl : str
+        Model name
+    n_features : int, optional
+        Number of features after selection (8, 16, or 32)
+    X_shape : tuple, optional
+        Shape of the data (n_samples, total_features_before_selection)
+    """
+    p = {}
+    
+    # Get sample size for adaptive parameter selection
+    n_samples = X_shape[0] if X_shape is not None else 100
+    effective_features = n_features if n_features is not None else 16
+    
+    current_logger = logging.getLogger(__name__)
+    current_logger.debug(f"Selector+Model parameter space: {selector}+{mdl}, samples={n_samples}, selected_features={effective_features}")
+    
+    # NOTE: Feature selection count is fixed, but model hyperparameters are optimized
+    # separately for each selector type due to different feature characteristics
+    
+    # Model parameters for selector-based approach (optimized for selector-specific feature properties)
+    _add_model_parameters_for_selectors(p, selector, mdl, n_samples, effective_features)
+    
+    return p
+
+def _add_model_parameters(p, mdl, n_samples):
+    """Add model parameters for extractor-based tuning (traditional approach)."""
+    # Model parameters for traditional feature extraction pipeline (higher dimensional features)
+    
     if mdl == "RandomForestRegressor":
-        # RandomForestRegressor now uses OptimizedExtraTreesRegressor
-        if X_shape is not None and X_shape[0] < 50:  # Small sample size
+        # Optimized RandomForest for faster tuning while maintaining performance
+        # Removed slowest combinations: n_estimators=500, max_depth=None/20
+        if n_samples < 50:
             p.update({
-                "model__n_estimators": [50, 100, 150],  # Fewer estimators for small data
-                "model__max_features": ["sqrt", "log2", 0.5],  # Feature sampling options
-                "model__bootstrap": [False, True],  # Extra Trees typically uses False
-                "model__min_samples_split": [2, 5, 10],  # Conservative splits
-                "model__min_samples_leaf": [1, 2, 3],  # Prevent overfitting
-                "model__max_depth": [3, 5, None],  # Shallow to moderate depth
+                "model__n_estimators": [50, 100, 200],  # Reduced max estimators
+                "model__max_features": ["sqrt", "log2", 0.3, 0.5],
+                "model__bootstrap": [True, False],
+                "model__min_samples_split": [2, 5, 10],
+                "model__min_samples_leaf": [1, 2, 3],
+                "model__max_depth": [10, 15, 20],  # Removed None (unlimited depth)
             })
         else:
             p.update({
-                "model__n_estimators": [100, 200, 300],  # More estimators for larger data
-                "model__max_features": ["sqrt", "log2", 0.3, 0.5],  # More feature sampling options
-                "model__bootstrap": [False, True],  # Extra Trees typically uses False
-                "model__min_samples_split": [2, 5, 10],  # Various split options
-                "model__min_samples_leaf": [1, 2],  # Less restrictive for larger data
-                "model__max_depth": [None, 10, 15],  # Deeper trees for larger data
+                "model__n_estimators": [100, 200, 300],  # Reduced from [200, 300, 500]
+                "model__max_features": ["sqrt", "log2", 0.2, 0.3, 0.5],
+                "model__bootstrap": [True, False],
+                "model__min_samples_split": [2, 5, 10, 15],
+                "model__min_samples_leaf": [1, 2, 3],
+                "model__max_depth": [10, 15, 20],  # Removed None (unlimited depth)
             })
     
     if mdl == "RandomForestClassifier":
-        # Classification RandomForest (unchanged)
-        if X_shape is not None and X_shape[0] < 50:  # Small sample size
+        # Optimized RandomForest classification for faster tuning while maintaining performance
+        # Removed slowest combinations: n_estimators=500, max_depth=None
+        if n_samples < 50:
             p.update({
-                "model__n_estimators": [50, 100],  # Fewer estimators for small data
-                "model__max_depth": [None, 3],  # Shallower trees
-                "model__min_samples_leaf": [1, 2],  # Less restrictive
-                "model__min_samples_split": [2],  # Less restrictive
-                "model__max_features": ["sqrt"]  # Simple feature sampling
+                "model__n_estimators": [50, 100, 200],  # Reduced max estimators
+                "model__max_depth": [5, 10, 15],  # Removed None (unlimited depth)
+                "model__min_samples_leaf": [1, 2, 3],
+                "model__min_samples_split": [2, 5],
+                "model__max_features": ["sqrt", "log2", 0.5],
+                "model__class_weight": [None, "balanced"]
             })
         else:
             p.update({
-                "model__n_estimators": [100, 200],  # Restored to 2 options
-                "model__max_depth": [None, 5, 10],  # Restored to 3 options
-                "model__min_samples_leaf": [1, 2],  # Restored to 2 options
-                "model__min_samples_split": [2, 5],  # Restored to 2 options  
-                "model__max_features": ["sqrt", "log2"]  # Restored to 2 options
+                "model__n_estimators": [100, 200, 300],  # Reduced from [200, 300, 500]
+                "model__max_depth": [10, 15, 20],  # Removed None (unlimited depth)
+                "model__min_samples_leaf": [1, 2, 3],
+                "model__min_samples_split": [2, 5, 10],
+                "model__max_features": ["sqrt", "log2", 0.3, 0.5],
+                "model__class_weight": [None, "balanced"]
             })
     
-    if mdl in {"ElasticNet"}:
-        # ElasticNet now uses SelectionByCyclicCoordinateDescent with automatic alpha search
+    if mdl == "ElasticNet":
+        # Traditional ElasticNet for extracted features
         p.update({
-            "model__l1_ratio": np.linspace(0.1, 0.9, 5),  # L1/L2 mixing parameter
-            "model__cv": [3, 5],  # Cross-validation folds for alpha selection
-            "model__n_alphas": [50, 100],  # Number of alphas to try
-            "model__eps": [1e-3, 1e-4],  # Alpha grid spacing
-            "model__max_iter": [1000, 2000],  # Maximum iterations
+            "model__l1_ratio": np.linspace(0.05, 0.95, 7),
+            "model__cv": [3, 5, 7],
+            "model__n_alphas": [50, 100, 200],
+            "model__eps": [1e-4, 1e-5],
+            "model__max_iter": [1000, 2000, 3000],
         })
     
     if mdl == "SVC":
-        # Reasonable SVC parameters now that we have properly preprocessed data
+        # Traditional SVC for extracted features
         p.update({
-            "model__C": np.logspace(-1, 1, 4),  # Restored to 4 C values  
-            "model__gamma": np.logspace(-3, 0, 4),  # Restored to 4 gamma values
-            "model__kernel": ["rbf", "linear"]  # Both kernels since data is much smaller
+            "model__C": np.logspace(-2, 2, 6),
+            "model__gamma": np.logspace(-4, 1, 6),
+            "model__kernel": ["rbf", "linear", "poly"],
+            "model__class_weight": [None, "balanced"]
         })
     
-    # Enhanced parameters for LinearRegression (now RobustLinearRegressor)
     if mdl == "LinearRegression":
+        # Traditional robust linear regression
         p.update({
-            "model__method": ["huber", "ransac"],  # Robust regression methods
-            "model__epsilon": [1.35, 1.5, 2.0],  # Huber parameter (for huber method)
-            "model__alpha": [0.0001, 0.001, 0.01],  # Regularization parameter
-            "model__max_iter": [1000, 2000],  # Maximum iterations
+            "model__method": ["huber", "ransac", "theil_sen"],
+            "model__epsilon": [1.2, 1.35, 1.5, 2.0],
+            "model__alpha": [0.00001, 0.0001, 0.001, 0.01, 0.1],
+            "model__max_iter": [1000, 2000, 3000],
         })
-        # Remove positive constraint for small datasets as it can be too restrictive
     
-    # Enhanced parameters for LogisticRegression
     if mdl == "LogisticRegression":
+        # Traditional logistic regression for extracted features with compatible solver/penalty combinations
         p.update({
-            "model__C": np.logspace(-1, 1, 4),  # Smaller C range
-            "model__penalty": ["l1", "l2"],  # Stable penalties
-            "model__solver": ["liblinear", "saga"],  # Stable solvers
-            "model__max_iter": [1000, 2000],  # Sufficient iterations
-            "model__class_weight": [None, "balanced"]  # Class weighting
+            "model__C": np.logspace(-2, 2, 6),
+            "model__penalty": ["l1", "l2"],  # Remove elasticnet to avoid solver conflicts
+            "model__solver": ["liblinear", "saga"],  # Remove lbfgs to avoid elasticnet conflicts
+            "model__max_iter": [1000, 2000, 3000],
+            "model__class_weight": [None, "balanced"]
         })
+
+def _add_model_parameters_for_selectors(p, selector, mdl, n_samples, n_features):
+    """Add model parameters for selector-based tuning (optimized for selector-specific feature properties)."""
+    # Model parameters optimized for low-dimensional selected features [8, 16, 32]
+    # Different selectors produce features with different statistical properties:
+    # - ElasticNetFS: Correlated features with L1+L2 regularization
+    # - RFImportance: Interaction-rich features from tree splits
+    # - VarianceFTest: Univariately significant features
+    # - LASSO: Sparse, uncorrelated features
+    # - f_regressionFS/LogisticL1: Linearly predictive features
+    
+    if mdl == "RandomForestRegressor":
+        # Optimized RandomForest for faster tuning with selected features
+        # Reduced n_estimators and removed max_depth=None for performance
+        base_params = {
+            "model__n_estimators": [100, 200, 300] if n_samples >= 50 else [50, 100, 200],  # Reduced
+            "model__bootstrap": [True, False],
+            "model__min_samples_split": [2, 5, 8] if n_samples >= 50 else [2, 3, 5],
+            "model__min_samples_leaf": [1, 2, 3] if n_samples >= 50 else [1, 2],
+            "model__max_depth": [8, 15, 20] if n_samples >= 50 else [5, 10, 15],  # Removed None
+        }
+        
+        # Selector-specific optimizations (performance-optimized)
+        if selector in ["RFImportance"]:
+            # RFImportance selects interaction-rich features - use more trees, deeper trees (but limited)
+            base_params.update({
+                "model__n_estimators": [200, 300, 400] if n_samples >= 50 else [100, 200, 300],  # Reduced
+                "model__max_features": [None, "sqrt", 0.8],  # Use more features for interactions
+                "model__max_depth": [15, 20, 25] if n_samples >= 50 else [10, 15, 20],  # Removed None
+            })
+        elif selector in ["ElasticNetFS"]:
+            # ElasticNetFS selects correlated features - reduce overfitting
+            base_params.update({
+                "model__max_features": ["sqrt", 0.5, 0.7],  # Reduce feature sampling
+                "model__min_samples_split": [5, 8, 10] if n_samples >= 50 else [3, 5, 8],
+                "model__min_samples_leaf": [2, 3, 4] if n_samples >= 50 else [2, 3],
+            })
+        elif selector in ["LASSO"]:
+            # LASSO selects sparse, uncorrelated features - can use all features
+            base_params.update({
+                "model__max_features": [None, "sqrt", 0.9],  # Use more features
+                "model__bootstrap": [False, True],  # Prefer no bootstrap for sparse features
+            })
+        elif selector in ["VarianceFTest", "f_regressionFS"]:
+            # Univariate selectors - standard RF settings
+            base_params.update({
+                "model__max_features": [None, "sqrt", 0.7, 0.9],
+            })
+        else:
+            # Default case
+            base_params.update({
+                "model__max_features": [None, "sqrt", 0.7, 0.9],
+            })
+        
+        p.update(base_params)
+    
+    if mdl == "RandomForestClassifier":
+        # Optimized RandomForest classification for faster tuning with selected features
+        # Reduced n_estimators and removed max_depth=None for performance
+        base_params = {
+            "model__n_estimators": [100, 200, 300] if n_samples >= 50 else [50, 100, 200],  # Reduced
+            "model__max_depth": [8, 12, 20] if n_samples >= 50 else [5, 8, 12],  # Removed None
+            "model__min_samples_leaf": [1, 2, 3],
+            "model__min_samples_split": [2, 5, 8] if n_samples >= 50 else [2, 3, 5],
+            "model__class_weight": [None, "balanced"]
+        }
+        
+        # Selector-specific optimizations (performance-optimized)
+        if selector in ["RFImportance"]:
+            # RFImportance selects interaction-rich features - use more trees, deeper trees (but limited)
+            base_params.update({
+                "model__n_estimators": [200, 300, 400] if n_samples >= 50 else [100, 200, 300],  # Reduced
+                "model__max_features": [None, "sqrt", 0.8],  # Use more features for interactions
+                "model__max_depth": [15, 20, 25] if n_samples >= 50 else [10, 15, 20],  # Removed None
+            })
+        elif selector in ["ElasticNetFS"]:
+            # ElasticNetFS selects correlated features - reduce overfitting
+            base_params.update({
+                "model__max_features": ["sqrt", 0.5, 0.7],  # Reduce feature sampling
+                "model__min_samples_split": [5, 8, 10] if n_samples >= 50 else [3, 5, 8],
+                "model__min_samples_leaf": [2, 3, 4] if n_samples >= 50 else [2, 3],
+                "model__class_weight": ["balanced"],  # Often needed for correlated features
+            })
+        elif selector in ["LASSO", "LogisticL1"]:
+            # LASSO/LogisticL1 selects sparse, uncorrelated features - can use all features
+            base_params.update({
+                "model__max_features": [None, "sqrt", 0.9],  # Use more features
+                "model__bootstrap": [False, True],  # Prefer no bootstrap for sparse features
+            })
+        elif selector in ["VarianceFTest"]:
+            # Univariate F-test selectors - standard RF settings
+            base_params.update({
+                "model__max_features": [None, "sqrt", 0.7, 0.9],
+            })
+        else:
+            # Default case
+            base_params.update({
+                "model__max_features": [None, "sqrt", 0.7, 0.9],
+            })
+        
+        p.update(base_params)
+    
+    if mdl == "ElasticNet":
+        # ElasticNet optimized for selector-specific feature characteristics
+        base_params = {
+            "model__cv": [3, 5, 7],
+            "model__n_alphas": [50, 100, 150],
+            "model__eps": [1e-4, 1e-3],
+            "model__max_iter": [1000, 2000, 3000],
+            "model__selection": ["cyclic", "random"]
+        }
+        
+        # Selector-specific optimizations
+        if selector in ["ElasticNetFS"]:
+            # ElasticNetFS already uses ElasticNet - use different l1_ratio ranges
+            base_params.update({
+                "model__l1_ratio": np.linspace(0.3, 0.9, 4),  # Prefer more L1 (different from selector)
+                "model__max_iter": [2000, 3000, 4000],  # More iterations for convergence
+            })
+        elif selector in ["LASSO"]:
+            # LASSO selects sparse features - use more L2 regularization for diversity
+            base_params.update({
+                "model__l1_ratio": np.linspace(0.1, 0.6, 4),  # More L2 for complementary regularization
+            })
+        elif selector in ["RFImportance"]:
+            # RFImportance selects interaction features - balanced L1/L2
+            base_params.update({
+                "model__l1_ratio": np.linspace(0.2, 0.8, 4),  # Balanced regularization
+            })
+        elif selector in ["VarianceFTest", "f_regressionFS"]:
+            # Univariate selectors - standard ElasticNet
+            base_params.update({
+                "model__l1_ratio": np.linspace(0.1, 0.9, 5),  # Full range
+            })
+        else:
+            # Default case
+            base_params.update({
+                "model__l1_ratio": np.linspace(0.1, 0.9, 5),
+            })
+        
+        p.update(base_params)
+    
+    if mdl == "SVC":
+        # SVC optimized for few selected features
+        p.update({
+            "model__C": np.logspace(-1, 2, 5),
+            "model__gamma": ["scale", "auto"] + list(np.logspace(-3, 1, 4)),
+            "model__kernel": ["rbf", "linear", "poly"],
+            "model__degree": [2, 3, 4],
+            "model__class_weight": [None, "balanced"]
+        })
+    
+    if mdl == "LinearRegression":
+        # Linear regression optimized for few selected features
+        p.update({
+            "model__method": ["huber", "ransac", "theil_sen"],
+            "model__epsilon": [1.1, 1.35, 1.5, 2.0],
+            "model__alpha": [0.0001, 0.001, 0.01],
+            "model__max_iter": [1000, 2000],
+            "model__random_state": [42]
+        })
+    
+    if mdl == "LogisticRegression":
+        # Logistic regression optimized for selector-specific feature characteristics
+        base_params = {
+            "model__max_iter": [1000, 2000, 3000],
+            "model__class_weight": [None, "balanced"],
+            "model__random_state": [42]
+        }
+        
+        # Selector-specific optimizations with compatible solver/penalty combinations
+        if selector in ["ElasticNetFS"]:
+            # ElasticNetFS selects correlated features - use L2 penalty to handle correlation
+            base_params.update({
+                "model__C": np.logspace(-1, 1, 4),  # Moderate regularization
+                "model__penalty": ["l2"],  # Only L2 to avoid solver conflicts
+                "model__solver": ["lbfgs"],  # Compatible with L2
+            })
+        elif selector in ["LASSO", "LogisticL1"]:
+            # LASSO/LogisticL1 selects sparse features - use different regularization
+            base_params.update({
+                "model__C": np.logspace(-1, 2, 5),  # Wider C range
+                "model__penalty": ["l2"],  # Only L2 to avoid solver conflicts
+                "model__solver": ["lbfgs"],  # Compatible with L2
+            })
+        elif selector in ["RFImportance"]:
+            # RFImportance selects interaction features - use compatible solver/penalty combinations
+            base_params.update({
+                "model__C": np.logspace(-1, 2, 5),
+                "model__penalty": ["l1", "l2"],  # Remove elasticnet to avoid solver conflicts
+                "model__solver": ["liblinear", "saga"],  # Compatible solvers
+            })
+        elif selector in ["VarianceFTest"]:
+            # Univariate F-test selectors - use compatible solver/penalty combinations
+            base_params.update({
+                "model__C": np.logspace(-1, 2, 5),
+                "model__penalty": ["l1", "l2"],  # Remove elasticnet to avoid solver conflicts
+                "model__solver": ["liblinear", "saga"],  # Compatible solvers
+            })
+        else:
+            # Default case - use compatible solver/penalty combinations
+            base_params.update({
+                "model__C": np.logspace(-1, 2, 5),
+                "model__penalty": ["l1", "l2"],  # Remove elasticnet to avoid solver conflicts
+                "model__solver": ["liblinear", "saga"],  # Compatible solvers
+            })
+        
+        p.update(base_params)
     
 
     
@@ -591,8 +940,8 @@ def count_parameter_combinations(param_dict):
     return total
 
 # ------------- subprocess isolation ----------------------
-def run_tuning_subprocess(dataset, task, extractor, model, logger=None):
-    """Run tuning for a single combination in subprocess with timeout and logging."""
+def run_tuning_subprocess_extractors(dataset, task, extractor, model, fusion_method="average", logger=None):
+    """Run extractor tuning for a single combination in subprocess with timeout and logging."""
     if logger is None:
         logger = logging.getLogger("tuner_session")
     
@@ -601,6 +950,7 @@ def run_tuning_subprocess(dataset, task, extractor, model, logger=None):
         "task": task,
         "extractor": extractor,
         "model": model,
+        "fusion_method": fusion_method,
         "timeout_minutes": TIMEOUT_MINUTES
     })
     
@@ -608,8 +958,10 @@ def run_tuning_subprocess(dataset, task, extractor, model, logger=None):
         sys.executable, __file__,
         "--dataset", dataset,
         "--task", task,
+        "--approach", "extractors",
         "--extractor", extractor,
         "--model", model,
+        "--fusion", fusion_method,
         "--single"  # Flag to indicate single combination mode
     ]
     
@@ -621,11 +973,11 @@ def run_tuning_subprocess(dataset, task, extractor, model, logger=None):
         elapsed = time.time() - start_time
         
         if result.returncode == 0:
-            logger.info(f"SUCCESS ({elapsed:.1f}s): {extractor} + {model}")
+            logger.info(f"SUCCESS ({elapsed:.1f}s): {extractor} + {model} + {fusion_method}")
             if result.stdout.strip():
                 logger.debug(f"Subprocess stdout:\n{result.stdout}")
         else:
-            logger.error(f"FAILED ({elapsed:.1f}s): {extractor} + {model}")
+            logger.error(f"FAILED ({elapsed:.1f}s): {extractor} + {model} + {fusion_method}")
             if result.stderr.strip():
                 logger.error(f"Subprocess stderr:\n{result.stderr}")
             if result.stdout.strip():
@@ -635,7 +987,7 @@ def run_tuning_subprocess(dataset, task, extractor, model, logger=None):
         
     except subprocess.TimeoutExpired:
         elapsed = time.time() - start_time
-        logger.error(f"TIMEOUT ({elapsed/60:.1f}min): {extractor} + {model}")
+        logger.error(f"TIMEOUT ({elapsed/60:.1f}min): {extractor} + {model} + {fusion_method}")
         logger.error(f"Process exceeded {TIMEOUT_MINUTES} minute timeout")
         return False
     except Exception as e:
@@ -645,17 +997,832 @@ def run_tuning_subprocess(dataset, task, extractor, model, logger=None):
             "dataset": dataset,
             "extractor": extractor,
             "model": model,
+            "fusion_method": fusion_method,
+            "elapsed_time": f"{elapsed:.1f}s"
+        })
+        return False
+
+def run_tuning_subprocess_selectors(dataset, task, selector, model, fusion_method="average", n_features=16, logger=None):
+    """Run tuning for a single combination in subprocess with timeout and logging."""
+    if logger is None:
+        logger = logging.getLogger("tuner_session")
+    
+    log_stage(logger, "SUBPROCESS_EXECUTION", {
+        "dataset": dataset,
+        "task": task,
+        "selector": selector,
+        "model": model,
+        "fusion_method": fusion_method,
+        "n_features": n_features,
+        "timeout_minutes": TIMEOUT_MINUTES
+    })
+    
+    cmd = [
+        sys.executable, __file__,
+        "--dataset", dataset,
+        "--task", task,
+        "--approach", "selectors",
+        "--selector", selector,
+        "--model", model,
+        "--fusion", fusion_method,
+        "--n-features", str(n_features),
+        "--single"  # Flag to indicate single combination mode
+    ]
+    
+    logger.info(f"Executing subprocess command: {' '.join(cmd)}")
+    
+    start_time = time.time()
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_MINUTES*60)
+        elapsed = time.time() - start_time
+        
+        if result.returncode == 0:
+            logger.info(f"SUCCESS ({elapsed:.1f}s): {model} + {fusion_method} + {n_features}f")
+            if result.stdout.strip():
+                logger.debug(f"Subprocess stdout:\n{result.stdout}")
+        else:
+            logger.error(f"FAILED ({elapsed:.1f}s): {model} + {fusion_method} + {n_features}f")
+            if result.stderr.strip():
+                logger.error(f"Subprocess stderr:\n{result.stderr}")
+            if result.stdout.strip():
+                logger.debug(f"Subprocess stdout:\n{result.stdout}")
+            
+        return result.returncode == 0
+        
+    except subprocess.TimeoutExpired:
+        elapsed = time.time() - start_time
+        logger.error(f"TIMEOUT ({elapsed/60:.1f}min): {model} + {fusion_method} + {n_features}f")
+        logger.error(f"Process exceeded {TIMEOUT_MINUTES} minute timeout")
+        return False
+    except Exception as e:
+        elapsed = time.time() - start_time
+        log_error_with_context(logger, e, {
+            "operation": "subprocess_execution",
+            "dataset": dataset,
+            "model": model,
+            "fusion_method": fusion_method,
+            "n_features": n_features,
             "elapsed_time": f"{elapsed:.1f}s"
         })
         return False
 
 # ------------- main tune routine with 4-phase preprocessing -----------------------------
-def tune(dataset, task, extractor, model, logger=None):
-    """Enhanced hyperparameter tuning with 4-phase pipeline integration and Windows resource management."""
+def create_multimodal_pipeline(extractor, model, fusion_method="average"):
+    """
+    Create a multi-modal pipeline that processes each modality separately.
+    
+    The correct pipeline architecture:
+    1. Extract/Select per modality: PCA on mirna → (n_samples, n_components), PCA on exp → (n_samples, n_components), etc.
+    2. Fusion: Combine extracted features using fusion method
+    3. Model training: Train on fused features
+    
+    This cannot be done with sklearn Pipeline since it doesn't handle multiple input matrices.
+    Instead, we return a custom class that handles the multi-modal workflow.
+    """
+    from models import build_extractor, build_model
+    
+    class MultiModalPipeline:
+        def __init__(self, extractor_name, model_name, fusion_method="average"):
+            self.extractor_name = extractor_name
+            self.model_name = model_name
+            self.fusion_method = fusion_method
+            self.extractors = {}  # One extractor per modality
+            self.model = None
+            self.modality_names = None
+            
+        def fit(self, X_modalities, y):
+            """
+            Fit the multi-modal pipeline.
+            
+            Parameters:
+            - X_modalities: dict of {modality_name: X_array}
+            - y: target array
+            """
+            import numpy as np
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from models import build_extractor, build_model
+            
+            self.modality_names = list(X_modalities.keys())
+            
+            # Step 1: Fit extractors separately for each modality
+            extracted_features = {}
+            for modality_name, X_modality in X_modalities.items():
+                # Build and fit extractor for this modality
+                extractor_obj = build_extractor(self.extractor_name)
+                if extractor_obj is None:
+                    raise ValueError(f"Failed to build extractor: {self.extractor_name}")
+                extractor_obj.fit(X_modality, y)
+                self.extractors[modality_name] = extractor_obj
+                
+                # Extract features
+                X_extracted = extractor_obj.transform(X_modality)
+                extracted_features[modality_name] = X_extracted
+            
+            # Step 2: Fuse extracted features
+            X_fused = self._fuse_features(extracted_features)
+            
+            # Step 3: Fit model on fused features
+            task_type = "reg" if "Regressor" in self.model_name else "clf"
+            self.model = build_model(self.model_name, task_type)
+            if self.model is None:
+                raise ValueError(f"Failed to build model: {self.model_name}")
+            self.model.fit(X_fused, y)
+            
+            return self
+        
+        def predict(self, X_modalities):
+            """
+            Make predictions with the multi-modal pipeline.
+            
+            Parameters:
+            - X_modalities: dict of {modality_name: X_array}
+            """
+            import numpy as np
+            
+            # Step 1: Extract features from each modality
+            extracted_features = {}
+            for modality_name, X_modality in X_modalities.items():
+                if modality_name not in self.extractors:
+                    raise ValueError(f"Modality {modality_name} not found in fitted extractors")
+                
+                X_extracted = self.extractors[modality_name].transform(X_modality)
+                extracted_features[modality_name] = X_extracted
+            
+            # Step 2: Fuse extracted features
+            X_fused = self._fuse_features(extracted_features)
+            
+            # Step 3: Make predictions
+            return self.model.predict(X_fused)
+        
+        def _fuse_features(self, extracted_features):
+            """
+            Fuse extracted features from multiple modalities using proper fusion techniques.
+            
+            Parameters:
+            - extracted_features: dict of {modality_name: extracted_X_array}
+            
+            Returns:
+            - X_fused: fused feature matrix
+            """
+            import numpy as np
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from fusion import merge_modalities
+            
+            modality_arrays = list(extracted_features.values())
+            
+            if len(modality_arrays) == 1:
+                return modality_arrays[0]
+            
+            # Use proper fusion from fusion.py
+            try:
+                # For multi-modal pipeline, we don't have y during transform, so use simpler fusion
+                if self.fusion_method == "average":
+                    # Proper average fusion: element-wise mean after scaling
+                    from sklearn.preprocessing import RobustScaler
+                    scaled_arrays = []
+                    
+                    for i, arr in enumerate(modality_arrays):
+                        scaler = RobustScaler()
+                        try:
+                            arr_scaled = scaler.fit_transform(arr)
+                            arr_scaled = np.clip(arr_scaled, -5, 5)  # Clip outliers
+                            scaled_arrays.append(arr_scaled.astype(np.float32))
+                        except Exception as e:
+                            # Fallback: use original array
+                            scaled_arrays.append(arr.astype(np.float32))
+                    
+                    # Element-wise average
+                    fused = np.mean(scaled_arrays, axis=0)
+                    return fused
+                    
+                elif self.fusion_method == "attention_weighted":
+                    # For attention-weighted, we need concatenation since we don't have y for attention computation
+                    # This is a limitation - true attention needs targets during fitting
+                    # Fall back to variance-based weighting then concatenation
+                    modality_weights = []
+                    for arr in modality_arrays:
+                        feature_variances = np.var(arr, axis=0)
+                        mean_variance = np.mean(feature_variances)
+                        modality_weights.append(mean_variance)
+                    
+                    # Normalize weights
+                    total_weight = sum(modality_weights)
+                    if total_weight > 0:
+                        modality_weights = [w / total_weight for w in modality_weights]
+                    else:
+                        modality_weights = [1.0 / len(modality_arrays)] * len(modality_arrays)
+                    
+                    # Apply weights and concatenate
+                    weighted_modalities = []
+                    for arr, weight in zip(modality_arrays, modality_weights):
+                        weighted_modalities.append(arr * weight)
+                    
+                    return np.column_stack(weighted_modalities)
+                
+                else:
+                    raise ValueError(f"Unsupported fusion method: {self.fusion_method}")
+                    
+            except Exception as e:
+                # Fallback to concatenation if fusion fails
+                print(f"Warning: Fusion failed ({e}), falling back to concatenation")
+                return np.column_stack(modality_arrays)
+        
+        def set_params(self, **params):
+            """
+            Set parameters for the pipeline components.
+            
+            Parameters should be in format:
+            - extractor__param_name: parameter for all extractors
+            - model__param_name: parameter for the model
+            """
+            extractor_params = {}
+            model_params = {}
+            
+            for param_name, param_value in params.items():
+                if param_name.startswith('extractor__'):
+                    # Remove the extractor__ prefix
+                    actual_param = param_name.replace('extractor__', '')
+                    extractor_params[actual_param] = param_value
+                elif param_name.startswith('model__'):
+                    # Remove the model__ prefix
+                    actual_param = param_name.replace('model__', '')
+                    model_params[actual_param] = param_value
+            
+            # Apply extractor parameters to all extractors
+            if extractor_params:
+                for extractor_obj in self.extractors.values():
+                    extractor_obj.set_params(**extractor_params)
+            
+            # Apply model parameters
+            if model_params and self.model is not None:
+                self.model.set_params(**model_params)
+            
+            return self
+        
+        def get_params(self, deep=True):
+            """Get parameters for the pipeline."""
+            params = {}
+            
+            # Get extractor parameters (use first extractor as template)
+            if self.extractors:
+                first_extractor = list(self.extractors.values())[0]
+                extractor_params = first_extractor.get_params(deep=deep)
+                for param_name, param_value in extractor_params.items():
+                    params[f'extractor__{param_name}'] = param_value
+            
+            # Get model parameters
+            if self.model is not None:
+                model_params = self.model.get_params(deep=deep)
+                for param_name, param_value in model_params.items():
+                    params[f'model__{param_name}'] = param_value
+            
+            return params
+    
+    return MultiModalPipeline(extractor, model, fusion_method)
+
+def create_multimodal_selector_pipeline(selector, model, fusion_method="average", n_features=16):
+    """
+    Create a multi-modal selector pipeline that processes each modality separately.
+    
+    The correct selector pipeline architecture:
+    1. Select per modality: selector(mirna) → (n_samples, n_features), selector(exp) → (n_samples, n_features), etc.
+    2. Fusion: Combine selected features using fusion method
+    3. Model training: Train on fused features
+    
+    This is similar to the extractor pipeline but uses feature selectors instead of extractors.
+    """
+    from models import build_selector, build_model
+    
+    class MultiModalSelectorPipeline:
+        def __init__(self, selector_name, model_name, fusion_method="average", n_features=16):
+            self.selector_name = selector_name
+            self.model_name = model_name
+            self.fusion_method = fusion_method
+            self.n_features = n_features
+            self.selectors = {}  # One selector per modality
+            self.model = None
+            self.modality_names = None
+            
+        def fit(self, X_modalities, y):
+            """
+            Fit the multi-modal selector pipeline.
+            
+            Parameters:
+            - X_modalities: dict of {modality_name: X_array}
+            - y: target array
+            """
+            import numpy as np
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from models import build_selector, build_model
+            
+            self.modality_names = list(X_modalities.keys())
+            
+            # Step 1: Fit selectors separately for each modality
+            selected_features = {}
+            for modality_name, X_modality in X_modalities.items():
+                # Build and fit selector for this modality
+                selector_obj = build_selector(self.selector_name, self.n_features)
+                if selector_obj is None:
+                    raise ValueError(f"Failed to build selector: {self.selector_name}")
+                selector_obj.fit(X_modality, y)
+                self.selectors[modality_name] = selector_obj
+                
+                # Select features
+                X_selected = selector_obj.transform(X_modality)
+                selected_features[modality_name] = X_selected
+            
+            # Step 2: Fuse selected features
+            X_fused = self._fuse_features(selected_features)
+            
+            # Step 3: Fit model on fused features
+            task_type = "reg" if "Regressor" in self.model_name else "clf"
+            self.model = build_model(self.model_name, task_type)
+            if self.model is None:
+                raise ValueError(f"Failed to build model: {self.model_name}")
+            self.model.fit(X_fused, y)
+            
+            return self
+        
+        def predict(self, X_modalities):
+            """
+            Make predictions with the multi-modal selector pipeline.
+            
+            Parameters:
+            - X_modalities: dict of {modality_name: X_array}
+            """
+            import numpy as np
+            
+            # Step 1: Select features from each modality
+            selected_features = {}
+            for modality_name, X_modality in X_modalities.items():
+                if modality_name not in self.selectors:
+                    raise ValueError(f"Modality {modality_name} not found in fitted selectors")
+                
+                X_selected = self.selectors[modality_name].transform(X_modality)
+                selected_features[modality_name] = X_selected
+            
+            # Step 2: Fuse selected features
+            X_fused = self._fuse_features(selected_features)
+            
+            # Step 3: Make predictions
+            return self.model.predict(X_fused)
+        
+        def _fuse_features(self, selected_features):
+            """
+            Fuse selected features from multiple modalities using proper fusion techniques.
+            
+            Parameters:
+            - selected_features: dict of {modality_name: selected_X_array}
+            
+            Returns:
+            - X_fused: fused feature matrix
+            """
+            import numpy as np
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from fusion import merge_modalities
+            
+            modality_arrays = list(selected_features.values())
+            
+            if len(modality_arrays) == 1:
+                return modality_arrays[0]
+            
+            # Use proper fusion from fusion.py
+            try:
+                # For multi-modal pipeline, we don't have y during transform, so use simpler fusion
+                if self.fusion_method == "average":
+                    # Proper average fusion: element-wise mean after scaling
+                    from sklearn.preprocessing import RobustScaler
+                    scaled_arrays = []
+                    
+                    for i, arr in enumerate(modality_arrays):
+                        scaler = RobustScaler()
+                        try:
+                            arr_scaled = scaler.fit_transform(arr)
+                            arr_scaled = np.clip(arr_scaled, -5, 5)  # Clip outliers
+                            scaled_arrays.append(arr_scaled.astype(np.float32))
+                        except Exception as e:
+                            # Fallback: use original array
+                            scaled_arrays.append(arr.astype(np.float32))
+                    
+                    # Element-wise average
+                    fused = np.mean(scaled_arrays, axis=0)
+                    return fused
+                    
+                elif self.fusion_method == "attention_weighted":
+                    # For attention-weighted, we need concatenation since we don't have y for attention computation
+                    # This is a limitation - true attention needs targets during fitting
+                    # Fall back to variance-based weighting then concatenation
+                    modality_weights = []
+                    for arr in modality_arrays:
+                        feature_variances = np.var(arr, axis=0)
+                        mean_variance = np.mean(feature_variances)
+                        modality_weights.append(mean_variance)
+                    
+                    # Normalize weights
+                    total_weight = sum(modality_weights)
+                    if total_weight > 0:
+                        modality_weights = [w / total_weight for w in modality_weights]
+                    else:
+                        modality_weights = [1.0 / len(modality_arrays)] * len(modality_arrays)
+                    
+                    # Apply weights and concatenate
+                    weighted_modalities = []
+                    for arr, weight in zip(modality_arrays, modality_weights):
+                        weighted_modalities.append(arr * weight)
+                    
+                    return np.column_stack(weighted_modalities)
+                
+                else:
+                    raise ValueError(f"Unsupported fusion method: {self.fusion_method}")
+                    
+            except Exception as e:
+                # Fallback to concatenation if fusion fails
+                print(f"Warning: Fusion failed ({e}), falling back to concatenation")
+                return np.column_stack(modality_arrays)
+        
+        def set_params(self, **params):
+            """
+            Set parameters for the pipeline components.
+            
+            Parameters should be in format:
+            - selector__param_name: parameter for all selectors (not supported for fixed selectors)
+            - model__param_name: parameter for the model
+            """
+            model_params = {}
+            
+            for param_name, param_value in params.items():
+                if param_name.startswith('model__'):
+                    # Remove the model__ prefix
+                    actual_param = param_name.replace('model__', '')
+                    model_params[actual_param] = param_value
+                elif param_name.startswith('selector__'):
+                    # For fixed selectors, we don't change selector parameters during tuning
+                    # The selector parameters (like n_features) are fixed
+                    pass
+            
+            # Apply model parameters
+            if model_params and self.model is not None:
+                self.model.set_params(**model_params)
+            
+            return self
+        
+        def get_params(self, deep=True):
+            """Get parameters for the pipeline."""
+            params = {}
+            
+            # For selectors, we don't expose selector parameters since they're fixed
+            # Only model parameters are tuned
+            
+            # Get model parameters
+            if self.model is not None:
+                model_params = self.model.get_params(deep=deep)
+                for param_name, param_value in model_params.items():
+                    params[f'model__{param_name}'] = param_value
+            
+            return params
+    
+    return MultiModalSelectorPipeline(selector, model, fusion_method, n_features)
+
+def feature_first_simulate(X_modalities, y, model, cv_params, hyperparams, logger, fusion_method="average", n_features=16):
+    """
+    Simulate model training with fixed feature selection from the main pipeline.
+    
+    This matches the main pipeline architecture where:
+    1. Each modality gets preprocessed separately (already done - we receive preprocessed modalities)
+    2. Feature extraction/selection applied externally to get exactly n_features
+    3. Fusion applied to selected features
+    4. Model training on fused features (tuned hyperparameters here)
+    
+    Parameters:
+    - X_modalities: dict of {modality_name: preprocessed_X_array} from 4-phase preprocessing
+    - y: target array
+    - model: model name (RandomForestClassifier, etc.)
+    - cv_params: cross-validation parameters
+    - hyperparams: hyperparameters to test
+    - logger: logger instance
+    - fusion_method: fusion method for combining modalities
+    - n_features: fixed number of features to simulate (8, 16, or 32)
+    
+    Returns:
+    - Cross-validation scores
+    """
+    try:
+        import numpy as np
+        import warnings
+        from sklearn.model_selection import cross_val_score
+        from sklearn.base import clone
+        import logging
+        
+        # Handle None logger
+        if logger is None:
+            logger = logging.getLogger(__name__)
+        
+        # Step 1: Simulate feature selection to get exactly n_features from each modality
+        # This simulates the main pipeline where feature extraction/selection reduces each modality
+        selected_modalities = {}
+        for modality_name, modality_array in X_modalities.items():
+            n_available = modality_array.shape[1]
+            
+            # Handle case where n_features is None (for extractors approach)
+            if n_features is None:
+                # For extractors, use all available features (no fixed feature count)
+                selected_X = modality_array
+                logger.debug(f"Extractor approach: Using all {n_available} features from {modality_name}")
+            elif n_available >= n_features:
+                # Select top n_features (simulate variance-based selection)
+                feature_variances = np.var(modality_array, axis=0)
+                top_indices = np.argsort(feature_variances)[-n_features:]  # Top variance features
+                selected_X = modality_array[:, top_indices]
+                logger.debug(f"Feature selection for {modality_name}: {modality_array.shape[1]} -> {n_features}")
+            else:
+                # If fewer features available, use all and pad with zeros
+                logger.debug(f"Modality {modality_name} has only {n_available} features, less than target {n_features}")
+                padding = np.zeros((modality_array.shape[0], n_features - n_available))
+                selected_X = np.column_stack([modality_array, padding])
+                logger.debug(f"Feature selection for {modality_name}: {modality_array.shape[1]} -> {n_features} (padded)")
+            
+            selected_modalities[modality_name] = selected_X
+        
+        # Step 2: Apply fusion to selected features based on fusion_method
+        if fusion_method == "average":
+            # Simple concatenation (current implementation)
+            modality_arrays = list(selected_modalities.values())
+            if len(modality_arrays) == 1:
+                X_input = modality_arrays[0]
+            else:
+                X_input = np.column_stack(modality_arrays)
+        
+        elif fusion_method == "attention_weighted":
+            # Attention-weighted fusion - compute attention weights based on modality variance
+            modality_arrays = list(selected_modalities.values())
+            modality_names = list(selected_modalities.keys())
+            
+            if len(modality_arrays) == 1:
+                X_input = modality_arrays[0]
+                logger.debug("Single modality - attention weights not applicable")
+            else:
+                # Calculate attention weights based on modality feature variance
+                modality_weights = []
+                for i, (name, arr) in enumerate(zip(modality_names, modality_arrays)):
+                    # Use feature variance as attention signal
+                    feature_variances = np.var(arr, axis=0)
+                    mean_variance = np.mean(feature_variances)
+                    modality_weights.append(mean_variance)
+                
+                # Normalize weights to sum to 1
+                total_weight = sum(modality_weights)
+                if total_weight > 0:
+                    modality_weights = [w / total_weight for w in modality_weights]
+                else:
+                    # Fallback to equal weights if all variances are zero
+                    modality_weights = [1.0 / len(modality_arrays)] * len(modality_arrays)
+                
+                logger.debug(f"Attention weights: {dict(zip(modality_names, modality_weights))}")
+                
+                # Apply attention weights to each modality
+                weighted_modalities = []
+                for arr, weight in zip(modality_arrays, modality_weights):
+                    weighted_modalities.append(arr * weight)
+                
+                # Concatenate weighted modalities
+                X_input = np.column_stack(weighted_modalities)
+        
+        else:
+            raise ValueError(f"Unsupported fusion method: {fusion_method}")
+        
+        logger.debug(f"Input after feature selection and fusion ({fusion_method}): {X_input.shape}")
+        logger.debug(f"Selected modality shapes: {[(name, arr.shape) for name, arr in selected_modalities.items()]}")
+        logger.debug(f"Target feature count per modality: {n_features if n_features is not None else 'Variable (extractor-dependent)'}")
+        
+        # Step 3: Validate dataset size for cross-validation
+        n_samples, n_total_features = X_input.shape
+        cv_splitter = cv_params.get('cv')
+        
+        # Check if we have enough samples for meaningful CV
+        if hasattr(cv_splitter, 'n_splits'):
+            n_splits = cv_splitter.n_splits
+        else:
+            # Try to get n_splits from the splitter
+            try:
+                n_splits = cv_splitter.get_n_splits(X_input, y)
+            except:
+                n_splits = 5  # Default fallback
+        
+        min_samples_per_fold = n_samples // n_splits
+        
+        # CRITICAL FIX: If folds are too small, use a safer CV strategy
+        if min_samples_per_fold < 3:
+            logger.warning(f"Very small folds detected (~{min_samples_per_fold} samples/fold). "
+                          f"Using safer CV strategy for {n_samples} samples.")
+            
+            # Use a more conservative CV approach for very small datasets
+            if n_samples < 10:
+                # For very small datasets, use Leave-One-Out or simple split
+                logger.warning(f"Dataset too small ({n_samples} samples) for reliable CV, using simple validation")
+                from sklearn.model_selection import train_test_split
+                
+                # Use a simple train-test split instead of CV
+                try:
+                    # Try stratified split for classification
+                    stratify = None
+                    if len(np.unique(y)) < n_samples / 2:  # Likely classification
+                        unique_classes, class_counts = np.unique(y, return_counts=True)
+                        if np.min(class_counts) >= 2:  # Each class needs at least 2 samples
+                            stratify = y
+                    
+                    X_train, X_val, y_train, y_val = train_test_split(
+                        X_input, y, test_size=0.3, random_state=42, stratify=stratify
+                    )
+                    
+                    # Create model directly (no extractors needed - features already selected)
+                    from models import build_model
+                    model_obj = build_model(model, "reg" if "Regressor" in model else "clf")
+                    
+                    # Apply hyperparameters and fit
+                    model_obj.set_params(**hyperparams)
+                    model_obj.fit(X_train, y_train)
+                    y_pred = model_obj.predict(X_val)
+                    
+                    # Calculate score using the same scorer as CV
+                    scorer = cv_params.get('scoring')
+                    if scorer:
+                        score = scorer._score_func(y_val, y_pred)
+                    else:
+                        # Fallback scoring
+                        if len(np.unique(y)) < n_samples / 2:  # Classification
+                            from sklearn.metrics import accuracy_score
+                            score = accuracy_score(y_val, y_pred)
+                        else:  # Regression
+                            from sklearn.metrics import r2_score
+                            score = r2_score(y_val, y_pred)
+                    
+                    logger.debug(f"Simple validation score: {score:.4f}")
+                    return np.array([score])
+                    
+                except Exception as split_error:
+                    logger.warning(f"Simple validation failed: {split_error}, returning poor score")
+                    return np.array([-1.0])
+            
+            else:
+                # For small but not tiny datasets, use safer CV
+                from sklearn.model_selection import KFold
+                safe_splits = max(2, min(3, n_samples // 4))
+                cv_params = cv_params.copy()
+                cv_params['cv'] = KFold(n_splits=safe_splits, shuffle=True, random_state=42)
+                logger.info(f"Using safer {safe_splits}-fold CV for small dataset")
+        
+        # Step 4: Create model directly (no extractors - features already selected to n_features)
+        try:
+            from models import build_model
+            model_obj = build_model(model, "reg" if "Regressor" in model else "clf")
+        except Exception as model_error:
+            logger.error(f"Failed to create model {model}: {model_error}")
+            return np.array([-1.0])
+        
+        # Step 5: Apply all hyperparameters to the model
+        # Clean parameter names by removing model__ prefix
+        clean_hyperparams = {}
+        for param_name, param_value in hyperparams.items():
+            if param_name.startswith("model__"):
+                clean_param_name = param_name.replace("model__", "")
+                clean_hyperparams[clean_param_name] = param_value
+            else:
+                clean_hyperparams[param_name] = param_value
+        
+        try:
+            model_obj.set_params(**clean_hyperparams)
+            logger.debug(f"Applied hyperparameters: {clean_hyperparams}")
+        except Exception as param_error:
+            logger.warning(f"Failed to set hyperparameters: {param_error}")
+            # Try with a subset of parameters that are valid
+            valid_params = {}
+            for param_name, param_value in clean_hyperparams.items():
+                try:
+                    model_obj.set_params(**{param_name: param_value})
+                    valid_params[param_name] = param_value
+                except:
+                    logger.debug(f"Skipping invalid parameter: {param_name}={param_value}")
+            
+            if valid_params:
+                model_obj.set_params(**valid_params)
+                logger.debug(f"Applied valid hyperparameters: {valid_params}")
+            else:
+                logger.warning("No valid hyperparameters found, using defaults")
+        
+        logger.debug(f"Model created: {model}")
+        logger.debug(f"Input shape: {X_input.shape} (n_features per modality: {n_features})")
+        logger.debug(f"Hyperparameters: {hyperparams}")
+        
+        # Step 6: Enhanced cross-validation with direct model
+        try:
+            # Validate the CV splitter with the actual data
+            cv_splitter = cv_params.get('cv')
+            scorer = cv_params.get('scoring')
+            
+            # Pre-validate CV splits to catch issues early
+            split_sizes = []
+            try:
+                for train_idx, val_idx in cv_splitter.split(X_input, y):
+                    split_sizes.append((len(train_idx), len(val_idx)))
+                    
+                    # Check for empty splits
+                    if len(train_idx) == 0 or len(val_idx) == 0:
+                        raise ValueError(f"Empty CV split detected: train={len(train_idx)}, val={len(val_idx)}")
+                    
+                    # Check for minimum size requirement
+                    if len(train_idx) < 2:
+                        raise ValueError(f"Training split too small: {len(train_idx)} samples")
+                
+                logger.debug(f"CV split sizes: {split_sizes}")
+                
+            except Exception as split_validation_error:
+                logger.error(f"CV split validation failed: {split_validation_error}")
+                return np.array([-1.0])
+            
+            # Run cross-validation with the direct model
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=UserWarning)
+                warnings.filterwarnings('ignore', category=RuntimeWarning)
+                
+                scores = cross_val_score(
+                    estimator=model_obj,
+                    X=X_input,
+                    y=y,
+                    **cv_params
+                )
+            
+            # Validate scores
+            if len(scores) == 0:
+                logger.warning("No CV scores returned")
+                return np.array([-1.0])
+            
+            # Filter out invalid scores
+            valid_scores = scores[np.isfinite(scores)]
+            if len(valid_scores) == 0:
+                logger.warning("All CV scores were invalid (NaN/Inf)")
+                return np.array([-1.0])
+            
+            if len(valid_scores) < len(scores):
+                logger.warning(f"Some CV scores were invalid: {len(valid_scores)}/{len(scores)} valid")
+            
+            logger.debug(f"CV scores: {valid_scores} (mean: {np.mean(valid_scores):.4f})")
+            return valid_scores
+            
+        except Exception as cv_error:
+            logger.error(f"Cross-validation failed: {cv_error}")
+            import traceback
+            logger.debug(f"CV error traceback: {traceback.format_exc()}")
+            
+            # Try to provide more specific error information
+            if "array of size 0" in str(cv_error) or "zero-size array" in str(cv_error):
+                logger.error("CV failed due to empty arrays - likely caused by very small CV folds")
+            elif "n_components" in str(cv_error):
+                logger.error("CV failed due to PCA component issues - likely too many components for small data")
+            
+            return np.array([-1.0])
+        
+    except Exception as e:
+        logger.error(f"Feature-first simulation failed: {e}")
+        import traceback
+        logger.debug(f"Full traceback: {traceback.format_exc()}")
+        return np.array([-1.0])  # Return poor score on failure
+
+def tune_extractors(dataset, task, extractor, model, fusion_method="average", logger=None):
+    """
+    Hyperparameter tuning for EXTRACTOR+MODEL approach (original approach).
+    
+    Tunes both extractor parameters (n_components, etc.) and model parameters.
+    This is for the traditional feature extraction pipeline.
+    """
+    return _tune_internal(dataset, task, extractor, model, fusion_method, None, "extractors", logger)
+
+def tune_selectors(dataset, task, selector, model, fusion_method="average", n_features=16, logger=None):
+    """
+    Hyperparameter tuning for SELECTOR+MODEL approach (Option B implementation).
+    
+    Optimizes model hyperparameters separately for each selector type, recognizing that
+    different selectors produce features with different statistical properties.
+    Feature selection is handled separately with fixed counts [8, 16, 32].
+    """
+    return _tune_internal(dataset, task, selector, model, fusion_method, n_features, "selectors", logger)
+
+def _tune_internal(dataset, task, extractor, model, fusion_method="average", n_features=16, approach="selectors", logger=None):
+    """Enhanced hyperparameter tuning with Windows resource management for both approaches."""
     
     # Setup logging if not provided
     if logger is None:
-        logger = setup_logging(dataset, extractor, model)
+        if approach == "extractors":
+            logger, log_path = setup_logging(dataset, extractor, model, log_level=logging.INFO)
+        else:  # selectors
+            logger, log_path = setup_logging(dataset, "FixedFeatures", model, log_level=logging.INFO)
     
     # Monitor system resources on Windows
     initial_memory = None
@@ -682,88 +1849,139 @@ def tune(dataset, task, extractor, model, logger=None):
                           category=UserWarning)
     
     # Stage 1: Initialization and Validation
-    log_stage(logger, "TUNING_INITIALIZATION", {
-        "dataset": dataset,
-        "task": task,
-        "extractor": extractor,
-        "model": model,
-        "seed": SEED,
-        "cv_folds": CV_INNER
-    })
+    if approach == "extractors":
+        log_stage(logger, "TUNING_INITIALIZATION", {
+            "dataset": dataset,
+            "task": task,
+            "extractor": extractor,
+            "model": model,
+            "fusion_method": fusion_method,
+            "pipeline_type": "Extractor + Model Tuning",
+            "seed": SEED,
+            "cv_folds": CV_INNER
+        })
+    else:  # selectors
+        log_stage(logger, "TUNING_INITIALIZATION", {
+            "dataset": dataset,
+            "task": task,
+            "model": model,
+            "fusion_method": fusion_method,
+            "n_features": n_features,
+            "pipeline_type": "Fixed Feature Selection + Model Tuning",
+            "seed": SEED,
+            "cv_folds": CV_INNER
+        })
     
     try:
-        # Stage 1: Data Loading
+        # Stage 1: Data Loading with Feature-First Pipeline
         log_stage(logger, "DATA_LOADING", {
-            "pipeline_type": "4-Phase Enhanced Pipeline",
+            "pipeline_type": "4-Phase Enhanced Pipeline + Feature-First Architecture",
             "phases": [
                 "Phase 1: Early Data Quality Assessment",
-                "Phase 2: Fusion-Aware Preprocessing",
+                "Phase 2: Modality-Specific Preprocessing (miRNA->150, exp->1500, methy->2000)",
                 "Phase 3: Centralized Missing Data Management", 
                 "Phase 4: Coordinated Validation Framework"
-            ]
+            ],
+            "architecture": "Feature-First: Preprocessing -> Feature Processing -> Fusion -> Model"
         })
         
-        logger.info(f"Loading {dataset} with 4-Phase Enhanced Pipeline...")
+        logger.info(f"Loading {dataset} with Feature-First 4-Phase Enhanced Pipeline...")
         
-        # Load data with FULL 4-phase preprocessing AND fusion (same as main pipeline)
-        X, y = load_dataset_for_tuner_optimized(dataset, task=task)
+        # Load preprocessed modalities separately (not fused) for feature-first pipeline
+        # Use cached version to avoid redundant preprocessing across combinations
+        processed_modalities, y, sample_ids_cached, baseline_mae = load_dataset_for_tuner_cached(dataset, task=task)
         
-        # Try to get real sample IDs for enhanced CV
-        sample_ids = None
-        try:
-            # Load the dataset again to get sample IDs
-            from data_io import load_dataset
-            from config import DatasetConfig
-            
-            config = DatasetConfig.get_config(dataset.lower())
-            if config:
-                # Map modality names to short names
-                modality_mapping = {
-                    "Gene Expression": "exp",
-                    "miRNA": "mirna", 
-                    "Methylation": "methy"
-                }
-                
-                modality_short_names = []
-                for full_name in config['modalities'].keys():
-                    short_name = modality_mapping.get(full_name, full_name.lower())
-                    modality_short_names.append(short_name)
-                
-                # Load dataset to get sample IDs
-                modalities_data, y_series, common_ids = load_dataset(
-                    ds_name=dataset.lower(),
-                    modalities=modality_short_names,
-                    outcome_col=config['outcome_col'],
-                    task_type=task,
-                    parallel=True,
-                    use_cache=True
-                )
-                
-                if common_ids and len(common_ids) == len(y):
-                    sample_ids = common_ids
-                    logger.info(f"Loaded {len(sample_ids)} real sample IDs for enhanced CV")
-                
-        except Exception as e:
-            logger.debug(f"Could not load real sample IDs: {e}, will use fallback approach")
+        logger.info(f"Feature-first data loaded successfully:")
+        logger.info(f"  Preprocessed modalities: {list(processed_modalities.keys())}")
+        logger.info(f"  Total samples: {len(y)}")
         
-        logger.info(f"Data loaded successfully:")
-        logger.info(f"  X shape: {X.shape}")
-        logger.info(f"  y shape: {y.shape}")
-        logger.info(f"  Features after 4-phase preprocessing: {X.shape[1]}")
+        # Log modality shapes after preprocessing
+        total_preprocessed_features = 0
+        for modality_name, modality_array in processed_modalities.items():
+            logger.info(f"  {modality_name}: {modality_array.shape}")
+            total_preprocessed_features += modality_array.shape[1]
         
-        # Compute baseline MAE for regression tasks
-        baseline_mae = None
-        if task == "reg":
+        logger.info(f"  Total preprocessed features: {total_preprocessed_features}")
+        
+        # Use cached baseline MAE if available, otherwise compute it
+        if baseline_mae is None and task == "reg":
             baseline_mae = compute_baseline_mae(y)
+        
+        if baseline_mae is not None:
             logger.info(f"  Baseline MAE (mean prediction): {baseline_mae:.4f}")
         
-        # Stage 2: Data Validation
+        # Stage 2: Approach-Specific Preparation
+        if approach == "extractors":
+            log_stage(logger, "EXTRACTOR_PIPELINE_PREPARATION", {
+                "step_1": "Preprocessed modalities ready for extractor-based pipeline",
+                "step_2": "Feature extraction with variable components per modality",
+                "step_3": "Traditional sklearn pipeline with extractor+model tuning"
+            })
+            
+            logger.info("Extractor pipeline preparation completed")
+            logger.info("Note: Feature extraction components will be tuned dynamically")
+            logger.info("Each hyperparameter test will use: extractor -> fusion -> model pipeline")
+        else:  # selectors
+            log_stage(logger, "FIXED_FEATURE_PREPARATION", {
+                "step_1": "Preprocessed modalities ready for fixed feature selection simulation",
+                "step_2": f"Each modality will be reduced to exactly {n_features} features",
+                "step_3": "Fusion and model training with optimized hyperparameters"
+            })
+            
+            logger.info("Fixed feature selection preparation completed")
+            logger.info(f"Note: Modalities will be reduced to {n_features} features each")
+            logger.info("Each hyperparameter test will simulate: feature selection -> fusion -> model training")
+        
+        # Use sample IDs from cache if available, otherwise try to load them
+        sample_ids = sample_ids_cached
+        if sample_ids is None:
+            try:
+                # Load the dataset again to get sample IDs
+                from data_io import load_dataset
+                from config import DatasetConfig
+                
+                config = DatasetConfig.get_config(dataset.lower())
+                if config:
+                    # Map modality names to short names
+                    modality_mapping = {
+                        "Gene Expression": "exp",
+                        "miRNA": "mirna", 
+                        "Methylation": "methy"
+                    }
+                    
+                    modality_short_names = []
+                    for full_name in config['modalities'].keys():
+                        short_name = modality_mapping.get(full_name, full_name.lower())
+                        modality_short_names.append(short_name)
+                    
+                    # Load dataset to get sample IDs
+                    task_type_for_ids = 'regression' if task == 'reg' else 'classification'
+                    modalities_data, y_series, common_ids, is_regression = load_dataset(
+                        ds_name=dataset.lower(),
+                        modalities=modality_short_names,
+                        outcome_col=config['outcome_col'],
+                        task_type=task_type_for_ids,
+                        parallel=True,
+                        use_cache=True
+                    )
+                    
+                    if common_ids and len(common_ids) == len(y):
+                        sample_ids = common_ids
+                        logger.info(f"Loaded {len(sample_ids)} real sample IDs for enhanced CV")
+                    
+            except Exception as e:
+                logger.debug(f"Could not load real sample IDs: {e}, will use fallback approach")
+        else:
+            logger.info(f"Using cached sample IDs: {len(sample_ids)} samples")
+        
+        # Stage 3: Data Validation
         log_stage(logger, "DATA_VALIDATION")
         
-        # Validate data quality after preprocessing
-        if np.any(np.isnan(X)) or np.any(np.isinf(X)):
-            logger.warning("Found NaN/Inf in preprocessed data, cleaning...")
-            X = np.nan_to_num(X, nan=0.0, posinf=1e6, neginf=-1e6)
+        # Validate data quality of preprocessed modalities
+        for modality_name, modality_array in processed_modalities.items():
+            if np.any(np.isnan(modality_array)) or np.any(np.isinf(modality_array)):
+                logger.warning(f"Found NaN/Inf in {modality_name}, cleaning...")
+                processed_modalities[modality_name] = np.nan_to_num(modality_array, nan=0.0, posinf=1e6, neginf=-1e6)
         
         if np.any(np.isnan(y)) or np.any(np.isinf(y)):
             logger.warning("Found NaN/Inf in targets, cleaning...")
@@ -786,8 +2004,9 @@ def tune(dataset, task, extractor, model, logger=None):
                 outlier_percentage = (n_outliers / original_size) * 100
                 
                 if n_outliers > 0:
-                    # Filter both features and targets
-                    X = X[outlier_mask]
+                    # Filter both modalities and targets
+                    for modality_name in processed_modalities:
+                        processed_modalities[modality_name] = processed_modalities[modality_name][outlier_mask]
                     y = y[outlier_mask]
                     
                     # Update sample IDs if available
@@ -797,7 +2016,7 @@ def tune(dataset, task, extractor, model, logger=None):
                     
                     logger.info(f"Removed {n_outliers} extreme outliers (>{outlier_threshold:.2f}) "
                                f"from dataset ({outlier_percentage:.1f}% of data)")
-                    logger.info(f"Dataset size: {original_size} → {len(y)}")
+                    logger.info(f"Dataset size: {original_size} -> {len(y)}")
                     
                     # Recompute baseline MAE after outlier removal
                     baseline_mae = compute_baseline_mae(y)
@@ -813,14 +2032,15 @@ def tune(dataset, task, extractor, model, logger=None):
                     
                 # Log final data shapes after outlier removal
                 logger.info(f"Final data shapes after outlier removal:")
-                logger.info(f"  X shape: {X.shape}")
+                for modality_name, modality_array in processed_modalities.items():
+                    logger.info(f"  {modality_name} shape: {modality_array.shape}")
                 logger.info(f"  y shape: {y.shape}")
                 
             except Exception as e:
                 logger.warning(f"Target outlier removal failed: {e}")
                 # Continue without outlier removal if it fails
         
-        # Stage 3: Sampler Setup
+        # Stage 4: Sampler Setup
         log_stage(logger, "SAMPLER_SETUP")
         
         sampler = None
@@ -858,65 +2078,44 @@ def tune(dataset, task, extractor, model, logger=None):
                 log_error_with_context(logger, e, {"operation": "sampler_creation"})
                 sampler = None
 
-        # Stage 4: Pipeline Construction
-        log_stage(logger, "PIPELINE_CONSTRUCTION")
+        # Stage 5: Fixed Feature Selection Integration Setup
+        log_stage(logger, "FIXED_FEATURE_INTEGRATION_SETUP")
         
-        # Build pipeline steps
-        steps = []
-        if sampler: 
-            steps.append(("sampler", sampler))
-            logger.info("Added sampler to pipeline")
+        # For fixed feature selection, we don't need extractors - features are pre-selected
+        # Instead, we create models directly and tune their hyperparameters
+        logger.info("Setting up fixed feature selection simulation for hyperparameter tuning")
+        logger.info("Note: Feature selection is simulated, focus is on model hyperparameter optimization")
         
+        # Validate that we can build the model
         try:
-            extractor_obj = build_extractor(extractor)
-            model_obj = build_model(model, task)
-            
-            # Wrap extractor with safe dimensionality checking
-            safe_extractor = SafeExtractorWrapper(extractor_obj)
-            
-            steps.extend([
-                ("extractor", safe_extractor),
-                ("model", model_obj)
-            ])
-            
-            logger.info(f"Built extractor: {type(extractor_obj).__name__} (wrapped for safety)")
-            logger.info(f"Built model: {type(model_obj).__name__}")
+            # Test that we can create the model
+            from models import build_model
+            test_model = build_model(model, "reg" if task == "reg" else "clf")
+            logger.info(f"Validated model component:")
+            logger.info(f"  - Model: {model}")
+            logger.info(f"  - Model type: {type(test_model).__name__}")
+            logger.info(f"  - Fixed features per modality: {n_features}")
             
         except Exception as e:
             log_error_with_context(logger, e, {
-                "operation": "model_building",
-                "extractor": extractor,
-                "model": model
+                "operation": "model_validation",
+                "model": model,
+                "n_features": n_features
             })
             return False
         
-        # Use imblearn Pipeline if we have a sampler, otherwise use sklearn Pipeline
-        if sampler:
-            from imblearn.pipeline import Pipeline as ImbPipeline
-            pipe = ImbPipeline(steps)
-            logger.info("Created imblearn Pipeline with sampler")
-        else:
-            pipe = Pipeline(steps)
-            logger.info("Created sklearn Pipeline")
+        # Note: No extractors needed - features are pre-selected to n_features per modality
 
-        # Stage 5: Scorer and CV Setup
-        log_stage(logger, "SCORER_CV_SETUP")
+        # Stage 6: Fixed Feature Selection CV Setup
+        log_stage(logger, "FIXED_FEATURE_CV_SETUP")
         
-        # Choose primary scorer and setup secondary scoring for regression
+        # Setup CV parameters for feature_first_simulate function
         if task == "reg":
-            # Primary scorer: R² (optimize for this)
-            scorer = make_scorer(safe_r2_score, greater_is_better=True)
-            # Secondary scorer: MAE (track but don't optimize)
-            mae_scorer = make_scorer(safe_mae_score, greater_is_better=True)
-            scoring = {'r2': scorer, 'mae': mae_scorer}
-            refit_scorer = 'r2'  # Optimize for R²
-            logger.info("Using primary scorer: R² score (optimized)")
-            logger.info("Using secondary scorer: MAE (tracked)")
+            primary_scoring = make_scorer(safe_r2_score, greater_is_better=True)
+            logger.info("Using scorer for feature-first simulation: R² score")
         else:
-            scorer = make_scorer(safe_mcc_score, greater_is_better=True)
-            scoring = scorer
-            refit_scorer = True
-            logger.info("Using scorer: Matthews correlation coefficient")
+            primary_scoring = make_scorer(safe_mcc_score, greater_is_better=True)
+            logger.info("Using scorer for feature-first simulation: Matthews correlation coefficient")
 
         # Enhanced cross-validation strategy with stratified regression and grouped CV
         n_samples = len(y)
@@ -928,13 +2127,12 @@ def tune(dataset, task, extractor, model, logger=None):
             task_type = 'regression' if task == 'reg' else 'classification'
             max_safe_folds = max(2, min(CV_INNER, n_samples // MIN_SAMPLES_PER_FOLD))
             
-            # Create enhanced CV splitter
+            # Create enhanced CV splitter with proper regression/classification strategies
             cv_result = create_enhanced_cv_splitter(
                 y=y,
                 sample_ids=sample_ids,
                 task_type=task_type,
                 n_splits=max_safe_folds,
-                use_stratified_regression=True,
                 use_grouped_cv=True,
                 random_state=SEED
             )
@@ -958,10 +2156,9 @@ def tune(dataset, task, extractor, model, logger=None):
                     n_replicates = n_samples - n_groups
                     logger.info(f"Grouped CV: {n_groups} patient groups, {n_replicates} replicates")
                 
-                # Log additional info for stratified regression
-                if task == 'reg' and hasattr(cv_inner, '__class__') and 'Stratified' in cv_inner.__class__.__name__:
-                    unique_bins, bin_counts = np.unique(y_for_cv, return_counts=True)
-                    logger.info(f"Stratified regression: {len(unique_bins)} quartile bins with counts {bin_counts}")
+                # Log additional info for regression CV
+                if task == 'reg':
+                    logger.info(f"Regression CV strategy: {strategy_desc}")
                     
             else:
                 logger.warning("Enhanced CV validation failed, falling back to standard approach")
@@ -992,134 +2189,312 @@ def tune(dataset, task, extractor, model, logger=None):
             logger.warning(f"Small fold size detected (~{estimated_min_fold_size} samples/fold). "
                           f"Using safe scorers to prevent undefined metrics.")
 
-        # Stage 6: Parameter Space Generation
+        # Stage 7: Parameter Space Generation
         log_stage(logger, "PARAMETER_SPACE_GENERATION")
         
-        # Get enhanced parameter space for preprocessed data
-        params = param_space(extractor, model, X.shape)
+        # Calculate data dimensions for parameter space (after feature selection simulation)
+        total_samples = len(y)
+        n_modalities = len(processed_modalities)
+        
+        # For extractors, we don't have fixed n_features (it's variable based on extractor parameters)
+        # For selectors, we use the fixed n_features parameter
+        if approach == "extractors":
+            # For extractors, use total input features as a rough estimate for parameter space
+            total_input_features = sum(mod.shape[1] for mod in processed_modalities.values())
+            data_shape = (total_samples, total_input_features)
+        else:  # selectors
+            total_features_after_selection = n_modalities * n_features
+            data_shape = (total_samples, total_features_after_selection)
+        
+        # Get parameter space based on approach
+        if approach == "extractors":
+            params = param_space_extractors(extractor, model, data_shape)
+        else:  # selectors
+            # For selectors approach, extractor parameter contains the selector name
+            selector = extractor  # In selectors approach, extractor parameter holds the selector name
+            params = param_space_selectors(selector, model, n_features, data_shape)
         n_combinations = count_parameter_combinations(params)
         
-        logger.info(f"Enhanced parameter combinations: {n_combinations}")
+        logger.info(f"Model parameter combinations: {n_combinations}")
+        logger.info(f"Data shape for parameter space: {data_shape} (samples, features)")
+        
+        if approach == "extractors":
+            logger.info(f"Extractor approach: Variable features per modality, Total modalities: {n_modalities}")
+            logger.info(f"Total input features: {data_shape[1]}")
+        else:  # selectors
+            logger.info(f"Selector approach: {n_features} features per modality, Total modalities: {n_modalities}")
+            logger.info(f"Total selected features: {data_shape[1]}")
+        
         logger.debug(f"Parameter space: {params}")
         
-        # Stage 7: Search Strategy Selection
-        log_stage(logger, "SEARCH_STRATEGY_SELECTION")
-        
-        # Choose search strategy based on parameter space size and dataset characteristics
-        use_halving = (n_combinations > 20) and (estimated_min_fold_size >= MIN_SAMPLES_PER_FOLD)
-        
-        if not use_halving:
-            logger.info("Using GridSearchCV (exhaustive search)")
-            logger.info(f"Reason: {'Small parameter space' if n_combinations <= 20 else 'Small dataset - halving not suitable'}")
-            search = GridSearchCV(
-                estimator=pipe,
-                param_grid=params,
-                scoring=scoring,
-                cv=cv_inner,
-                refit=refit_scorer,
-                n_jobs=1,  # Single job to prevent Windows resource exhaustion
-                verbose=1
-            )
-        else:
-            logger.info("Using HalvingRandomSearchCV with enhanced settings")
+        # Stage 8: Approach-Specific Parameter Search Strategy
+        if approach == "extractors":
+            log_stage(logger, "EXTRACTOR_PARAMETER_SEARCH")
             
-            # Enhanced halving configuration - use full dataset in later rungs
-            min_resources_per_fold = MIN_SAMPLES_PER_FOLD * cv_inner.n_splits
-            # Use full dataset size as max_resources to prevent judging models on small samples
-            full_dataset_resources = n_samples
+            logger.info("Using traditional sklearn pipeline parameter search for extractors")
+            logger.info(f"Parameter combinations to evaluate: {n_combinations}")
+            logger.info("Note: Each combination tested with sklearn GridSearchCV using extractor pipelines")
+        else:  # selectors
+            log_stage(logger, "FIXED_FEATURE_PARAMETER_SEARCH")
             
-            logger.info(f"Enhanced halving configuration:")
-            logger.info(f"  - Min resources per fold: {min_resources_per_fold}")
-            logger.info(f"  - Max resources (full dataset): {full_dataset_resources}")
-            logger.info(f"  - Factor: 2 (conservative, later rungs see full dataset)")
-            
-            # HalvingRandomSearchCV doesn't support multiple scorers like GridSearchCV
-            # So we use the primary scorer only and compute MAE separately
-            primary_scorer = scorer if task == "clf" else make_scorer(safe_r2_score, greater_is_better=True)
-            
-            search = HalvingRandomSearchCV(
-                estimator = pipe,
-                param_distributions = params,
-                n_candidates="exhaust",
-                factor = 2,  # Keep factor=2 as specified
-                resource = "n_samples",
-                max_resources = full_dataset_resources,  # Use full dataset size
-                min_resources = min_resources_per_fold,  # Ensure minimum viable folds
-                random_state = SEED,
-                scoring = primary_scorer,  # Use primary scorer only for HalvingRandomSearchCV
-                cv = cv_inner,
-                refit = True,  # Always refit for halving search
-                n_jobs = 1,  # Single job to prevent Windows resource exhaustion
-                verbose = 1
-            )
-
-        # Stage 8: Hyperparameter Search Execution
-        log_stage(logger, "HYPERPARAMETER_SEARCH", {
-            "search_type": "GridSearchCV" if n_combinations <= 20 else "HalvingRandomSearchCV",
-            "n_combinations": n_combinations,
-            "n_jobs": 1,
-            "backend": "sequential"
-        })
+            logger.info("Using custom fixed feature selection parameter search")
+            logger.info(f"Parameter combinations to evaluate: {n_combinations}")
+            logger.info("Note: Each combination tested with feature_first_simulate() using fixed feature counts")
         
-        logger.info(f"Starting hyperparameter search for {extractor} + {model}...")
-        search_start_time = time.time()
-        
-        # Use sequential processing to prevent Windows resource exhaustion
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            warnings.simplefilter("ignore", RuntimeWarning)
-            warnings.simplefilter("ignore", FutureWarning)
+        # Setup approach-specific search parameters
+        if approach == "extractors":
+            # Multi-modal pipeline approach for extractors
+            logger.info("Setting up multi-modal pipeline for extractor approach...")
+            
+            # Log the correct data shapes for each modality
+            for modality_name, modality_data in processed_modalities.items():
+                logger.info(f"Input {modality_name} shape: {modality_data.shape}")
+            
+            # Create custom multi-modal grid search
+            from sklearn.model_selection import ParameterGrid
+            
+            # Limit parameter combinations for Windows stability
+            max_combinations = 30  # Conservative limit for extractors
+            param_combinations = list(ParameterGrid(params))
+            
+            if len(param_combinations) > max_combinations:
+                logger.warning(f"Too many combinations ({len(param_combinations)}) - sampling {max_combinations}")
+                np.random.seed(SEED)
+                selected_indices = np.random.choice(len(param_combinations), max_combinations, replace=False)
+                param_combinations = [param_combinations[i] for i in selected_indices]
+                logger.info(f"Reduced to {len(param_combinations)} parameter combinations")
+            
+            # Stage 9: Multi-Modal Pipeline Search Execution
+            log_stage(logger, "MULTIMODAL_SEARCH_EXECUTION", {
+                "search_type": "Custom Multi-Modal Grid Search",
+                "n_combinations": len(param_combinations),
+                "backend": "sequential"
+            })
+            
+            logger.info(f"Starting multi-modal pipeline search for {extractor} + {model}...")
+            search_start_time = time.time()
             
             try:
-                # Force garbage collection and memory check before resource-intensive operation
+                # Force garbage collection before search
                 gc.collect()
                 
-                # Additional memory safety check before starting search
-                try:
-                    import psutil
-                    current_memory = psutil.virtual_memory().percent
-                    if current_memory > 96.0:
-                        logger.error(f"Memory usage too high before search ({current_memory:.1f}%) - aborting")
-                        return False
-                    logger.info(f"Memory usage before search: {current_memory:.1f}%")
-                except ImportError:
-                    pass
+                # Initialize tracking variables
+                best_score = float('-inf')
+                best_params = None
+                results_list = []
                 
-                # Set up timeout handler for Windows safety
-                class TimeoutException(Exception):
-                    pass
+                # Iterate through parameter combinations
+                for i, param_combination in enumerate(param_combinations):
+                    try:
+                        logger.debug(f"Testing combination {i+1}/{len(param_combinations)}: {param_combination}")
+                        
+                        # Create and configure pipeline
+                        pipeline = create_multimodal_pipeline(extractor, model, fusion_method)
+                        pipeline.set_params(**param_combination)
+                        
+                        # Perform cross-validation
+                        cv_scores = []
+                        for train_idx, val_idx in cv_inner.split(list(processed_modalities.values())[0], y):
+                            # Split modalities for this fold
+                            X_train_modalities = {}
+                            X_val_modalities = {}
+                            for modality_name, modality_data in processed_modalities.items():
+                                X_train_modalities[modality_name] = modality_data[train_idx]
+                                X_val_modalities[modality_name] = modality_data[val_idx]
+                            
+                            y_train, y_val = y[train_idx], y[val_idx]
+                            
+                            # Fit and predict
+                            pipeline.fit(X_train_modalities, y_train)
+                            y_pred = pipeline.predict(X_val_modalities)
+                            
+                            # Calculate score
+                            if primary_scoring == 'r2':
+                                from sklearn.metrics import r2_score
+                                score = r2_score(y_val, y_pred)
+                            elif primary_scoring == 'neg_mean_absolute_error':
+                                from sklearn.metrics import mean_absolute_error
+                                score = -mean_absolute_error(y_val, y_pred)
+                            else:
+                                # Use scorer function
+                                score = primary_scoring._score_func(y_val, y_pred)
+                            
+                            cv_scores.append(score)
+                        
+                        # Calculate mean score
+                        mean_score = np.mean(cv_scores)
+                        std_score = np.std(cv_scores)
+                        
+                        # Track result
+                        results_list.append({
+                            'params': param_combination.copy(),
+                            'mean_score': mean_score,
+                            'std_score': std_score,
+                            'cv_scores': cv_scores.copy()
+                        })
+                        
+                        # Check if this is the best so far
+                        if np.isfinite(mean_score) and mean_score > best_score:
+                            best_score = mean_score
+                            best_params = param_combination.copy()
+                            logger.info(f"New best score: {best_score:.4f} ± {std_score:.4f}")
+                            logger.debug(f"Best params so far: {best_params}")
+                        
+                        # Periodic memory check
+                        if (i + 1) % 10 == 0:
+                            gc.collect()
+                            
+                    except Exception as e:
+                        logger.warning(f"Parameter combination {i+1} failed: {str(e)}")
+                        continue
                 
-                def timeout_handler(signum, frame):
-                    raise TimeoutException("Hyperparameter search timed out")
+                search_elapsed = time.time() - search_start_time
+                logger.info(f"Multi-modal pipeline search completed in {search_elapsed:.1f} seconds")
+                logger.info(f"Best score: {best_score:.4f}")
+                logger.info(f"Best parameters: {best_params}")
                 
-                # Set alarm for search timeout (if supported on Windows)
-                try:
-                    signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(SEARCH_TIMEOUT_MINUTES * 60)
-                    
-                    search.fit(X, y)
-                    
-                    signal.alarm(0)  # Cancel alarm
-                except (AttributeError, OSError):
-                    # SIGALRM not supported on Windows, proceed without timeout
-                    search.fit(X, y)
+                # Create results object for compatibility
+                class MultiModalSearchResults:
+                    def __init__(self, best_params, best_score, results_list):
+                        self.best_params_ = best_params
+                        self.best_score_ = best_score
+                        self.cv_results_ = results_list
                 
-                # Force garbage collection after search to free memory
-                gc.collect()
+                search_results = MultiModalSearchResults(best_params, best_score, results_list)
                 
             except Exception as e:
-                logger.error(f"Hyperparameter search failed: {str(e)}")
-                # Clean up resources on failure
+                logger.error(f"Multi-modal pipeline search failed: {str(e)}")
                 gc.collect()
                 return False
         
-        search_elapsed = time.time() - search_start_time
-        logger.info(f"Hyperparameter search completed in {search_elapsed:.1f} seconds")
+        else:  # selectors approach
+            # Multi-modal selector pipeline approach for selectors
+            logger.info("Setting up multi-modal selector pipeline for selectors approach...")
+            
+            # Log the correct data shapes for each modality
+            for modality_name, modality_data in processed_modalities.items():
+                logger.info(f"Input {modality_name} shape: {modality_data.shape}")
+            
+            # Create custom multi-modal selector grid search
+            from sklearn.model_selection import ParameterGrid
+            
+            # Limit parameter combinations for Windows stability
+            max_combinations = 30  # Conservative limit for selectors
+            param_combinations = list(ParameterGrid(params))
+            
+            if len(param_combinations) > max_combinations:
+                logger.warning(f"Too many combinations ({len(param_combinations)}) - sampling {max_combinations}")
+                np.random.seed(SEED)
+                selected_indices = np.random.choice(len(param_combinations), max_combinations, replace=False)
+                param_combinations = [param_combinations[i] for i in selected_indices]
+                logger.info(f"Reduced to {len(param_combinations)} parameter combinations")
+            
+            # Stage 9: Multi-Modal Selector Pipeline Search Execution
+            log_stage(logger, "MULTIMODAL_SELECTOR_SEARCH_EXECUTION", {
+                "search_type": "Custom Multi-Modal Selector Grid Search",
+                "n_combinations": len(param_combinations),
+                "backend": "sequential"
+            })
+            
+            logger.info(f"Starting multi-modal selector pipeline search for {extractor} + {model}...")
+            search_start_time = time.time()
+            
+            try:
+                # Force garbage collection before search
+                gc.collect()
+                
+                # Initialize tracking variables
+                best_score = float('-inf')
+                best_params = None
+                results_list = []
+                
+                # Iterate through parameter combinations
+                for i, param_combination in enumerate(param_combinations):
+                    try:
+                        logger.debug(f"Testing combination {i+1}/{len(param_combinations)}: {param_combination}")
+                        
+                        # Create and configure selector pipeline
+                        selector = extractor  # In selectors approach, extractor parameter holds the selector name
+                        pipeline = create_multimodal_selector_pipeline(selector, model, fusion_method, n_features)
+                        pipeline.set_params(**param_combination)
+                        
+                        # Perform cross-validation
+                        cv_scores = []
+                        for train_idx, val_idx in cv_inner.split(list(processed_modalities.values())[0], y):
+                            # Split modalities for this fold
+                            X_train_modalities = {}
+                            X_val_modalities = {}
+                            for modality_name, modality_data in processed_modalities.items():
+                                X_train_modalities[modality_name] = modality_data[train_idx]
+                                X_val_modalities[modality_name] = modality_data[val_idx]
+                            
+                            y_train, y_val = y[train_idx], y[val_idx]
+                            
+                            # Fit and predict
+                            pipeline.fit(X_train_modalities, y_train)
+                            y_pred = pipeline.predict(X_val_modalities)
+                            
+                            # Calculate score
+                            if primary_scoring == 'r2':
+                                from sklearn.metrics import r2_score
+                                score = r2_score(y_val, y_pred)
+                            elif primary_scoring == 'neg_mean_absolute_error':
+                                from sklearn.metrics import mean_absolute_error
+                                score = -mean_absolute_error(y_val, y_pred)
+                            else:
+                                # Use scorer function
+                                score = primary_scoring._score_func(y_val, y_pred)
+                            
+                            cv_scores.append(score)
+                        
+                        # Calculate mean score
+                        mean_score = np.mean(cv_scores)
+                        std_score = np.std(cv_scores)
+                        
+                        # Track result
+                        results_list.append({
+                            'params': param_combination.copy(),
+                            'mean_score': mean_score,
+                            'std_score': std_score,
+                            'cv_scores': cv_scores.copy()
+                        })
+                        
+                        # Check if this is the best so far
+                        if np.isfinite(mean_score) and mean_score > best_score:
+                            best_score = mean_score
+                            best_params = param_combination.copy()
+                            logger.info(f"New best score: {best_score:.4f} ± {std_score:.4f}")
+                            logger.debug(f"Best params so far: {best_params}")
+                        
+                        # Periodic memory check
+                        if (i + 1) % 10 == 0:
+                            gc.collect()
+                            
+                    except Exception as e:
+                        logger.warning(f"Parameter combination {i+1} failed: {str(e)}")
+                        continue
+                
+                search_elapsed = time.time() - search_start_time
+                logger.info(f"Multi-modal selector pipeline search completed in {search_elapsed:.1f} seconds")
+                logger.info(f"Best score: {best_score:.4f}")
+                logger.info(f"Best parameters: {best_params}")
+                
+                # Create results object for compatibility
+                class MultiModalSelectorSearchResults:
+                    def __init__(self, best_params, best_score, results_list):
+                        self.best_params_ = best_params
+                        self.best_score_ = best_score
+                        self.cv_results_ = results_list
+                
+                search_results = MultiModalSelectorSearchResults(best_params, best_score, results_list)
+                
+            except Exception as e:
+                logger.error(f"Multi-modal selector pipeline search failed: {str(e)}")
+                gc.collect()
+                return False
         
-        # Validate search results
-        if not hasattr(search, 'best_score_') or search.best_score_ is None:
-            logger.error("Search completed but no best score found")
-            return False
+        # Unified result handling for both approaches
+        search = search_results
         
         # Handle multiple scorers for regression
         best_r2_score = None
@@ -1156,43 +2531,48 @@ def tune(dataset, task, extractor, model, logger=None):
                     logger.info(f"Best R² score: {best_r2_score:.4f}")
                     if hasattr(search, 'best_estimator_'):
                         try:
-                            # Use cross-validation to compute MAE with the best parameters
-                            from sklearn.model_selection import cross_val_score
+                            # NOTE: This section is disabled for feature-first pipeline
+                            # because search.best_estimator_ doesn't exist in our custom search
+                            # and we don't have a single X matrix (we use separate modalities)
+                            logger.debug("Traditional MAE computation disabled for feature-first pipeline")
                             
-                            # Suppress sklearn warnings during MAE computation
-                            with warnings.catch_warnings():
-                                warnings.filterwarnings("ignore", 
-                                                      message="The least populated class in y has only .* members", 
-                                                      category=UserWarning)
-                                mae_scores = cross_val_score(
-                                    search.best_estimator_, X, y, 
-                                    cv=cv_inner, 
-                                    scoring=make_scorer(safe_mae_score, greater_is_better=True),
-                                    n_jobs=1  # Single job to avoid conflicts
-                                )
-                            
-                            actual_mae = -np.mean(mae_scores)  # Convert back to positive MAE
-                            best_mae_score = -actual_mae  # Store as negative for consistency
-                            
-                            logger.info(f"Best MAE score (computed): {actual_mae:.4f}" + 
-                                       (f" (baseline: {baseline_mae:.4f})" if baseline_mae is not None else ""))
-                            
-                            # Check if MAE improved over baseline
-                            if baseline_mae is not None:
-                                mae_improvement = baseline_mae - actual_mae
-                                mae_improvement_pct = (mae_improvement / baseline_mae) * 100
-                                logger.info(f"MAE improvement: {mae_improvement:.4f} ({mae_improvement_pct:+.1f}%)")
-                                
-                                if mae_improvement > 0:
-                                    logger.info("✓ MAE improved over baseline")
-                                else:
-                                    logger.warning(" MAE did not improve over baseline")
+                            # # Use cross-validation to compute MAE with the best parameters
+                            # from sklearn.model_selection import cross_val_score
+                            # 
+                            # # Suppress sklearn warnings during MAE computation
+                            # with warnings.catch_warnings():
+                            #     warnings.filterwarnings("ignore", 
+                            #                           message="The least populated class in y has only .* members", 
+                            #                           category=UserWarning)
+                            #     mae_scores = cross_val_score(
+                            #         search.best_estimator_, X, y, 
+                            #         cv=cv_inner, 
+                            #         scoring=make_scorer(safe_mae_score, greater_is_better=True),
+                            #         n_jobs=1  # Single job to avoid conflicts
+                            #     )
+                            # 
+                            # actual_mae = -np.mean(mae_scores)  # Convert back to positive MAE
+                            # best_mae_score = -actual_mae  # Store as negative for consistency
+                            # 
+                            # logger.info(f"Best MAE score (computed): {actual_mae:.4f}" + 
+                            #            (f" (baseline: {baseline_mae:.4f})" if baseline_mae is not None else ""))
+                            # 
+                            # # Check if MAE improved over baseline
+                            # if baseline_mae is not None:
+                            #     mae_improvement = baseline_mae - actual_mae
+                            #     mae_improvement_pct = (mae_improvement / baseline_mae) * 100
+                            #     logger.info(f"MAE improvement: {mae_improvement:.4f} ({mae_improvement_pct:+.1f}%)")
+                            #     
+                            #     if mae_improvement > 0:
+                            #         logger.info("✓ MAE improved over baseline")
+                            #     else:
+                            #         logger.warning(" MAE did not improve over baseline")
                         except Exception as e:
                             logger.warning(f"Could not compute MAE manually: {e}")
                             logger.info(f"Best R² score: {best_r2_score:.4f}")
                     else:
                         logger.info(f"Best R² score: {best_r2_score:.4f}")
-                        logger.warning("No best estimator available for MAE computation")
+                        logger.warning("No best estimator available for MAE computation (expected for feature-first pipeline)")
                         
             except Exception as e:
                 logger.warning(f"Could not extract scoring results: {e}")
@@ -1239,22 +2619,29 @@ def tune(dataset, task, extractor, model, logger=None):
         
         logger.info("Hyperparameter search validation completed")
 
-        # Stage 9: Results Processing and Saving
+        # Stage 10: Results Processing and Saving
         log_stage(logger, "RESULTS_PROCESSING")
         
-        # Save results with enhanced metadata
+        # Save results with enhanced metadata for fixed feature selection
         best = {
             "best_params": search.best_params_,
             "best_score": search.best_score_,
             "dataset": dataset,
             "task": task,
-            "extractor": extractor,
             "model": model,
-            "preprocessing": "4-phase-enhanced",
-            "data_shape": X.shape,
-            "n_parameter_combinations": n_combinations,
-            "search_method": "GridSearchCV" if n_combinations <= 20 else "HalvingRandomSearchCV",
-            "cv_folds": CV_INNER,
+            "fusion_method": fusion_method,
+            "n_features": n_features,
+            "preprocessing": "fixed-feature-selection-4-phase-enhanced",
+            "data_shape": {
+                "total_samples": len(y),
+                "n_features_per_modality": n_features,
+                "n_modalities": len(processed_modalities),
+                "total_features_after_selection": len(processed_modalities) * n_features if n_features is not None else "Variable (extractor-dependent)",
+                "modality_shapes_before_selection": {name: arr.shape for name, arr in processed_modalities.items()}
+            },
+            "n_parameter_combinations": len(param_combinations),
+            "search_method": "Custom Fixed Feature Selection Grid Search",
+            "cv_folds": cv_inner.n_splits if hasattr(cv_inner, 'n_splits') else CV_INNER,
             "search_time_seconds": search_elapsed,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
@@ -1273,7 +2660,13 @@ def tune(dataset, task, extractor, model, logger=None):
         else:
             best["scoring_method"] = "Matthews correlation coefficient"
 
-        fp = HP_DIR/f"{dataset}_{extractor}_{model}.json"
+        # Generate filename based on approach
+        if approach == "extractors":
+            fp = HP_DIR/f"{dataset}_{extractor}_{model}_{fusion_method}.json"
+        else:  # selectors
+            # Include selector in filename for Option B implementation
+            selector = extractor  # In selectors approach, extractor parameter holds the selector name
+            fp = HP_DIR/f"{dataset}_{selector}_{model}_{fusion_method}_{n_features}f.json"
         
         # Convert non-serializable objects to string representations
         def make_json_serializable(obj):
@@ -1318,9 +2711,11 @@ def tune(dataset, task, extractor, model, logger=None):
         
         logger.info(f"SAVED {fp}")
         logger.info(f"  Best Score: {best['best_score']:.4f}")
-        logger.info(f"  Data Shape: {X.shape}")
+        logger.info(f"  Features per modality: {n_features if n_features is not None else 'Variable (extractor-dependent)'}, Total modalities: {len(processed_modalities)}")
+        logger.info(f"  Total features after selection: {len(processed_modalities) * n_features if n_features is not None else 'Variable (extractor-dependent)'}")
+        logger.info(f"  Samples: {len(y)}")
         logger.info(f"  Search Time: {search_elapsed:.1f}s")
-        logger.info(f"  Preprocessing: 4-Phase Enhanced Pipeline")
+        logger.info(f"  Preprocessing: Fixed Feature Selection + 4-Phase Enhanced Pipeline")
         
         # Log best parameters
         logger.info("Best Parameters:")
@@ -1368,11 +2763,41 @@ def tune(dataset, task, extractor, model, logger=None):
         
         return False
 
-def tune_all_combinations(dataset, task, use_subprocess=True):
-    """Run tuning for all extractor-model combinations for a dataset with 4-phase preprocessing and comprehensive logging."""
+def ensure_preprocessing_cache(dataset, task, logger=None):
+    """Ensure preprocessing cache exists for a dataset, creating it if necessary."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    
+    cache_data = load_preprocessing_cache(dataset, task)
+    if cache_data is None:
+        logger.info(f"Pre-caching preprocessing for {dataset} (task: {task})...")
+        start_time = time.time()
+        
+        # Run preprocessing once and cache it
+        processed_modalities, y, sample_ids, baseline_mae = load_dataset_for_tuner_cached(dataset, task)
+        
+        cache_time = time.time() - start_time
+        logger.info(f"Preprocessing cached in {cache_time:.1f}s - will be reused for all combinations")
+        
+        return processed_modalities, y, sample_ids, baseline_mae
+    else:
+        logger.info(f"Preprocessing cache already exists for {dataset} (task: {task})")
+        return (
+            cache_data['processed_modalities'],
+            cache_data['y'],
+            cache_data.get('sample_ids'),
+            cache_data.get('baseline_mae')
+        )
+
+def tune_all_extractors(dataset, task, use_subprocess=True):
+    """Run tuning for all extractor combinations with both fusion methods."""
     
     # Setup session logger
     session_logger, session_log_path = setup_logging()
+    
+    # Pre-cache preprocessing to avoid redundant work
+    session_logger.info(f"Ensuring preprocessing cache for {dataset}...")
+    ensure_preprocessing_cache(dataset, task, session_logger)
     
     if task == "reg":
         extractors = REGRESSION_EXTRACTORS
@@ -1381,14 +2806,18 @@ def tune_all_combinations(dataset, task, use_subprocess=True):
         extractors = CLASSIFICATION_EXTRACTORS
         models = CLASSIFICATION_MODELS
     
-    total_combinations = len(extractors) * len(models)
+    # Both fusion methods to test
+    fusion_methods = ["average", "attention_weighted"]
     
-    log_stage(session_logger, "BATCH_TUNING_INITIALIZATION", {
+    total_combinations = len(extractors) * len(models) * len(fusion_methods)
+    
+    log_stage(session_logger, "BATCH_EXTRACTOR_TUNING_INITIALIZATION", {
         "dataset": dataset,
         "task": task,
         "total_combinations": total_combinations,
         "extractors": extractors,
         "models": models,
+        "fusion_methods": fusion_methods,
         "subprocess_isolation": use_subprocess,
         "timeout_minutes": TIMEOUT_MINUTES,
         "session_log": str(session_log_path)
@@ -1398,38 +2827,38 @@ def tune_all_combinations(dataset, task, use_subprocess=True):
     failed = 0
     start_time = time.time()
     
-    for i, (extractor, model) in enumerate(product(extractors, models), 1):
+    for i, (extractor, model, fusion_method) in enumerate(product(extractors, models, fusion_methods), 1):
         log_stage(session_logger, f"COMBINATION_{i}_OF_{total_combinations}", {
             "extractor": extractor,
             "model": model,
+            "fusion_method": fusion_method,
             "dataset": dataset,
-            "preprocessing": "4-Phase Enhanced Pipeline"
+            "preprocessing": "Extractor + Model Tuning"
         })
         
         if use_subprocess:
-            success = run_tuning_subprocess(dataset, task, extractor, model, session_logger)
+            success = run_tuning_subprocess_extractors(dataset, task, extractor, model, fusion_method, session_logger)
         else:
-            # Direct execution (for debugging)
             try:
-                success = tune(dataset, task, extractor, model, session_logger)
+                success = tune_extractors(dataset, task, extractor, model, fusion_method, session_logger)
             except Exception as e:
                 log_error_with_context(session_logger, e, {
-                    "operation": "direct_tune_execution",
-                    "combination": f"{extractor}+{model}",
+                    "operation": "direct_tune_extractors_execution",
+                    "combination": f"{extractor}+{model}+{fusion_method}",
                     "combination_number": f"{i}/{total_combinations}"
                 })
                 success = False
         
         if success:
             successful += 1
-            session_logger.info(f"✓ COMPLETED ({i}/{total_combinations}): {extractor} + {model}")
+            session_logger.info(f"✓ COMPLETED ({i}/{total_combinations}): {extractor} + {model} + {fusion_method}")
         else:
             failed += 1
-            session_logger.error(f"✗ FAILED ({i}/{total_combinations}): {extractor} + {model}")
+            session_logger.error(f"✗ FAILED ({i}/{total_combinations}): {extractor} + {model} + {fusion_method}")
     
     total_time = time.time() - start_time
     
-    log_stage(session_logger, "BATCH_TUNING_COMPLETED", {
+    log_stage(session_logger, "BATCH_EXTRACTOR_TUNING_COMPLETED", {
         "dataset": dataset,
         "total_time_minutes": f"{total_time/60:.1f}",
         "successful_combinations": successful,
@@ -1445,14 +2874,110 @@ def tune_all_combinations(dataset, task, use_subprocess=True):
             session_logger.info("Generated hyperparameter files:")
             for f in sorted(dataset_files):
                 session_logger.info(f"  - {f.name}")
+
+def tune_all_selectors(dataset, task, use_subprocess=True):
+    """Run tuning for all selector+model combinations with fixed feature counts, both fusion methods (Option B implementation)."""
+    
+    # Setup session logger
+    session_logger, session_log_path = setup_logging()
+    
+    # Pre-cache preprocessing to avoid redundant work
+    session_logger.info(f"Ensuring preprocessing cache for {dataset}...")
+    ensure_preprocessing_cache(dataset, task, session_logger)
+    
+    if task == "reg":
+        selectors = REGRESSION_SELECTORS
+        models = REGRESSION_MODELS
+    else:
+        selectors = CLASSIFICATION_SELECTORS
+        models = CLASSIFICATION_MODELS
+    
+    # Both fusion methods to test
+    fusion_methods = ["average", "attention_weighted"]
+    
+    # Fixed feature counts to test
+    feature_counts = FEATURE_COUNTS  # [8, 16, 32]
+    
+    total_combinations = len(selectors) * len(models) * len(fusion_methods) * len(feature_counts)
+    
+    log_stage(session_logger, "BATCH_SELECTOR_TUNING_INITIALIZATION", {
+        "dataset": dataset,
+        "task": task,
+        "total_combinations": total_combinations,
+        "selectors": selectors,
+        "models": models,
+        "fusion_methods": fusion_methods,
+        "feature_counts": feature_counts,
+        "subprocess_isolation": use_subprocess,
+        "timeout_minutes": TIMEOUT_MINUTES,
+        "session_log": str(session_log_path),
+        "implementation": "Option B - Selector-specific hyperparameter optimization"
+    })
+    
+    successful = 0
+    failed = 0
+    start_time = time.time()
+    
+    for i, (selector, model, fusion_method, n_features) in enumerate(product(selectors, models, fusion_methods, feature_counts), 1):
+        log_stage(session_logger, f"COMBINATION_{i}_OF_{total_combinations}", {
+            "selector": selector,
+            "model": model,
+            "fusion_method": fusion_method,
+            "n_features": n_features,
+            "dataset": dataset,
+            "preprocessing": "Selector-specific Feature Selection + 4-Phase Enhanced Pipeline"
+        })
+        
+        if use_subprocess:
+            success = run_tuning_subprocess_selectors(dataset, task, selector, model, fusion_method, n_features, session_logger)
+        else:
+            # Direct execution (for debugging)
+            try:
+                success = tune_selectors(dataset, task, selector, model, fusion_method, n_features, session_logger)
+            except Exception as e:
+                log_error_with_context(session_logger, e, {
+                    "operation": "direct_tune_selectors_execution",
+                    "combination": f"{selector}+{model}+{fusion_method}+{n_features}f",
+                    "combination_number": f"{i}/{total_combinations}"
+                })
+                success = False
+        
+        if success:
+            successful += 1
+            session_logger.info(f"✓ COMPLETED ({i}/{total_combinations}): {selector} + {model} + {fusion_method} + {n_features}f")
+        else:
+            failed += 1
+            session_logger.error(f"✗ FAILED ({i}/{total_combinations}): {selector} + {model} + {fusion_method} + {n_features}f")
+    
+    total_time = time.time() - start_time
+    
+    log_stage(session_logger, "BATCH_SELECTOR_TUNING_COMPLETED", {
+        "dataset": dataset,
+        "total_time_minutes": f"{total_time/60:.1f}",
+        "successful_combinations": successful,
+        "failed_combinations": failed,
+        "total_combinations": total_combinations,
+        "success_rate": f"{successful/total_combinations:.1%}",
+        "implementation": "Option B - Each selector gets separate hyperparameter optimization"
+    })
+    
+    if successful > 0:
+        # List generated files
+        dataset_files = list(HP_DIR.glob(f"{dataset}_*.json"))
+        if dataset_files:
+            session_logger.info("Generated hyperparameter files:")
+            for f in sorted(dataset_files):
+                session_logger.info(f"  - {f.name}")
                 
         # Show sample of best hyperparameters
-        session_logger.info("Sample of optimized hyperparameters:")
-        for f in sorted(dataset_files)[:3]:  # Show first 3
+        session_logger.info("Sample of selector-specific optimized hyperparameters:")
+        for f in sorted(dataset_files)[:5]:  # Show first 5
             try:
                 with open(f, 'r') as file:
                     data = json.load(file)
-                    session_logger.info(f"  {f.name}: Score={data['best_score']:.4f}")
+                    n_feat = data.get('n_features', 'N/A')
+                    selector_name = f.name.split('_')[1] if '_' in f.name else 'Unknown'
+                    session_logger.info(f"  {f.name}: Selector={selector_name}, Score={data['best_score']:.4f}, Features={n_feat}")
             except:
                 pass
 
@@ -1523,32 +3048,78 @@ def safe_r2_score(y_true, y_pred, **kwargs):
 def safe_mcc_score(y_true, y_pred, **kwargs):
     """
     Safe Matthews correlation coefficient that handles edge cases.
+    
+    The Matthews correlation coefficient (MCC) is particularly important for genomic/biomedical data
+    because it provides a balanced measure of classification quality even with severe class imbalance,
+    which is common in cancer genomics where:
+    
+    1. **Patient outcome prediction**: Often have unequal numbers of good vs poor outcomes
+    2. **Biomarker discovery**: Most genes/features are non-informative (negative class >> positive class)  
+    3. **Multi-omics integration**: Different data types may have different class distributions
+    4. **Small sample studies**: Limited patients available, leading to extreme ratios
+    
+    MCC accounts for all four confusion matrix categories (TP, TN, FP, FN) and produces a 
+    correlation coefficient between observed and predicted classifications:
+    - MCC = +1: Perfect prediction
+    - MCC = 0: Random performance  
+    - MCC = -1: Perfect inverse prediction
+    
+    This is more robust than accuracy, precision, recall, or F1-score for imbalanced datasets
+    commonly found in genomic studies.
+    
+    Parameters
+    ----------
+    y_true : array-like
+        True binary labels
+    y_pred : array-like  
+        Predicted binary labels
+    **kwargs : dict
+        Additional arguments passed to matthews_corrcoef
+        
+    Returns
+    -------
+    float
+        MCC score, with fallbacks for edge cases:
+        - Returns -1.0 for invalid inputs (worst performance)
+        - Returns 0.0 for undefined cases (random performance)
+        - Returns 1.0 for perfect single-class prediction
     """
-    if len(y_true) < 2:
-        return -1.0
-    
-    # Validate predictions
-    if not np.all(np.isfinite(y_pred)):
-        return -1.0
-    
-    # For binary classification, ensure we have both classes
-    unique_true = np.unique(y_true)
-    unique_pred = np.unique(y_pred)
-    
-    if len(unique_true) < 2:
-        # Only one class in true labels
-        if len(unique_pred) == 1 and unique_pred[0] in unique_true:
-            return 1.0  # Perfect prediction of single class
-        else:
-            return -1.0  # Poor prediction
-    
+    import numpy as np
     try:
+        # Basic validation
+        if len(y_true) < 2:
+            return -1.0
+        
+        # Validate predictions
+        if not np.all(np.isfinite(y_pred)):
+            return -1.0
+        
+        # For binary classification, ensure we have both classes
+        unique_true = np.unique(y_true)
+        unique_pred = np.unique(y_pred)
+        
+        if len(unique_true) < 2:
+            # Only one class in true labels
+            if len(unique_pred) == 1 and unique_pred[0] in unique_true:
+                return 1.0  # Perfect prediction of single class
+            else:
+                return -1.0  # Poor prediction
+        
+        # Calculate MCC using sklearn's implementation
         mcc = matthews_corrcoef(y_true, y_pred, **kwargs)
+        
+        # Handle NaN cases (can occur with extreme class imbalance)
+        if np.isnan(mcc):
+            return 0.0  # No correlation (random performance)
+        
         if not np.isfinite(mcc):
             return -1.0
+            
         return mcc
-    except Exception:
-        return -1.0
+        
+    except Exception as e:
+        # Fallback for any MCC calculation issues
+        return -1.0  # Worst performance as fallback
 
 def safe_mae_score(y_true, y_pred, **kwargs):
     """
@@ -1720,6 +3291,17 @@ class SafeExtractorWrapper(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         """Fit the wrapped extractor with fallback handling."""
         try:
+            # Pre-validate input data
+            if X.shape[0] == 0:
+                raise ValueError("Cannot fit extractor on empty dataset")
+            
+            if X.shape[1] == 0:
+                raise ValueError("Cannot fit extractor on dataset with no features")
+            
+            # Check for minimum samples requirement
+            if X.shape[0] < 2:
+                raise ValueError(f"Cannot fit extractor on dataset with only {X.shape[0]} samples (need at least 2)")
+                
             self.extractor.fit(X, y)
             self.extraction_failed = False
         except Exception as e:
@@ -1729,45 +3311,63 @@ class SafeExtractorWrapper(BaseEstimator, TransformerMixin):
             
             # Handle common extractor failures
             current_logger.warning(f"Primary extractor {type(self.extractor).__name__} failed: {error_msg}")
+            current_logger.debug(f"Input shape: {X.shape}")
             
-            # Special handling for KPCA zero-size array error
-            if "zero-size array to reduction operation maximum" in error_msg:
-                current_logger.warning("KPCA encountered zero-size eigenvalue array - likely due to insufficient data variation or too many components")
+            # Special handling for common failure modes
+            if "zero-size array" in error_msg or "empty array" in error_msg:
+                current_logger.warning("Extractor encountered empty array - likely due to very small CV fold")
+            elif "n_components" in error_msg and "greater than" in error_msg:
+                current_logger.warning("Too many components requested for dataset size")
             elif "Matrix is not positive definite" in error_msg:
                 current_logger.warning("KPCA encountered singular matrix - likely due to poor kernel parameter choice")
+            elif "zero-size array to reduction operation maximum" in error_msg:
+                current_logger.warning("KPCA encountered zero-size eigenvalue array - likely due to insufficient data variation")
             
-            # Create appropriate fallback based on extractor type
+            # Create appropriate fallback based on extractor type and data constraints
+            n_samples, n_features = X.shape
+            
             if hasattr(self.extractor, 'n_components'):
                 n_components = getattr(self.extractor, 'n_components', 2)
+                
+                # Calculate safe number of components based on data size
+                # For PCA: components <= min(n_samples-1, n_features)
+                max_safe_components = min(n_samples - 1, n_features, 10)  # Cap at 10 for computational efficiency
                 
                 # For KPCA failures, fall back to regular PCA
                 if 'KernelPCA' in type(self.extractor).__name__ or 'KPCA' in type(self.extractor).__name__:
                     from sklearn.decomposition import PCA
                     # Use very conservative components for KPCA failures
-                    safe_components = min(n_components // 2, X.shape[0] - 2, X.shape[1] // 4, 5)
+                    safe_components = min(n_components // 2, max_safe_components, 3)
                     safe_components = max(1, safe_components)  # Ensure at least 1 component
                     self.fallback_extractor = PCA(n_components=safe_components, random_state=42)
                     current_logger.info(f"Using conservative PCA fallback with {safe_components} components for KPCA failure")
                 
-                # For other component-based extractors, try PCA
+                # For other component-based extractors, try PCA with safe components
                 else:
                     from sklearn.decomposition import PCA
-                    safe_components = min(n_components, X.shape[0] - 1, X.shape[1], 5)
+                    safe_components = min(n_components, max_safe_components, 5)
                     safe_components = max(1, safe_components)
                     self.fallback_extractor = PCA(n_components=safe_components, random_state=42)
                     current_logger.info(f"Using PCA fallback with {safe_components} components")
             else:
                 # For non-component extractors, use simple PCA
                 from sklearn.decomposition import PCA
-                safe_components = min(5, X.shape[0] - 1, X.shape[1])
-                safe_components = max(1, safe_components)
+                max_safe_components = min(n_samples - 1, n_features, 5)
+                safe_components = max(1, max_safe_components)
                 self.fallback_extractor = PCA(n_components=safe_components, random_state=42)
                 current_logger.info(f"Using basic PCA fallback with {safe_components} components")
             
             try:
-                self.fallback_extractor.fit(X, y)
-                self.extraction_failed = True
-                current_logger.info("Fallback extractor fitted successfully")
+                # Validate fallback extractor can work with the data
+                if X.shape[0] >= 2 and X.shape[1] >= 1:
+                    self.fallback_extractor.fit(X, y)
+                    self.extraction_failed = True
+                    current_logger.info("Fallback extractor fitted successfully")
+                else:
+                    # Data too small even for fallback
+                    current_logger.error(f"Dataset too small for any extractor: {X.shape}")
+                    self.extraction_failed = True
+                    self.fallback_extractor = None
             except Exception as fallback_error:
                 current_logger.error(f"Fallback extractor also failed: {fallback_error}")
                 # Last resort: use identity transformation (first few features)
@@ -1870,15 +3470,28 @@ class SafeExtractorWrapper(BaseEstimator, TransformerMixin):
 
 # ------------- CLI -------------------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Enhanced 4-Phase Halving Tuner with Comprehensive Logging")
+    parser = argparse.ArgumentParser(description="Multi-Omics Hyperparameter Tuner - Supports both Extractor and Selector approaches")
     parser.add_argument("--dataset", help="Dataset name")
     parser.add_argument("--task", choices=["reg", "clf"], help="Task type (reg/clf)")
-    parser.add_argument("--extractor", help="Feature extractor")
+    parser.add_argument("--approach", choices=["extractors", "selectors"], 
+                       help="Tuning approach: 'extractors' (tune extractors+models) or 'selectors' (tune models with fixed feature selection)")
+    
+    # Extractor-based arguments
+    parser.add_argument("--extractor", help="Extractor name (required for --approach extractors)")
+    
+    # Selector-based arguments
+    parser.add_argument("--selector", help="Selector name (required for --approach selectors)")  
+    parser.add_argument("--n-features", type=int, choices=FEATURE_COUNTS, default=16, 
+                       help="Number of features per modality (for --approach selectors)")
+    
+    # Common arguments
     parser.add_argument("--model", help="Model name")
+    parser.add_argument("--fusion", choices=["average", "attention_weighted"], default="average", help="Fusion method")
     parser.add_argument("--single", action="store_true", help="Single tuning mode (used by subprocess)")
     parser.add_argument("--no-subprocess", action="store_true", help="Disable subprocess isolation")
-    parser.add_argument("--all", action="store_true", help="Run all extractor-model combinations for dataset")
+    parser.add_argument("--all", action="store_true", help="Run all combinations for dataset")
     parser.add_argument("--list-datasets", action="store_true", help="List all available datasets")
+    parser.add_argument("--no-cache", action="store_true", help="Disable preprocessing cache (slower but ensures fresh preprocessing)")
     parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO", help="Logging level")
     
     args = parser.parse_args()
@@ -1886,12 +3499,20 @@ if __name__ == "__main__":
     # Convert log level string to logging constant
     log_level = getattr(logging, args.log_level.upper())
     
+    # Handle cache option
+    if args.no_cache:
+        ENABLE_PREPROCESSING_CACHE = False
+        print("Preprocessing cache disabled - will run full preprocessing for each combination")
+    
     if args.list_datasets:
         list_available_datasets()
         sys.exit(0)
     
-    if not args.dataset:
-        parser.error("--dataset is required")
+    if not args.approach and not args.list_datasets:
+        parser.error("--approach is required (unless using --list-datasets)")
+    
+    if not args.dataset and not args.list_datasets:
+        parser.error("--dataset is required (unless using --list-datasets)")
     
     # Validate dataset exists
     if args.dataset not in DATASET_INFO:
@@ -1912,17 +3533,55 @@ if __name__ == "__main__":
         print(f"Warning: {args.dataset} is a {task_name} dataset, using {expected_task}")
         args.task = expected_task
     
+    # Validate approach-specific arguments
+    if args.approach == "extractors":
+        # Only require --extractor for non-batch mode
+        if not args.all and not args.extractor:
+            parser.error("--approach extractors requires --extractor (unless using --all)")
+        
+        # Validate extractor for task (only if extractor is specified)
+        if args.extractor:
+            if args.task == "reg":
+                if args.extractor not in REGRESSION_EXTRACTORS:
+                    parser.error(f"Extractor '{args.extractor}' not valid for regression. Choose from: {REGRESSION_EXTRACTORS}")
+            else:  # classification
+                if args.extractor not in CLASSIFICATION_EXTRACTORS:
+                    parser.error(f"Extractor '{args.extractor}' not valid for classification. Choose from: {CLASSIFICATION_EXTRACTORS}")
+    
+    elif args.approach == "selectors":
+        # Only require --selector for non-batch mode
+        if not args.all and not args.selector:
+            parser.error("--approach selectors requires --selector (unless using --all)")
+        
+        # Validate selector for task (only if selector is specified)
+        if args.selector:
+            if args.task == "reg":
+                if args.selector not in REGRESSION_SELECTORS:
+                    parser.error(f"Selector '{args.selector}' not valid for regression. Choose from: {REGRESSION_SELECTORS}")
+            else:  # classification
+                if args.selector not in CLASSIFICATION_SELECTORS:
+                    parser.error(f"Selector '{args.selector}' not valid for classification. Choose from: {CLASSIFICATION_SELECTORS}")
+        
+        if args.extractor:
+            print("Warning: --extractor ignored for --approach selectors")
+            args.extractor = None
+    
     # Single tuning mode (called by subprocess)
     if args.single:
-        if not args.extractor or not args.model:
-            parser.error("--single mode requires --extractor and --model")
+        if not args.model:
+            parser.error("--single mode requires --model")
         
         # Setup specific logger for single run
-        logger, log_path = setup_logging(args.dataset, args.extractor, args.model, log_level)
-        logger.info(f"Starting single tuning run: {args.dataset} - {args.extractor} - {args.model}")
-        logger.info(f"Log file: {log_path}")
+        if args.approach == "extractors":
+            logger, log_path = setup_logging(args.dataset, args.extractor, args.model, log_level)
+            logger.info(f"Starting single extractor tuning run: {args.dataset} - {args.extractor} - {args.model} - {args.fusion}")
+            success = tune_extractors(args.dataset, args.task, args.extractor, args.model, args.fusion, logger)
+        else:  # selectors
+            logger, log_path = setup_logging(args.dataset, args.selector, args.model, log_level)
+            logger.info(f"Starting single selector tuning run: {args.dataset} - {args.selector} - {args.model} - {args.fusion} - {args.n_features}f")
+            success = tune_selectors(args.dataset, args.task, args.selector, args.model, args.fusion, args.n_features, logger)
         
-        success = tune(args.dataset, args.task, args.extractor, args.model, logger)
+        logger.info(f"Log file: {log_path}")
         sys.exit(0 if success else 1)
     
     # Setup session logger for batch operations
@@ -1932,17 +3591,33 @@ if __name__ == "__main__":
     
     # Batch mode: run all combinations
     if args.all:
-        session_logger.info(f"Running ALL combinations for {args.dataset} with 4-Phase Enhanced Pipeline...")
-        tune_all_combinations(args.dataset, args.task, not args.no_subprocess)
+        if args.approach == "extractors":
+            session_logger.info(f"Running ALL extractor combinations for {args.dataset}...")
+            tune_all_extractors(args.dataset, args.task, not args.no_subprocess)
+        else:  # selectors
+            session_logger.info(f"Running ALL selector combinations for {args.dataset} with Fixed Feature Selection...")
+            tune_all_selectors(args.dataset, args.task, not args.no_subprocess)
         sys.exit(0)
     
     # Single combination mode
-    if not args.extractor or not args.model:
-        parser.error("Single mode requires --extractor and --model")
+    if not args.model:
+        parser.error("Single mode requires --model")
     
-    if args.no_subprocess:
-        success = tune(args.dataset, args.task, args.extractor, args.model, session_logger)
-    else:
-        success = run_tuning_subprocess(args.dataset, args.task, args.extractor, args.model, session_logger)
+    # Additional validation for single mode
+    if args.approach == "extractors" and not args.extractor:
+        parser.error("Single extractor mode requires --extractor")
+    if args.approach == "selectors" and not args.selector:
+        parser.error("Single selector mode requires --selector")
+    
+    if args.approach == "extractors":
+        if args.no_subprocess:
+            success = tune_extractors(args.dataset, args.task, args.extractor, args.model, args.fusion, session_logger)
+        else:
+            success = run_tuning_subprocess_extractors(args.dataset, args.task, args.extractor, args.model, args.fusion, session_logger)
+    else:  # selectors
+        if args.no_subprocess:
+            success = tune_selectors(args.dataset, args.task, args.selector, args.model, args.fusion, args.n_features, session_logger)
+        else:
+            success = run_tuning_subprocess_selectors(args.dataset, args.task, args.selector, args.model, args.fusion, args.n_features, session_logger)
     
     sys.exit(0 if success else 1)

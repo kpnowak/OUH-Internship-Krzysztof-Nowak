@@ -206,7 +206,7 @@ class CompletePipelineAnalyzer:
                 task_type="regression",
                 dataset_name="synthetic_test",
                 enable_early_quality_check=True,
-                enable_fusion_aware_order=True,
+                enable_feature_first_order=True,
                 enable_centralized_missing_data=True,
                 enable_coordinated_validation=True
             )

@@ -112,7 +112,7 @@ def test_phase_2_fusion_aware():
         # Test order determination for different fusion methods
         logger.info("Test 2.1: Optimal order determination")
         
-        fusion_methods = ['snf', 'mkl', 'weighted_concat', 'early_fusion_pca']
+        fusion_methods = ['average', 'sum', 'mkl', 'weighted_concat', 'early_fusion_pca']
         for method in fusion_methods:
             order = determine_optimal_fusion_order(method)
             logger.info(f"  {method}: {order}")
@@ -207,7 +207,7 @@ def test_integration():
         
         final_data, y_aligned, metadata = run_enhanced_preprocessing_pipeline(
             test_data, y_test, 
-            fusion_method="snf", 
+            fusion_method="average", 
             task_type="classification", 
             dataset_name="IntegrationTest"
         )

@@ -123,7 +123,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
 
         
         # Load raw data first
-        raw_modalities, y_raw, common_ids = load_dataset(
+        raw_modalities, y_raw, common_ids, is_regression_detected = load_dataset(
             ds_name.lower(), 
             modality_short_names, 
             outcome_col, 
@@ -156,7 +156,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
                 task_type=task_type,
                 dataset_name=ds_name,
                 enable_early_quality_check=True,
-                enable_fusion_aware_order=True,
+                enable_feature_first_order=True,
                 enable_centralized_missing_data=True,
                 enable_coordinated_validation=True
             )
@@ -296,7 +296,8 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
             return None
         
         # For classification datasets, validate class distribution
-        if not is_regression:
+        # Use the detected task type to ensure consistency
+        if not is_regression_detected:
             unique, counts = np.unique(y_aligned, return_counts=True)
             min_samples = np.min(counts)
             n_classes = len(unique)
@@ -351,7 +352,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
                     logger.info(f"After filtering: {len(common_ids)} samples, {len(np.unique(y_aligned))} classes")
         
         # Final validation after any filtering
-        if not is_regression:
+        if not is_regression_detected:
             unique_final, counts_final = np.unique(y_aligned, return_counts=True)
             if len(unique_final) < 2:
                 logger.error(f"Dataset {ds_name} has insufficient classes after processing (< 2)")
@@ -389,7 +390,9 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
 
 def process_regression_datasets(args):
     """Process all regression datasets."""
-    logger.info("=== REGRESSION BLOCK (AML, Sarcoma) ===")
+    regression_block_info = "=== REGRESSION BLOCK (AML, Sarcoma) ==="
+    logger.info(regression_block_info)
+    print(f"{regression_block_info}")
     reg_extractors = get_regression_extractors()
     reg_selectors = get_regression_selectors()
     reg_models = get_regression_models()  # CURRENT IMPLEMENTATION: Use getter function
@@ -429,31 +432,96 @@ def process_regression_datasets(args):
         os.makedirs(base_out, exist_ok=True)
         
         try:
-            # First, run extraction pipeline for all n_values
-            print(f"===> Processing EXTRACTION for dataset {ds_name}")
-            logger.info(f"===> Processing EXTRACTION for dataset {ds_name}")
-            
-            run_extraction_pipeline(
-                ds_name, modalities, common_ids, y_aligned, base_out,
-                reg_extractors, n_shared_list, list(reg_models.keys()), progress_count_reg, reg_total_runs,
-                is_regression=True
-            )
-            
-            print(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
-            logger.info(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
-            
-            # Then, run selection pipeline for all n_values
-            print(f"===> Processing SELECTION for dataset {ds_name}")
-            logger.info(f"===> Processing SELECTION for dataset {ds_name}")
-            
-            run_selection_pipeline(
-                ds_name, modalities, common_ids, y_aligned, base_out,
-                reg_selectors, n_shared_list, list(reg_models.keys()), progress_count_reg, reg_total_runs,
-                is_regression=True
-            )
-            
-            print(f"===> COMPLETED SELECTION for dataset {ds_name}")
-            logger.info(f"===> COMPLETED SELECTION for dataset {ds_name}")
+            if args.sequential:
+                # SEQUENTIAL: Process one extractor/selector at a time through all fusion techniques
+                print(f"===> Processing with SEQUENTIAL architecture for dataset {ds_name}")
+                logger.info(f"===> Using SEQUENTIAL architecture: One extractor/selector → All fusion techniques → All models")
+                
+                from cv import run_sequential_extraction_pipeline, run_sequential_selection_pipeline
+                
+                # First, run sequential extraction pipeline
+                print(f"===> Processing SEQUENTIAL EXTRACTION for dataset {ds_name}")
+                logger.info(f"===> Processing SEQUENTIAL EXTRACTION for dataset {ds_name}")
+                
+                run_sequential_extraction_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    reg_extractors, n_shared_list, list(reg_models.keys()), progress_count_reg, reg_total_runs,
+                    is_regression=True
+                )
+                
+                print(f"===> COMPLETED SEQUENTIAL EXTRACTION for dataset {ds_name}")
+                logger.info(f"===> COMPLETED SEQUENTIAL EXTRACTION for dataset {ds_name}")
+                
+                # Then, run sequential selection pipeline
+                print(f"===> Processing SEQUENTIAL SELECTION for dataset {ds_name}")
+                logger.info(f"===> Processing SEQUENTIAL SELECTION for dataset {ds_name}")
+                
+                run_sequential_selection_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    reg_selectors, n_shared_list, list(reg_models.keys()), progress_count_reg, reg_total_runs,
+                    is_regression=True
+                )
+                
+                print(f"===> COMPLETED SEQUENTIAL SELECTION for dataset {ds_name}")
+                logger.info(f"===> COMPLETED SEQUENTIAL SELECTION for dataset {ds_name}")
+                
+            elif args.fusion_first:
+                # LEGACY: Fusion-First Architecture
+                print(f"===> Processing with FUSION-FIRST architecture for dataset {ds_name}")
+                logger.info(f"===> Using LEGACY FUSION-FIRST architecture: Fusion → Feature Processing → Model Training")
+                
+                # First, run extraction pipeline for all n_values
+                print(f"===> Processing EXTRACTION for dataset {ds_name}")
+                logger.info(f"===> Processing EXTRACTION for dataset {ds_name}")
+                
+                run_extraction_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    reg_extractors, n_shared_list, list(reg_models.keys()), progress_count_reg, reg_total_runs,
+                    is_regression=True
+                )
+                
+                print(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
+                logger.info(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
+                
+                # Then, run selection pipeline for all n_values
+                print(f"===> Processing SELECTION for dataset {ds_name}")
+                logger.info(f"===> Processing SELECTION for dataset {ds_name}")
+                
+                run_selection_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    reg_selectors, n_shared_list, list(reg_models.keys()), progress_count_reg, reg_total_runs,
+                    is_regression=True
+                )
+                
+                print(f"===> COMPLETED SELECTION for dataset {ds_name}")
+                logger.info(f"===> COMPLETED SELECTION for dataset {ds_name}")
+                
+            else:
+                # DEFAULT: Feature-First Architecture
+                print(f"===> Processing with FEATURE-FIRST architecture for dataset {ds_name}")
+                logger.info(f"===> Using STANDARD FEATURE-FIRST architecture: Feature Processing → Fusion → Model Training")
+                
+                from feature_first_pipeline import run_feature_first_pipeline
+                
+                # Combine extractors and selectors
+                all_algorithms = {**reg_extractors, **reg_selectors}
+                
+                # Run feature-first pipeline
+                run_feature_first_pipeline(
+                    ds_name=ds_name,
+                    data_modalities=modalities,
+                    common_ids=common_ids,
+                    y=y_aligned,
+                    base_out=base_out,
+                    algorithms=all_algorithms,
+                    n_values=n_shared_list,
+                    models=list(reg_models.keys()),
+                    is_regression=True,
+                    missing_percentage=0.0  # For now, assume clean data
+                )
+                
+                print(f"===> COMPLETED FEATURE-FIRST pipeline for dataset {ds_name}")
+                logger.info(f"===> COMPLETED FEATURE-FIRST pipeline for dataset {ds_name}")
             
             # Combine best fold metrics from both extraction and selection
             print(f"===> Combining best fold metrics for dataset {ds_name}")
@@ -462,6 +530,7 @@ def process_regression_datasets(args):
             combine_best_fold_metrics(ds_name, base_out)
             print(f"===> COMPLETED combining best fold metrics for dataset {ds_name}")
             logger.info(f"===> COMPLETED combining best fold metrics for dataset {ds_name}")
+                
         except KeyboardInterrupt:
             logger.warning(f"KeyboardInterrupt during processing dataset {ds_name}. Aborting all processing.")
             raise  # Re-raise to abort all processing
@@ -474,7 +543,9 @@ def process_regression_datasets(args):
 
 def process_classification_datasets(args):
     """Process all classification datasets."""
-    logger.info("\n=== CLASSIFICATION BLOCK (Breast, Colon, Kidney, etc.) ===")
+    classification_block_info = "\n=== CLASSIFICATION BLOCK (Breast, Colon, Kidney, etc.) ==="
+    logger.info(classification_block_info)
+    print(f"{classification_block_info}")
     clf_extractors = get_classification_extractors()
     clf_selectors = get_classification_selectors()
     clf_models = get_classification_models()
@@ -514,31 +585,96 @@ def process_classification_datasets(args):
         os.makedirs(base_out, exist_ok=True)
         
         try:
-            # First, run extraction pipeline for all n_values
-            print(f"===> Processing EXTRACTION for dataset {ds_name}")
-            logger.info(f"===> Processing EXTRACTION for dataset {ds_name}")
-            
-            run_extraction_pipeline(
-                ds_name, modalities, common_ids, y_aligned, base_out,
-                clf_extractors, n_shared_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
-                is_regression=False
-            )
-            
-            print(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
-            logger.info(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
-            
-            # Then, run selection pipeline for all n_values
-            print(f"===> Processing SELECTION for dataset {ds_name}")
-            logger.info(f"===> Processing SELECTION for dataset {ds_name}")
-            
-            run_selection_pipeline(
-                ds_name, modalities, common_ids, y_aligned, base_out,
-                clf_selectors, n_shared_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
-                is_regression=False
-            )
-            
-            print(f"===> COMPLETED SELECTION for dataset {ds_name}")
-            logger.info(f"===> COMPLETED SELECTION for dataset {ds_name}")
+            if args.sequential:
+                # SEQUENTIAL: Process one extractor/selector at a time through all fusion techniques
+                print(f"===> Processing with SEQUENTIAL architecture for dataset {ds_name}")
+                logger.info(f"===> Using SEQUENTIAL architecture: One extractor/selector → All fusion techniques → All models")
+                
+                from cv import run_sequential_extraction_pipeline, run_sequential_selection_pipeline
+                
+                # First, run sequential extraction pipeline
+                print(f"===> Processing SEQUENTIAL EXTRACTION for dataset {ds_name}")
+                logger.info(f"===> Processing SEQUENTIAL EXTRACTION for dataset {ds_name}")
+                
+                run_sequential_extraction_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    clf_extractors, n_shared_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
+                    is_regression=False
+                )
+                
+                print(f"===> COMPLETED SEQUENTIAL EXTRACTION for dataset {ds_name}")
+                logger.info(f"===> COMPLETED SEQUENTIAL EXTRACTION for dataset {ds_name}")
+                
+                # Then, run sequential selection pipeline
+                print(f"===> Processing SEQUENTIAL SELECTION for dataset {ds_name}")
+                logger.info(f"===> Processing SEQUENTIAL SELECTION for dataset {ds_name}")
+                
+                run_sequential_selection_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    clf_selectors, n_shared_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
+                    is_regression=False
+                )
+                
+                print(f"===> COMPLETED SEQUENTIAL SELECTION for dataset {ds_name}")
+                logger.info(f"===> COMPLETED SEQUENTIAL SELECTION for dataset {ds_name}")
+                
+            elif args.fusion_first:
+                # LEGACY: Fusion-First Architecture
+                print(f"===> Processing with FUSION-FIRST architecture for dataset {ds_name}")
+                logger.info(f"===> Using LEGACY FUSION-FIRST architecture: Fusion → Feature Processing → Model Training")
+                
+                # First, run extraction pipeline for all n_values
+                print(f"===> Processing EXTRACTION for dataset {ds_name}")
+                logger.info(f"===> Processing EXTRACTION for dataset {ds_name}")
+                
+                run_extraction_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    clf_extractors, n_shared_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
+                    is_regression=False
+                )
+                
+                print(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
+                logger.info(f"===> COMPLETED EXTRACTION for dataset {ds_name}")
+                
+                # Then, run selection pipeline for all n_values
+                print(f"===> Processing SELECTION for dataset {ds_name}")
+                logger.info(f"===> Processing SELECTION for dataset {ds_name}")
+                
+                run_selection_pipeline(
+                    ds_name, modalities, common_ids, y_aligned, base_out,
+                    clf_selectors, n_shared_list, list(clf_models.keys()), progress_count_clf, clf_total_runs,
+                    is_regression=False
+                )
+                
+                print(f"===> COMPLETED SELECTION for dataset {ds_name}")
+                logger.info(f"===> COMPLETED SELECTION for dataset {ds_name}")
+                
+            else:
+                # DEFAULT: Feature-First Architecture
+                print(f"===> Processing with FEATURE-FIRST architecture for dataset {ds_name}")
+                logger.info(f"===> Using STANDARD FEATURE-FIRST architecture: Feature Processing → Fusion → Model Training")
+                
+                from feature_first_pipeline import run_feature_first_pipeline
+                
+                # Combine extractors and selectors
+                all_algorithms = {**clf_extractors, **clf_selectors}
+                
+                # Run feature-first pipeline
+                run_feature_first_pipeline(
+                    ds_name=ds_name,
+                    data_modalities=modalities,
+                    common_ids=common_ids,
+                    y=y_aligned,
+                    base_out=base_out,
+                    algorithms=all_algorithms,
+                    n_values=n_shared_list,
+                    models=list(clf_models.keys()),
+                    is_regression=False,
+                    missing_percentage=0.0  # For now, assume clean data
+                )
+                
+                print(f"===> COMPLETED FEATURE-FIRST pipeline for dataset {ds_name}")
+                logger.info(f"===> COMPLETED FEATURE-FIRST pipeline for dataset {ds_name}")
             
             # Combine best fold metrics from both extraction and selection
             print(f"===> Combining best fold metrics for dataset {ds_name}")
@@ -547,6 +683,7 @@ def process_classification_datasets(args):
             combine_best_fold_metrics(ds_name, base_out)
             print(f"===> COMPLETED combining best fold metrics for dataset {ds_name}")
             logger.info(f"===> COMPLETED combining best fold metrics for dataset {ds_name}")
+                
         except KeyboardInterrupt:
             logger.warning(f"KeyboardInterrupt during processing dataset {ds_name}. Aborting all processing.")
             raise  # Re-raise to abort all processing
@@ -593,6 +730,14 @@ def main():
     parser.add_argument(
         "--fusion-upgrades", action="store_true",
         help="Enable fusion upgrades (Attention-weighted concatenation, Late-fusion stacking)"
+    )
+    parser.add_argument(
+        "--fusion-first", action="store_true",
+        help="Use legacy fusion-first architecture (Fusion->Feature Processing->Model Training)"
+    )
+    parser.add_argument(
+        "--sequential", action="store_true",
+        help="Use sequential processing (one extractor/selector at a time through all fusion techniques)"
     )
     
     # Parse arguments
@@ -721,21 +866,42 @@ def process_single_dataset(target_ds, args):
                 if args.n_val and args.n_val in n_val_list:
                     n_val_list = [args.n_val]
                 
-                run_extraction_pipeline(
-                    ds_name, result["modalities"], result["common_ids"], 
-                    result["y_aligned"], base_out,
-                    get_regression_extractors(), n_val_list, 
-                    list(get_regression_models().keys()),  # CURRENT IMPLEMENTATION: Use getter function
-                    [0], 1, is_regression=True
-                )
-                
-                run_selection_pipeline(
-                    ds_name, result["modalities"], result["common_ids"], 
-                    result["y_aligned"], base_out,
-                    get_regression_selectors(), n_val_list, 
-                    list(get_regression_models().keys()),  # CURRENT IMPLEMENTATION: Use getter function
-                    [0], 1, is_regression=True
-                )
+                if args.sequential:
+                    # Use sequential processing
+                    from cv import run_sequential_extraction_pipeline, run_sequential_selection_pipeline
+                    
+                    run_sequential_extraction_pipeline(
+                        ds_name, result["modalities"], result["common_ids"], 
+                        result["y_aligned"], base_out,
+                        get_regression_extractors(), n_val_list, 
+                        list(get_regression_models().keys()),
+                        [0], 1, is_regression=True
+                    )
+                    
+                    run_sequential_selection_pipeline(
+                        ds_name, result["modalities"], result["common_ids"], 
+                        result["y_aligned"], base_out,
+                        get_regression_selectors(), n_val_list, 
+                        list(get_regression_models().keys()),
+                        [0], 1, is_regression=True
+                    )
+                else:
+                    # Use standard processing
+                    run_extraction_pipeline(
+                        ds_name, result["modalities"], result["common_ids"], 
+                        result["y_aligned"], base_out,
+                        get_regression_extractors(), n_val_list, 
+                        list(get_regression_models().keys()),  # CURRENT IMPLEMENTATION: Use getter function
+                        [0], 1, is_regression=True
+                    )
+                    
+                    run_selection_pipeline(
+                        ds_name, result["modalities"], result["common_ids"], 
+                        result["y_aligned"], base_out,
+                        get_regression_selectors(), n_val_list, 
+                        list(get_regression_models().keys()),  # CURRENT IMPLEMENTATION: Use getter function
+                        [0], 1, is_regression=True
+                    )
                 
                 # Combine best fold metrics from both extraction and selection
                 from cv import combine_best_fold_metrics
@@ -761,21 +927,42 @@ def process_single_dataset(target_ds, args):
                     if args.n_val and args.n_val in n_val_list:
                         n_val_list = [args.n_val]
                     
-                    run_extraction_pipeline(
-                        ds_name, result["modalities"], result["common_ids"], 
-                        result["y_aligned"], base_out,
-                        get_classification_extractors(), n_val_list, 
-                        list(get_classification_models().keys()), 
-                        [0], 1, is_regression=False
-                    )
-                    
-                    run_selection_pipeline(
-                        ds_name, result["modalities"], result["common_ids"], 
-                        result["y_aligned"], base_out,
-                        get_classification_selectors(), n_val_list, 
-                        list(get_classification_models().keys()), 
-                        [0], 1, is_regression=False
-                    )
+                    if args.sequential:
+                        # Use sequential processing
+                        from cv import run_sequential_extraction_pipeline, run_sequential_selection_pipeline
+                        
+                        run_sequential_extraction_pipeline(
+                            ds_name, result["modalities"], result["common_ids"], 
+                            result["y_aligned"], base_out,
+                            get_classification_extractors(), n_val_list, 
+                            list(get_classification_models().keys()), 
+                            [0], 1, is_regression=False
+                        )
+                        
+                        run_sequential_selection_pipeline(
+                            ds_name, result["modalities"], result["common_ids"], 
+                            result["y_aligned"], base_out,
+                            get_classification_selectors(), n_val_list, 
+                            list(get_classification_models().keys()), 
+                            [0], 1, is_regression=False
+                        )
+                    else:
+                        # Use standard processing
+                        run_extraction_pipeline(
+                            ds_name, result["modalities"], result["common_ids"], 
+                            result["y_aligned"], base_out,
+                            get_classification_extractors(), n_val_list, 
+                            list(get_classification_models().keys()), 
+                            [0], 1, is_regression=False
+                        )
+                        
+                        run_selection_pipeline(
+                            ds_name, result["modalities"], result["common_ids"], 
+                            result["y_aligned"], base_out,
+                            get_classification_selectors(), n_val_list, 
+                            list(get_classification_models().keys()), 
+                            [0], 1, is_regression=False
+                        )
                     
                     # Combine best fold metrics from both extraction and selection
                     from cv import combine_best_fold_metrics

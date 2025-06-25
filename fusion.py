@@ -1185,35 +1185,29 @@ def merge_modalities(*arrays: np.ndarray,
                         merged = np.column_stack(processed_arrays)
                         logger.debug(f"Fallback concatenation applied after MKL transform failure")
         
-        elif strategy == "snf":
-            # Similarity Network Fusion
-            if not SNF_AVAILABLE:
-                logger.error("SNFpy library not available, SNF fusion will not work")
-                merged = np.column_stack(processed_arrays)
-                if is_train:
-                    return merged, None  # Return tuple for consistency
-                else:
-                    return merged
-            
+        elif strategy == "average":
+            # Average Fusion - Element-wise average of modalities (works with any missing percentage)
             if is_train:
-                # For training data: fit SNF and return both result and fitted object
+                # For training data: simple average, return with None for consistency
                 try:
-                    # Use optimized SNF parameters to reduce sparsity
-                    snf_fusion = SimilarityNetworkFusion(
-                        K=fusion_params.get('K', 30),  # Increased from 20 to 30
-                        alpha=fusion_params.get('alpha', 0.8),  # Increased from 0.5 to 0.8
-                        T=fusion_params.get('T', 30),  # Increased from 20 to 30
-                        use_spectral_clustering=fusion_params.get('use_spectral_clustering', True),
-                        n_clusters=fusion_params.get('n_clusters', None),
-                        is_regression=is_regression,
-                        random_state=fusion_params.get('random_state', 42),
-                        mu=fusion_params.get('mu', 0.8),  # Increased from 0.5 to 0.8
-                        sigma=fusion_params.get('sigma', None),  # Auto-computed if None
-                        distance_metrics=fusion_params.get('distance_metrics', ['euclidean', 'cosine', 'correlation']),
-                        adaptive_neighbors=fusion_params.get('adaptive_neighbors', True)
-                    )
-                    merged = snf_fusion.fit_transform(processed_arrays, y)
-                    logger.debug(f"SNF fusion applied")
+                    # Apply robust scaling to each modality before averaging
+                    from sklearn.preprocessing import RobustScaler
+                    scaled_arrays = []
+                    
+                    for i, arr in enumerate(processed_arrays):
+                        scaler = RobustScaler()
+                        try:
+                            arr_scaled = scaler.fit_transform(arr)
+                            # Clip extreme outliers to prevent numerical instability
+                            arr_scaled = np.clip(arr_scaled, -5, 5)
+                            scaled_arrays.append(arr_scaled.astype(np.float32))
+                        except Exception as e:
+                            logger.warning(f"Robust scaling failed for array {i}: {e}, using original")
+                            scaled_arrays.append(arr.astype(np.float32))
+                    
+                    # Calculate element-wise average
+                    merged = np.mean(scaled_arrays, axis=0)
+                    logger.debug(f"Average fusion applied to {len(scaled_arrays)} modalities")
                     
                     # Apply imputation if an imputer is provided
                     if imputer is not None:
@@ -1234,27 +1228,112 @@ def merge_modalities(*arrays: np.ndarray,
                         merged = np.zeros((1, 1), dtype=np.float32)
                         
                     logger.debug(f"Merged array shape: {merged.shape} using strategy: {strategy}")
-                    return merged, snf_fusion
+                    return merged, None  # Return tuple for consistency
                 except Exception as e:
-                    logger.warning(f"SNF fusion failed: {str(e)}, using fallback")
+                    logger.warning(f"Average fusion failed: {str(e)}, using fallback")
                     merged = np.column_stack(processed_arrays)
-                    logger.debug(f"Fallback concatenation applied after SNF failure")
+                    logger.debug(f"Fallback concatenation applied after average failure")
                     return merged, None  # Return tuple for consistency
             else:
-                # For validation data: use pre-fitted SNF
-                if fitted_fusion is None:
-                    logger.warning("fitted_fusion is required for validation data with snf strategy, using fallback")
-                    # Fallback to concatenation
+                # For validation data: same as training (no fitted object needed)
+                try:
+                    # Apply robust scaling to each modality before averaging
+                    from sklearn.preprocessing import RobustScaler
+                    scaled_arrays = []
+                    
+                    for i, arr in enumerate(processed_arrays):
+                        scaler = RobustScaler()
+                        try:
+                            arr_scaled = scaler.fit_transform(arr)
+                            # Clip extreme outliers to prevent numerical instability
+                            arr_scaled = np.clip(arr_scaled, -5, 5)
+                            scaled_arrays.append(arr_scaled.astype(np.float32))
+                        except Exception as e:
+                            logger.warning(f"Robust scaling failed for array {i}: {e}, using original")
+                            scaled_arrays.append(arr.astype(np.float32))
+                    
+                    # Calculate element-wise average
+                    merged = np.mean(scaled_arrays, axis=0)
+                    logger.debug(f"Average fusion applied to {len(scaled_arrays)} modalities")
+                except Exception as e:
+                    logger.warning(f"Average fusion failed: {str(e)}, using fallback")
                     merged = np.column_stack(processed_arrays)
-                    logger.debug(f"Fallback concatenation applied, shape: {merged.shape}")
-                else:
-                    try:
-                        merged = fitted_fusion.transform(processed_arrays)
-                        logger.debug(f"SNF transform applied with fitted object")
-                    except Exception as e:
-                        logger.warning(f"SNF transform failed: {str(e)}, using fallback")
-                        merged = np.column_stack(processed_arrays)
-                        logger.debug(f"Fallback concatenation applied after SNF transform failure")
+                    logger.debug(f"Fallback concatenation applied after average failure")
+        
+        elif strategy == "sum":
+            # Sum Fusion - Element-wise sum of modalities (works with any missing percentage)
+            if is_train:
+                # For training data: simple sum, return with None for consistency
+                try:
+                    # Apply robust scaling to each modality before summing
+                    from sklearn.preprocessing import RobustScaler
+                    scaled_arrays = []
+                    
+                    for i, arr in enumerate(processed_arrays):
+                        scaler = RobustScaler()
+                        try:
+                            arr_scaled = scaler.fit_transform(arr)
+                            # Clip extreme outliers to prevent numerical instability
+                            arr_scaled = np.clip(arr_scaled, -5, 5)
+                            scaled_arrays.append(arr_scaled.astype(np.float32))
+                        except Exception as e:
+                            logger.warning(f"Robust scaling failed for array {i}: {e}, using original")
+                            scaled_arrays.append(arr.astype(np.float32))
+                    
+                    # Calculate element-wise sum
+                    merged = np.sum(scaled_arrays, axis=0)
+                    logger.debug(f"Sum fusion applied to {len(scaled_arrays)} modalities")
+                    
+                    # Apply imputation if an imputer is provided
+                    if imputer is not None:
+                        try:
+                            merged = imputer.fit_transform(merged)
+                        except Exception as e:
+                            logger.warning(f"Imputation failed: {str(e)}, using original data")
+                            np.nan_to_num(merged, nan=0.0, copy=False)
+                    else:
+                        np.nan_to_num(merged, nan=0.0, copy=False)
+                        
+                    # Final cleanup
+                    if not np.isfinite(merged).all():
+                        np.nan_to_num(merged, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+                    
+                    if merged.size == 0 or merged.shape[0] == 0:
+                        logger.warning("Merged array has 0 rows")
+                        merged = np.zeros((1, 1), dtype=np.float32)
+                        
+                    logger.debug(f"Merged array shape: {merged.shape} using strategy: {strategy}")
+                    return merged, None  # Return tuple for consistency
+                except Exception as e:
+                    logger.warning(f"Sum fusion failed: {str(e)}, using fallback")
+                    merged = np.column_stack(processed_arrays)
+                    logger.debug(f"Fallback concatenation applied after sum failure")
+                    return merged, None  # Return tuple for consistency
+            else:
+                # For validation data: same as training (no fitted object needed)
+                try:
+                    # Apply robust scaling to each modality before summing
+                    from sklearn.preprocessing import RobustScaler
+                    scaled_arrays = []
+                    
+                    for i, arr in enumerate(processed_arrays):
+                        scaler = RobustScaler()
+                        try:
+                            arr_scaled = scaler.fit_transform(arr)
+                            # Clip extreme outliers to prevent numerical instability
+                            arr_scaled = np.clip(arr_scaled, -5, 5)
+                            scaled_arrays.append(arr_scaled.astype(np.float32))
+                        except Exception as e:
+                            logger.warning(f"Robust scaling failed for array {i}: {e}, using original")
+                            scaled_arrays.append(arr.astype(np.float32))
+                    
+                    # Calculate element-wise sum
+                    merged = np.sum(scaled_arrays, axis=0)
+                    logger.debug(f"Sum fusion applied to {len(scaled_arrays)} modalities")
+                except Exception as e:
+                    logger.warning(f"Sum fusion failed: {str(e)}, using fallback")
+                    merged = np.column_stack(processed_arrays)
+                    logger.debug(f"Fallback concatenation applied after sum failure")
         
         elif strategy == "weighted_concat":
             # Enhanced weighted concatenation with optional learnable weights
@@ -1431,7 +1510,7 @@ def merge_modalities(*arrays: np.ndarray,
         if not (strategy == "early_fusion_pca" and is_train):
             if merged.size == 0 or merged.shape[0] == 0:
                 logger.warning("Merged array has 0 rows")
-                if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "snf", "early_fusion_pca"]:
+                if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca"]:
                     return np.zeros((1, 1), dtype=np.float32), None
                 else:
                     return np.zeros((1, 1), dtype=np.float32)
@@ -1439,7 +1518,7 @@ def merge_modalities(*arrays: np.ndarray,
             logger.debug(f"Merged array shape: {merged.shape} using strategy: {strategy}")
         
         # Return appropriate format based on strategy and training mode
-        if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "snf", "early_fusion_pca"]:
+        if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca"]:
             # These strategies should have already returned (merged, fitted_fusion) tuples
             # If we reach here, it means they fell back to simple concatenation
             return merged, None
@@ -1456,12 +1535,12 @@ def merge_modalities(*arrays: np.ndarray,
                 fallback = np.zeros((1, 1), dtype=np.float32)
             
             # Return appropriate format based on strategy and training mode
-            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "snf", "early_fusion_pca"]:
+            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca"]:
                 return fallback, None
             else:
                 return fallback
         except:
-            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "snf", "early_fusion_pca"]:
+            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca"]:
                 return np.zeros((1, 1), dtype=np.float32), None
             else:
                 return np.zeros((1, 1), dtype=np.float32)
@@ -1610,8 +1689,13 @@ ENHANCED_FUSION_STRATEGIES = {
         'missing_data_support': True,
         'requires_targets': True
     },
-    'snf': {
-        'description': 'Similarity Network Fusion with spectral clustering',
+    'average': {
+        'description': 'Element-wise average fusion of scaled modalities',
+        'missing_data_support': True,
+        'requires_targets': False
+    },
+    'sum': {
+        'description': 'Element-wise sum fusion of scaled modalities',
         'missing_data_support': True,
         'requires_targets': False
     },

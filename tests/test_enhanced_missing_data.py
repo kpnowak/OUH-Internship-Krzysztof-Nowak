@@ -213,7 +213,7 @@ def test_fusion_strategies_with_missing_data():
     print(f"Recommended strategy: {recommended}")
     
     # Test different strategies
-    strategies_to_test = ['learnable_weighted', 'early_fusion_pca', 'mkl', 'snf']
+    strategies_to_test = ['learnable_weighted', 'early_fusion_pca', 'mkl', 'average', 'sum']
     
     for strategy in strategies_to_test:
         print(f"\nTesting {strategy} strategy:")
@@ -224,7 +224,7 @@ def test_fusion_strategies_with_missing_data():
             imputer = create_enhanced_imputer(strategy='adaptive')
             
             # Test fusion
-            if strategy in ['learnable_weighted', 'mkl', 'snf']:
+            if strategy in ['learnable_weighted', 'mkl', 'average', 'sum']:
                 # These require targets
                 result = merge_modalities(
                     *modalities, 

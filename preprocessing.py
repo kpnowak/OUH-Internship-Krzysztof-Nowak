@@ -1106,6 +1106,170 @@ def _remap_labels(y: pd.Series, dataset: str) -> pd.Series:
     
     return y
 
+def consolidated_rare_class_handler(y: pd.Series, dataset: str, min_class_size: int = 5, merge_strategy: str = 'auto') -> pd.Series:
+    """
+    STEP 4: Consolidated rare class handling function that merges all three previous approaches.
+    
+    This function consolidates the logic from:
+    - _remap_labels() - handles ultra-rare classes (<3 samples) 
+    - optimize_class_distribution() - handles small classes (<5 samples)
+    - merge_small_classes() - handles CV-level merging
+    
+    Parameters
+    ----------
+    y : pd.Series
+        Target labels
+    dataset : str
+        Dataset name for specific conversions
+    min_class_size : int, default=5
+        Minimum number of samples required to keep a class separate
+    merge_strategy : str, default='auto'
+        Strategy for merging: 'auto', 'numeric', 'categorical'
+        
+    Returns
+    -------
+    pd.Series
+        Consolidated and optimized labels (always numeric)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"=== CONSOLIDATED RARE CLASS HANDLING for {dataset} ===")
+    logger.info(f"Input: {len(y)} samples, {len(y.unique())} unique classes")
+    logger.info(f"Original distribution: {y.value_counts().to_dict()}")
+    
+    # Step 1: Apply dataset-specific conversions first (like Colon T-stage)
+    if dataset == 'Colon':
+        # Convert T-stage to early/late binary classification
+        original_unique = y.unique()
+        logger.info(f"Dataset {dataset}: Original classes: {list(original_unique)}")
+        
+        # Handle the case where y contains categorical codes instead of original category names
+        if all(isinstance(x, (int, np.integer)) for x in y.unique()):
+            # If all values are integers, they're likely categorical codes
+            code_to_tstage = {0: 'T1', 1: 'T2', 2: 'T3', 3: 'T4', 4: 'T4a', 5: 'T4b', 6: 'Tis'}
+            existing_codes = set(y.unique())
+            valid_mapping = {code: stage for code, stage in code_to_tstage.items() if code in existing_codes}
+            logger.info(f"Dataset {dataset}: Mapping codes to T-stages: {valid_mapping}")
+            y_tstages = y.map(valid_mapping)
+            y_tstages = y_tstages.fillna(y.astype(str))
+        else:
+            y_tstages = y.astype(str)
+        
+        # Apply binary conversion
+        y = y_tstages.map(lambda s: 'early' if s in {'T1', 'T2'} else 'late')
+        logger.info(f"Dataset {dataset}: After binary conversion: {y.value_counts().to_dict()}")
+    
+    # Step 2: Merge ultra-rare classes first (< min(3, min_class_size))
+    ultra_rare_threshold = min(3, min_class_size)
+    vc = y.value_counts()
+    ultra_rare = vc[vc < ultra_rare_threshold].index
+    if len(ultra_rare) > 0:
+        logger.info(f"Merging {len(ultra_rare)} ultra-rare classes with <{ultra_rare_threshold} samples: {list(ultra_rare)}")
+        
+        # Determine merge strategy
+        if merge_strategy == 'auto':
+            try:
+                # Try to treat as numeric
+                y_numeric = pd.to_numeric(y, errors='coerce')
+                is_numeric = not y_numeric.isna().all()
+            except Exception:
+                is_numeric = False
+        else:
+            is_numeric = (merge_strategy == 'numeric')
+        
+        if is_numeric:
+            # For numeric classes, merge with nearest neighbor
+            unique_classes = sorted(vc.index)
+            for rare_class in ultra_rare:
+                try:
+                    rare_val = float(rare_class)
+                    other_classes = [float(c) for c in unique_classes if c not in ultra_rare]
+                    if other_classes:
+                        nearest = min(other_classes, key=lambda x: abs(x - rare_val))
+                        logger.info(f"Merging rare numeric class {rare_class} into nearest {nearest}")
+                        y = y.replace(rare_class, nearest)
+                except Exception as e:
+                    logger.warning(f"Failed to merge numeric class {rare_class}: {e}")
+        else:
+            # For categorical classes, merge all rare into most common adequate class
+            if len(ultra_rare) > 0:
+                # Find most common adequate class (not in ultra_rare)
+                adequate_classes = vc[~vc.index.isin(ultra_rare)]
+                if len(adequate_classes) > 0:
+                    merge_target = adequate_classes.idxmax()
+                else:
+                    # If no adequate classes, use most common overall
+                    merge_target = vc.idxmax()
+                
+                for rare_class in ultra_rare:
+                    logger.info(f"Merging rare categorical class {rare_class} into {merge_target}")
+                    y = y.replace(rare_class, merge_target)
+        
+        # Update value counts after ultra-rare merging
+        vc = y.value_counts()
+        logger.info(f"After ultra-rare merging: {vc.to_dict()}")
+    
+    # Step 3: Handle remaining small classes (< min_class_size)
+    small_classes = vc[vc < min_class_size].index
+    if len(small_classes) > 0:
+        logger.info(f"Handling {len(small_classes)} small classes with <{min_class_size} samples: {list(small_classes)}")
+        
+        # Get adequate classes for merging targets
+        adequate_classes = vc[vc >= min_class_size]
+        
+        if len(adequate_classes) == 0:
+            # No adequate classes - merge all small into most common
+            most_common = vc.idxmax()
+            logger.info(f"No adequate classes found, merging all small into most common: {most_common}")
+            for small_class in small_classes:
+                if small_class != most_common:
+                    y = y.replace(small_class, most_common)
+        else:
+            # Merge small classes into adequate ones
+            if is_numeric:
+                # For numeric, merge into nearest adequate class
+                for small_class in small_classes:
+                    try:
+                        small_val = float(small_class)
+                        adequate_vals = [float(c) for c in adequate_classes.index]
+                        nearest = min(adequate_vals, key=lambda x: abs(x - small_val))
+                        logger.info(f"Merging small numeric class {small_class} into nearest adequate {nearest}")
+                        y = y.replace(small_class, nearest)
+                    except Exception as e:
+                        # Fallback to most common
+                        most_common = adequate_classes.idxmax()
+                        logger.info(f"Numeric merge failed for {small_class}, using most common {most_common}")
+                        y = y.replace(small_class, most_common)
+            else:
+                # For categorical, merge into most common adequate class
+                most_common = adequate_classes.idxmax()
+                for small_class in small_classes:
+                    logger.info(f"Merging small categorical class {small_class} into most common adequate {most_common}")
+                    y = y.replace(small_class, most_common)
+    
+    # Step 4: Convert to numeric labels for ML compatibility
+    if y.dtype == 'object' or not pd.api.types.is_numeric_dtype(y):
+        unique_labels = sorted(y.unique())
+        label_mapping = {label: idx for idx, label in enumerate(unique_labels)}
+        y = y.map(label_mapping)
+        logger.info(f"Converted to numeric labels: {label_mapping}")
+    
+    # Final validation
+    final_vc = y.value_counts()
+    final_min = final_vc.min()
+    logger.info(f"Final distribution: {final_vc.to_dict()}")
+    logger.info(f"Final: {len(y)} samples, {len(final_vc)} classes, min_class_size={final_min}")
+    
+    # Ensure no class is smaller than required
+    if final_min < min_class_size:
+        logger.warning(f"CRITICAL: Still have classes with <{min_class_size} samples after consolidation!")
+        logger.warning(f"This may cause CV issues. Consider increasing min_class_size or removing this dataset.")
+    else:
+        logger.info(f"SUCCESS: All classes have ≥{min_class_size} samples")
+    
+    return y
+
 def custom_parse_outcome(series: pd.Series, outcome_type: str, dataset: str = None) -> pd.Series:
     """
     Parse outcome data based on the specified type.
@@ -1218,7 +1382,7 @@ def safe_convert_to_numeric(X: Any) -> np.ndarray:
 def process_with_missing_modalities(data_modalities: Dict[str, pd.DataFrame], 
                                    all_ids: List[str],
                                    missing_percentage: float,
-                                   random_state: Optional[int] = None,
+                                   random_state: Optional[int] = 42,  # Fixed default for reproducibility
                                    min_overlap_ratio: float = 0.3) -> Dict[str, pd.DataFrame]:
     """
     Process modalities by randomly marking some samples as missing.
@@ -1246,9 +1410,10 @@ def process_with_missing_modalities(data_modalities: Dict[str, pd.DataFrame],
     if missing_percentage == 0.0:
         return data_modalities
     
-    # Set random seed for reproducibility if provided
-    if random_state is not None:
-        np.random.seed(random_state)
+    # Set random seed for reproducibility (always set for deterministic behavior)
+    if random_state is None:
+        random_state = 42  # Fallback to ensure deterministic behavior
+    np.random.seed(random_state)
     
     # Initialize result dictionary - we'll modify DataFrames in-place when possible
     modified_modalities = {}
@@ -4114,29 +4279,16 @@ def aggressive_dimensionality_reduction(X, y=None, modality_type='unknown', conf
             target_features = min(1000, X.shape[1] // 2)
             selection_strategy = 'hybrid_conservative'
         
-        # Adjust target based on sample size with modality-specific limits
-        # Different omics data types can handle different sample-to-feature ratios
-        if modality_type.lower() in ['gene_expression', 'gene expression']:
-            # Gene expression: More permissive (modern regularization handles higher ratios)
-            sample_based_limit = max(100, X.shape[0] // 2)
-        elif modality_type.lower() == 'mirna':
-            # miRNA: Moderate (naturally lower dimensional)
-            sample_based_limit = max(50, X.shape[0] // 4)
-        elif modality_type.lower() == 'methylation':
-            # Methylation: Balanced (benefits from variance-based filtering)
-            sample_based_limit = max(100, X.shape[0] // 3)
-        else:
-            # Unknown modality: Conservative fallback
-            sample_based_limit = max(50, X.shape[0] // 5)
-        
-        if target_features > sample_based_limit:
-            logging.debug(f"   Target features ({target_features}) > sample-based limit ({sample_based_limit}) for {modality_type}")
-            target_features = sample_based_limit
+        # Use target features directly without sample-based limits
+        # Modern regularization techniques can handle higher feature-to-sample ratios
+        logging.info(f"   Using target features: {target_features} for {modality_type}")
+        logging.info(f"   Sample-to-feature ratio: {X.shape[0] / target_features:.2f}")
         
         reduction_report['target_features'] = target_features
         reduction_report['selection_strategy'] = selection_strategy
         
         X_reduced = X.copy()
+        X_baseline_for_calculation = X.copy()  # Track baseline for percentage calculation
         
         # Stage 1: MAD-based pre-filtering (more robust than variance)
         if X_reduced.shape[1] > target_features * 3:  # Only if we have way too many features
@@ -4149,6 +4301,7 @@ def aggressive_dimensionality_reduction(X, y=None, modality_type='unknown', conf
             
             if n_removed_mad > 0:
                 X_reduced = X_reduced[:, high_mad_mask]
+                X_baseline_for_calculation = X_reduced.copy()  # Update baseline to post-MAD
                 feature_selector['mad_filter'] = high_mad_mask
                 reduction_report['methods_applied'].append('mad_pre_filter')
                 reduction_report['feature_selection_stages']['mad_pre_filter'] = {
@@ -4192,17 +4345,25 @@ def aggressive_dimensionality_reduction(X, y=None, modality_type='unknown', conf
             feature_selector['hybrid_conservative'] = stage_selector
             reduction_report['methods_applied'].append('hybrid_conservative')
         
-        # Final statistics
+        # Final statistics - use correct baseline for percentage calculation
+        baseline_features = X_baseline_for_calculation.shape[1]
         reduction_report.update({
             'final_features': X_reduced.shape[1],
-            'reduction_ratio': (X.shape[1] - X_reduced.shape[1]) / X.shape[1],
-            'features_removed': X.shape[1] - X_reduced.shape[1],
+            'reduction_ratio': (baseline_features - X_reduced.shape[1]) / baseline_features,
+            'features_removed': baseline_features - X_reduced.shape[1],
             'target_achieved': X_reduced.shape[1] <= target_features,
-            'sample_to_feature_ratio': X.shape[0] / X_reduced.shape[1]
+            'sample_to_feature_ratio': X.shape[0] / X_reduced.shape[1],
+            'baseline_features': baseline_features,  # Track what baseline was used
+            'original_features': X.shape[1]  # Track original count for reference
         })
         
         logging.info(f"   Dimensionality reduction complete:")
-        logging.info(f"      Features: {X.shape[1]} -> {X_reduced.shape[1]} ({reduction_report['reduction_ratio']:.1%} reduction)")
+        # Show both original and post-MAD baseline for clarity
+        if baseline_features != X.shape[1]:
+            logging.info(f"      Features: {X.shape[1]} -> {baseline_features} (MAD pre-filter) -> {X_reduced.shape[1]} (final)")
+            logging.info(f"      Reduction from post-MAD baseline: {baseline_features} -> {X_reduced.shape[1]} ({reduction_report['reduction_ratio']:.1%} reduction)")
+        else:
+            logging.info(f"      Features: {X.shape[1]} -> {X_reduced.shape[1]} ({reduction_report['reduction_ratio']:.1%} reduction)")
         logging.info(f"      Target: {target_features} ({'' if reduction_report['target_achieved'] else '✗'})")
         logging.info(f"      Sample/Feature ratio: {reduction_report['sample_to_feature_ratio']:.1f}")
         

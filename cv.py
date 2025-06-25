@@ -330,7 +330,7 @@ def _process_single_modality(
             if is_regression:
                 # Regression selector
                 selected_features, X_tr = cached_fit_transform_selector_regression(
-                    extr_obj, df_train, y_train, req, fold_idx=fold_idx, ds_name=modality_name
+                    df_train, y_train, extr_obj, req, ds_name=modality_name, modality_name=modality_name, fold_idx=fold_idx
                 )
                 X_va = transform_selector_regression(df_val, selected_features)
                 X_te = transform_selector_regression(df_test, selected_features) if not df_test.empty else np.array([])
@@ -518,61 +518,55 @@ def process_cv_fold(
     integration_technique="attention_weighted"  # CURRENT IMPLEMENTATION: Use specified fusion strategy
 ):
     """
-    Process a single CV fold.
+    Process a single cross-validation fold with enhanced data integrity and fusion.
+    """
+    import warnings
     
-    Parameters
-    ----------
-    train_idx : array-like
-        Training indices
-    val_idx : array-like
-        Validation indices
-    idx_temp : array-like
-        Temporary indices
-    idx_test : array-like
-        Test indices
-    y_temp : array-like
-        Temporary target values
-    y_test : array-like
-        Test target values
-    data_modalities : Dict[str, pd.DataFrame]
-        Dictionary of modality DataFrames
-    models : List[str]
-        List of model names
-    extr_obj : Any
-        Extractor object
-    ncomps : int
-        Number of components
-    id_to_idx : Dict[str, int]
-        Mapping from ID to index
-    idx_to_id : Dict[int, str]
-        Mapping from index to ID
-    all_ids : List[str]
-        List of all IDs
-    missing_percentage : float
-        Missing percentage
-    fold_idx : int
-        Fold index
-    base_out : str
-        Base output directory
-    ds_name : str
-        Dataset name
-    extr_name : str
-        Extractor name
-    pipeline_type : str
-        Pipeline type
-    is_regression : bool
-        Whether this is regression
-    make_plots : bool
-        Whether to make plots
-    plot_prefix_override : str, optional
-        Plot prefix override
-    integration_technique : str
-        Integration technique to use for merging modalities
+    # Comprehensive warning suppression for CV fold processing
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", 
+                              message="The least populated class in y has only .* members", 
+                              category=UserWarning,
+                              module="sklearn")
+        warnings.filterwarnings("ignore",
+                              message=".*ElasticNetCV.*alpha_.*",
+                              category=UserWarning)
         
-    Returns
-    -------
-    Various
-        Results depend on regression vs classification
+        return _process_cv_fold_impl(
+            train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+            data_modalities, models, extr_obj, ncomps, id_to_idx, idx_to_id,
+            all_ids, missing_percentage, fold_idx, base_out, ds_name, extr_name,
+            pipeline_type, is_regression, make_plots, plot_prefix_override,
+            integration_technique
+        )
+
+def _process_cv_fold_impl(
+    train_idx,
+    val_idx,
+    idx_temp,
+    idx_test,
+    y_temp,
+    y_test,
+    data_modalities,
+    models,
+    extr_obj,
+    ncomps,
+    id_to_idx,
+    idx_to_id,
+    all_ids,
+    missing_percentage,
+    fold_idx,
+    base_out,
+    ds_name,
+    extr_name,
+    pipeline_type,
+    is_regression=True,
+    make_plots=True,
+    plot_prefix_override=None,
+    integration_technique="attention_weighted"
+):
+    """
+    Implementation of CV fold processing with warnings already suppressed.
     """
     try:
         logger.info(f"Starting fold {fold_idx} for {ds_name} with {extr_name} and n_comps={ncomps}")
@@ -790,7 +784,7 @@ def process_cv_fold(
         # Merge raw modalities - apply fusion BEFORE feature processing
         try:
             # Handle strategies that return tuples (fitted fusion objects) specially
-            if integration_technique in ["early_fusion_pca", "learnable_weighted", "mkl", "snf", "attention_weighted", "late_fusion_stacking"]:
+            if integration_technique in ["early_fusion_pca", "learnable_weighted", "mkl", "average", "sum", "attention_weighted", "late_fusion_stacking"]:
                 # For training data: fit and get the fusion object
                 train_result = merge_modalities(*raw_modality_train, imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_train, is_regression=is_regression)
                 
@@ -879,7 +873,7 @@ def process_cv_fold(
                 # Selection pipeline
                 from models import cached_fit_transform_selector_regression, transform_selector_regression
                 selected_features, X_train_reduced = cached_fit_transform_selector_regression(
-                    extr_obj, X_train_merged, aligned_y_train, ncomps, fold_idx=fold_idx, ds_name=ds_name
+                    X_train_merged, aligned_y_train, extr_obj, ncomps, ds_name=ds_name, modality_name=None, fold_idx=fold_idx
                 )
                 X_val_reduced = transform_selector_regression(X_val_merged, selected_features)
                 # ENFORCE ncomps
@@ -2024,13 +2018,12 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False, sample_ids=
     try:
         task_type = 'regression' if is_regression else 'classification'
         
-        # Use enhanced CV splitter with stratified regression and grouped CV
+        # Use enhanced CV splitter with proper regression/classification strategies
         cv_result = create_enhanced_cv_splitter(
             y=y_temp,
             sample_ids=sample_ids,
             task_type=task_type,
             n_splits=optimal_splits,
-            use_stratified_regression=True,
             use_grouped_cv=True,
             random_state=0
         )
@@ -2053,15 +2046,19 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False, sample_ids=
     except Exception as e:
         logger.warning(f"Enhanced CV strategy failed: {e}, falling back to standard approach")
     
-    # Fallback to original robust CV logic
+    # CRITICAL FIX: Use proper CV strategy for regression vs classification
     if is_regression:
+        # For regression, NEVER use stratified CV - use simple KFold
         cv_splitter = KFold(n_splits=optimal_splits, shuffle=True, random_state=0)
-        return cv_splitter, optimal_splits, "KFold"
+        logger.info(f"Regression task: Using KFold CV with {optimal_splits} splits (non-stratified)")
+        return cv_splitter, optimal_splits, "KFold_Regression"
     
     # For classification, try multiple strategies
     unique, counts = np.unique(y_temp, return_counts=True)
     n_classes = len(unique)
     min_class_count = np.min(counts)
+    
+    logger.info(f"Classification task: {n_classes} classes, min_class_count={min_class_count}")
     
     # Use adaptive minimum samples based on dataset size
     if CV_CONFIG["adaptive_min_samples"]:
@@ -2083,10 +2080,17 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False, sample_ids=
         min_class_count = np.min(counts)
         logger.info(f"After merging: {n_classes} classes, min_count={min_class_count}")
     
+    # Pre-CV sanity assertion for classification
+    if min_class_count < optimal_splits:
+        logger.error(f"CRITICAL: Class with {min_class_count} samples < {optimal_splits} CV splits detected!")
+        logger.error(f"Class distribution: {dict(zip(unique, counts))}")
+        raise ValueError(f"Classification CV impossible: smallest class has {min_class_count} samples but need ≥{optimal_splits} for {optimal_splits}-fold CV")
+    
     # Try stratified split first
     try:
         if n_samples >= CV_CONFIG["min_total_samples_for_stratified"] and min_class_count >= adaptive_min_samples:
             cv_splitter = StratifiedKFold(n_splits=optimal_splits, shuffle=True, random_state=0)
+            logger.info(f"Using StratifiedKFold CV with {optimal_splits} splits")
             return cv_splitter, optimal_splits, "StratifiedKFold"
     except Exception as e:
         logger.warning(f"StratifiedKFold failed: {e}")
@@ -2432,21 +2436,23 @@ def _run_pipeline(
                         # Always test ALL fusion techniques regardless of FUSION_UPGRADES_CONFIG
                         if missing_percentage == 0.0:
                             # For 0% missing data, test ALL fusion techniques that work with clean data
-                            # As specified in README: [attention_weighted, learnable_weighted, mkl, snf, early_fusion_pca]
+                            # Updated: [attention_weighted, learnable_weighted, mkl, average, sum, early_fusion_pca]
                             integration_techniques = [
                                 "attention_weighted", 
                                 "learnable_weighted", 
                                 "mkl", 
-                                "snf", 
+                                "average", 
+                                "sum",
                                 "early_fusion_pca"
                             ]
                             logger.info(f"Testing {len(integration_techniques)} fusion techniques for 0% missing data: {integration_techniques}")
                         else:
-                            # For missing data (>0%), test only techniques that handle missing data
-                            # As specified in README: [mkl, snf, early_fusion_pca]
+                            # For missing data (>0%), test techniques that handle missing data
+                            # Updated: [mkl, average, sum, early_fusion_pca]
                             integration_techniques = [
                                 "mkl", 
-                                "snf", 
+                                "average", 
+                                "sum",
                                 "early_fusion_pca"
                             ]
                             logger.info(f"Testing {len(integration_techniques)} fusion techniques for {missing_percentage*100}% missing data: {integration_techniques}")
@@ -3229,24 +3235,32 @@ def create_enhanced_cv_splitter(y: np.ndarray,
                               sample_ids: Optional[List[str]] = None,
                               task_type: str = 'regression',
                               n_splits: int = 5,
-                              use_stratified_regression: bool = True,
                               use_grouped_cv: bool = True,
                               random_state: int = 42) -> Tuple[Any, str]:
     """
-    Create enhanced cross-validation splitter with stratified regression and grouped CV.
+    Create enhanced cross-validation splitter with separate strategies for regression vs classification.
+    
+    Regression Strategy:
+    - Small datasets (<100 samples): RepeatedKFold (2-3 splits, 5 repeats)
+    - Medium datasets (100-200 samples): KFold (3-5 splits)  
+    - Large datasets (>200 samples): KFold (5 splits)
+    - With patient groups: GroupKFold
+    
+    Classification Strategy:
+    - Standard: StratifiedKFold (maintains class proportions)
+    - With patient groups: StratifiedGroupKFold
+    - Fallback for small classes: KFold or GroupKFold
     
     Parameters
     ----------
     y : np.ndarray
-        Target values
+        Target values (continuous for regression, discrete for classification)
     sample_ids : List[str], optional
         Sample IDs for extracting patient groups
     task_type : str
         'regression' or 'classification'
     n_splits : int
-        Number of CV folds
-    use_stratified_regression : bool
-        Whether to use stratified bins for regression
+        Number of CV folds (may be adjusted based on data size)
     use_grouped_cv : bool
         Whether to use grouped CV for patient replicates
     random_state : int
@@ -3254,8 +3268,9 @@ def create_enhanced_cv_splitter(y: np.ndarray,
         
     Returns
     -------
-    Tuple[cv_splitter, strategy_description]
-        CV splitter object and description of strategy used
+    Tuple[cv_splitter, strategy_description, target_values, groups]
+        CV splitter object, description of strategy used, target values (unchanged for regression),
+        and group labels (None if not using grouped CV)
     """
     import warnings
     from sklearn.model_selection import (
@@ -3269,19 +3284,25 @@ def create_enhanced_cv_splitter(y: np.ndarray,
                               category=UserWarning)
         
         return _create_enhanced_cv_splitter_impl(y, sample_ids, task_type, n_splits, 
-                                                use_stratified_regression, use_grouped_cv, random_state)
+                                                use_grouped_cv, random_state)
 
 def _create_enhanced_cv_splitter_impl(y: np.ndarray, 
                                     sample_ids: Optional[List[str]] = None,
                                     task_type: str = 'regression',
                                     n_splits: int = 5,
-                                    use_stratified_regression: bool = True,
                                     use_grouped_cv: bool = True,
                                     random_state: int = 42):
-    """Implementation of enhanced CV splitter with warnings suppressed."""
+    """Implementation of enhanced CV splitter with separate logic for regression vs classification."""
+    import warnings
     from sklearn.model_selection import (
-        KFold, StratifiedKFold, GroupKFold, StratifiedGroupKFold
+        KFold, StratifiedKFold, GroupKFold, StratifiedGroupKFold, RepeatedKFold
     )
+    
+    # Comprehensive warning suppression for both CV setup and actual splitting
+    warnings.filterwarnings("ignore", 
+                          message="The least populated class in y has only .* members", 
+                          category=UserWarning,
+                          module="sklearn")
     
     n_samples = len(y)
     strategy_parts = []
@@ -3306,46 +3327,48 @@ def _create_enhanced_cv_splitter_impl(y: np.ndarray,
         else:
             logger.debug("No patient replicates detected, skipping grouped CV")
     
-    # Handle regression vs classification
+    # SEPARATE LOGIC FOR REGRESSION VS CLASSIFICATION
     if task_type == 'regression':
-        if use_stratified_regression:
-            # Create stratified bins for regression and check viability
-            y_binned, stratification_viable = create_stratified_regression_bins(y, n_bins=4, min_samples_per_bin=n_splits)
-            
-            if stratification_viable:
-                strategy_parts.append("Stratified(quartiles)")
-                
-                if groups is not None:
-                    # Grouped + Stratified
-                    cv_splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-                    strategy_parts.append("StratifiedGroupKFold")
-                    strategy_desc = " + ".join(strategy_parts)
-                    
-                    logger.info(f"Using {strategy_desc} for regression CV")
-                    return cv_splitter, strategy_desc, y_binned, groups
-                else:
-                    # Stratified only
-                    cv_splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-                    strategy_desc = "StratifiedKFold(quartiles)"
-                    
-                    logger.info(f"Using {strategy_desc} for regression CV")
-                    return cv_splitter, strategy_desc, y_binned, None
-            else:
-                logger.info("Stratified regression not viable, falling back to non-stratified CV")
+        # === REGRESSION CV STRATEGY ===
+        # Use proper regression CV methods - no artificial binning
         
-        # Fallback for regression: GroupKFold or regular KFold
         if groups is not None:
+            # For grouped regression, use GroupKFold
             cv_splitter = GroupKFold(n_splits=n_splits)
             strategy_desc = "GroupKFold"
             logger.info(f"Using {strategy_desc} for regression CV")
             return cv_splitter, strategy_desc, y, groups
         else:
-            cv_splitter = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
-            strategy_desc = "KFold"
-            logger.info(f"Using {strategy_desc} for regression CV")
-            return cv_splitter, strategy_desc, y, None
+            # For regular regression, choose based on dataset size
+            if n_samples < 100:
+                # Small datasets: Use KFold with fewer splits for stability
+                # Respect requested n_splits but bound by safety limits
+                max_safe_splits = max(2, min(3, n_samples // 15))  # 2-3 splits max for small data
+                effective_splits = max(2, min(n_splits, max_safe_splits))  # Respect requested n_splits
+                cv_splitter = KFold(n_splits=effective_splits, shuffle=True, random_state=random_state)
+                strategy_desc = f"KFold({effective_splits} splits)"
+                logger.info(f"Using {strategy_desc} for small regression dataset ({n_samples} samples)")
+                return cv_splitter, strategy_desc, y, None
+            
+            elif n_samples < 200:
+                # Medium datasets: Use regular KFold with requested number of splits (bounded by safety limits)
+                max_safe_splits = min(5, n_samples // 20)  # Don't exceed safety limit
+                effective_splits = max(2, min(n_splits, max_safe_splits))  # Respect requested n_splits
+                cv_splitter = KFold(n_splits=effective_splits, shuffle=True, random_state=random_state)
+                strategy_desc = f"KFold({effective_splits} splits)"
+                logger.info(f"Using {strategy_desc} for medium regression dataset ({n_samples} samples)")
+                return cv_splitter, strategy_desc, y, None
+            
+            else:
+                # Large datasets: Use standard 5-fold KFold
+                cv_splitter = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+                strategy_desc = f"KFold({n_splits} splits)"
+                logger.info(f"Using {strategy_desc} for large regression dataset ({n_samples} samples)")
+                return cv_splitter, strategy_desc, y, None
     
-    else:  # Classification
+    else:  # === CLASSIFICATION CV STRATEGY ===
+        # Use proper StratifiedKFold for classification (this is correct usage)
+        
         # Check if stratification is viable for classification
         stratification_viable = check_classification_stratification_viability(y, n_splits=n_splits)
         
@@ -3358,7 +3381,7 @@ def _create_enhanced_cv_splitter_impl(y: np.ndarray,
                 logger.info(f"Using {strategy_desc} for classification CV")
                 return cv_splitter, strategy_desc, y, groups
             else:
-                # Standard stratified classification
+                # Standard stratified classification (proper sklearn usage)
                 cv_splitter = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
                 strategy_desc = "StratifiedKFold"
                 
@@ -3367,7 +3390,7 @@ def _create_enhanced_cv_splitter_impl(y: np.ndarray,
         else:
             logger.info("Classification stratification not viable, falling back to non-stratified CV")
             
-            # Fallback to non-stratified CV
+            # Fallback to non-stratified CV for problematic classification cases
             if groups is not None:
                 cv_splitter = GroupKFold(n_splits=n_splits)
                 strategy_desc = "GroupKFold (stratification not viable)"
@@ -3457,3 +3480,601 @@ def validate_enhanced_cv_strategy(cv_splitter, y_for_cv, groups, n_splits, task_
         except Exception as e:
             logger.error(f"CV validation failed: {e}")
             return False
+
+def get_cv_strategy(n_samples_or_X, y, is_regression=True, sample_ids=None, cv_config=None):
+    """
+    Get appropriate cross-validation strategy based on data characteristics.
+    
+    This function serves as a wrapper around create_enhanced_cv_splitter to provide
+    a simpler interface that matches what was expected from the instructions.
+    
+    Parameters
+    ----------
+    n_samples_or_X : int or array-like
+        Number of samples or the feature matrix X (for compatibility)
+    y : np.ndarray
+        Target values
+    is_regression : bool, default=True
+        Whether this is a regression task
+    sample_ids : List[str], optional
+        Sample IDs for extracting patient groups
+    cv_config : dict, optional
+        CV configuration parameters (currently unused for compatibility)
+        
+    Returns
+    -------
+    tuple
+        (cv_splitter, groups) - CV splitter and groups array if applicable
+    """
+    # Handle case where X matrix is passed instead of just n_samples
+    if hasattr(n_samples_or_X, 'shape'):
+        n_samples = n_samples_or_X.shape[0]
+    else:
+        n_samples = n_samples_or_X
+    
+    # Convert task type to string format expected by create_enhanced_cv_splitter
+    task_type = 'regression' if is_regression else 'classification'
+    
+    # Determine appropriate number of CV splits based on sample size
+    if n_samples < 50:
+        n_splits = max(2, min(3, n_samples // 10))
+    elif n_samples < 100:
+        n_splits = max(3, min(5, n_samples // 15))
+    else:
+        n_splits = 5
+    
+    # Use the enhanced CV splitter
+    cv_splitter, strategy_desc, y_for_cv, groups = create_enhanced_cv_splitter(
+        y=y,
+        sample_ids=sample_ids,
+        task_type=task_type,
+        n_splits=n_splits,
+        use_grouped_cv=True,
+        random_state=42
+    )
+    
+    logger.debug(f"get_cv_strategy: Using {strategy_desc} for {task_type} with {n_samples} samples")
+    
+    # Return both cv_splitter and groups for proper grouped CV usage
+    return cv_splitter, groups
+
+def validate_cv_splits(cv_strategy, X, y, task_type='classification'):
+    """
+    Validate that the cross-validation strategy works properly with the given data.
+    
+    This function serves as a wrapper around validate_enhanced_cv_strategy to provide
+    a simpler interface that matches what was expected from the tests.
+    
+    Parameters
+    ----------
+    cv_strategy : sklearn CV splitter
+        Cross-validation splitter to validate
+    X : array-like
+        Feature matrix
+    y : np.ndarray
+        Target values
+    task_type : str, default='classification'
+        Task type ('classification' or 'regression')
+        
+    Returns
+    -------
+    bool
+        True if validation passes, False otherwise
+    """
+    try:
+        # Get the number of splits from the CV strategy
+        if hasattr(cv_strategy, 'n_splits'):
+            n_splits = cv_strategy.n_splits
+        elif hasattr(cv_strategy, 'get_n_splits'):
+            n_splits = cv_strategy.get_n_splits(X, y)
+        else:
+            # Try to count splits by iterating
+            n_splits = sum(1 for _ in cv_strategy.split(X, y))
+        
+        # Use the enhanced validation function
+        return validate_enhanced_cv_strategy(
+            cv_splitter=cv_strategy,
+            y_for_cv=y,
+            groups=None,  # Simple validation doesn't use groups
+            n_splits=n_splits,
+            task_type=task_type
+        )
+    except Exception as e:
+        logger.error(f"CV splits validation failed: {e}")
+        return False
+
+def _run_sequential_pipeline(
+    ds_name: str, 
+    data_modalities: Dict[str, pd.DataFrame], 
+    common_ids: List[str], 
+    y: np.ndarray, 
+    base_out: str,
+    transformers: Dict[str, Any], 
+    n_trans_list: Union[List[int], Dict[str, List[int]]], 
+    models: List[str],
+    progress_count: List[int], 
+    total_runs: int,
+    is_regression: bool = True, 
+    pipeline_type: str = "extraction"
+):
+    """
+    Sequential pipeline that processes one extractor/selector at a time through all fusion techniques.
+    
+    Processing order:
+    1. Dataset (e.g., AML regression)
+    2. Missing percentage (0%, 20%, 50%)
+    3. Extractor/Selector (PCA, KPCA, etc.)
+    4. Parameter value (8, 16, 32)
+    5. Fusion technique (all available fusion methods)
+    6. Models (all models for each fusion technique)
+    
+    This approach provides better memory management and clearer progress tracking.
+    """
+    # Suppress sklearn warnings early in pipeline
+    suppress_sklearn_warnings()
+    
+    # Log pipeline start
+    task_type = "regression" if is_regression else "classification"
+    print(f"\n{'='*80}")
+    print(f"🚀 STARTING SEQUENTIAL {pipeline_type.upper()} PIPELINE")
+    print(f"📊 Dataset: {ds_name} ({task_type})")
+    print(f"🔧 Transformers: {list(transformers.keys())}")
+    print(f"🎯 Models: {models}")
+    print(f"{'='*80}\n")
+    
+    log_pipeline_stage(f"{pipeline_type.upper()}_PIPELINE_START", dataset=ds_name, 
+                      details=f"{task_type} with {len(transformers)} transformers, sequential processing")
+    logger.debug(f"[SEQUENTIAL_PIPELINE] {ds_name} - Starting {pipeline_type} pipeline for {task_type}")
+    
+    # Ensure output directories exist
+    os.makedirs(base_out, exist_ok=True)
+    for subdir in ["models", "metrics", "plots"]:
+        subdir_path = os.path.join(base_out, subdir)
+        os.makedirs(subdir_path, exist_ok=True)
+        logger.debug(f"[SEQUENTIAL_PIPELINE] {ds_name} - Created directory: {subdir_path}")
+    
+    # Convert y to numpy array
+    y_arr = np.array(y)
+    
+    # Warn if sample size is very small
+    if len(y_arr) < 30:
+        print(f"⚠️  WARNING: Small sample size ({len(y_arr)} samples). Model performance may be unstable.")
+        logger.warning(f"Sample size for {ds_name} is very small ({len(y_arr)} samples). Model performance may be unstable.")
+    
+    # Create indices array for row-based indexing
+    indices = np.arange(len(common_ids))
+    
+    # Create id to index and index to id mappings
+    id_to_idx = {id_: idx for idx, id_ in enumerate(common_ids)}
+    idx_to_id = {idx: id_ for id_, idx in id_to_idx.items()}
+    
+    logger.debug(f"[SEQUENTIAL_PIPELINE] {ds_name} - Created sample mappings for {len(common_ids)} samples")
+    
+    # Split with stratification if possible
+    try:
+        # For small datasets (< 15 samples), use a larger test proportion to ensure some test samples
+        test_size = 0.3 if len(indices) < 15 else 0.2
+        logger.debug(f"[SEQUENTIAL_PIPELINE] {ds_name} - Using test_size={test_size} for {len(indices)} samples")
+        
+        # For regression, bin continuous values for stratified split
+        if is_regression:
+            # Validate that y_arr contains numeric data
+            if not np.issubdtype(y_arr.dtype, np.number):
+                logger.error(f"Regression target data contains non-numeric values: dtype={y_arr.dtype}")
+                logger.error(f"Sample values: {y_arr[:5] if len(y_arr) > 0 else 'empty'}")
+                raise ValueError("Regression target data must be numeric")
+            
+            # Check for NaN or infinite values
+            if np.any(np.isnan(y_arr)) or np.any(np.isinf(y_arr)):
+                logger.warning(f"Found NaN or infinite values in regression target, cleaning...")
+                y_arr = np.nan_to_num(y_arr, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            n_bins = min(5, len(y_arr)//3)
+            unique_vals = len(np.unique(y_arr))
+            if n_bins < 2 or unique_vals < n_bins or len(indices) < 15:
+                logger.info(f"Skipping stratification for regression: n_bins={n_bins}, unique_vals={unique_vals}, sample_size={len(indices)}")
+                raise ValueError("Too few samples or unique values for stratified split in regression")
+            
+            try:
+                y_bins = pd.qcut(y_arr, n_bins, labels=False, duplicates='drop')
+                idx_temp, idx_test, y_temp, y_test = train_test_split(
+                    indices, y_arr, test_size=test_size, random_state=0, stratify=y_bins
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create quantile bins for regression stratification: {str(e)}")
+                raise ValueError("Could not create stratified split for regression")
+        else:
+            # For classification, check class distribution
+            unique, counts = np.unique(y_arr, return_counts=True)
+            min_samples = np.min(counts)
+            n_classes = len(unique)
+            
+            logger.debug(f"Class distribution for {ds_name}: {dict(zip(unique, counts))}")
+            
+            # Check if data was properly pre-filtered (classes should be consecutive starting from 0)
+            expected_classes = np.arange(n_classes)
+            if not np.array_equal(unique, expected_classes):
+                logger.info(f"Classes are not consecutive (expected {expected_classes}, got {unique}). This may indicate incomplete preprocessing.")
+            
+            # Calculate test set size and check if stratification is feasible
+            test_samples = int(len(indices) * test_size)
+            
+            # Check if stratified splitting is feasible
+            if test_samples < n_classes:
+                logger.warning(f"Dataset {ds_name}: test_size={test_samples} < n_classes={n_classes}. Stratified split not feasible, using random split.")
+                raise ValueError(f"Test size ({test_samples}) smaller than number of classes ({n_classes})")
+            
+            # If we still have problematic classes, it means the preprocessing in cli.py didn't work correctly
+            if min_samples < 2:
+                logger.warning(f"Dataset {ds_name} still has classes with < 2 samples after preprocessing: {dict(zip(unique, counts))}")
+                logger.warning(f"Applying emergency class filtering in CV pipeline...")
+                
+                # Keep only classes with at least 2 samples
+                valid_classes = unique[counts >= 2]
+                if len(valid_classes) < 2:
+                    logger.error(f"Too few valid classes for classification. Falling back to regular split.")
+                    raise ValueError("Too few valid classes for stratified split")
+                
+                # Filter samples to only include valid classes
+                valid_mask = np.isin(y_arr, valid_classes)
+                indices_filtered = indices[valid_mask]
+                y_arr_filtered = y_arr[valid_mask]
+                
+                # Relabel classes to be consecutive integers starting from 0
+                valid_classes_sorted = np.sort(valid_classes)
+                label_mapping = {old_label: new_label for new_label, old_label in enumerate(valid_classes_sorted)}
+                y_arr_relabeled = np.array([label_mapping[label] for label in y_arr_filtered])
+                
+                logger.info(f"Emergency filtering: dataset from {len(y_arr)} to {len(y_arr_filtered)} samples, {n_classes} to {len(valid_classes)} classes")
+                logger.info(f"Emergency relabeling: {label_mapping}")
+                
+                # Re-check if stratification is still feasible after filtering
+                test_samples_filtered = int(len(indices_filtered) * test_size)
+                if test_samples_filtered < len(valid_classes):
+                    logger.warning(f"Even after filtering, test_size={test_samples_filtered} < n_classes={len(valid_classes)}. Using random split.")
+                    raise ValueError(f"Test size still smaller than number of classes after filtering")
+                
+                idx_temp, idx_test, y_temp, y_test = train_test_split(
+                    indices_filtered, y_arr_filtered, test_size=test_size, random_state=0, stratify=y_arr_relabeled
+                )
+            else:
+                # Standard stratified split when all classes have sufficient samples
+                logger.debug(f"All classes have sufficient samples for {ds_name}, proceeding with stratified split")
+                idx_temp, idx_test, y_temp, y_test = train_test_split(
+                    indices, y_arr, test_size=test_size, random_state=0, stratify=y_arr
+                )
+    except ValueError as e:
+        logger.warning(f"Stratification failed for {ds_name}: {str(e)}. Falling back to regular split.")
+        if not is_regression:
+            unique, counts = np.unique(y_arr, return_counts=True)
+            logger.warning(f"Class distribution for {ds_name}: {dict(zip(unique, counts))}")
+        idx_temp, idx_test, y_temp, y_test = train_test_split(
+            indices, y_arr, test_size=0.2, random_state=0
+        )
+    
+    # Get missing data configuration
+    from config import MISSING_MODALITIES_CONFIG
+    
+    # SEQUENTIAL PROCESSING: Process each missing percentage sequentially
+    for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
+        print(f"\n📈 PROCESSING MISSING DATA: {missing_percentage*100:.0f}%")
+        print(f"{'─'*60}")
+        
+        # SEQUENTIAL PROCESSING: Process each transformer sequentially
+        for trans_name, trans_obj in transformers.items():
+            print(f"\n🔧 PROCESSING TRANSFORMER: {trans_name}")
+            print(f"{'─'*40}")
+            
+            # Handle both formats: List[int] for uniform n_values, or Dict[str, List[int]] for extractor-specific values
+            if isinstance(n_trans_list, dict):
+                # Use extractor-specific n_components/n_features
+                n_values_for_this_transformer = n_trans_list.get(trans_name, [8])  # Default to [8] if not found
+                logger.info(f"Using extractor-specific values for {trans_name}: {n_values_for_this_transformer}")
+            else:
+                # Use the same n_values for all transformers (backward compatibility)
+                n_values_for_this_transformer = n_trans_list
+                logger.debug(f"Using uniform values for {trans_name}: {n_values_for_this_transformer}")
+            
+            # SEQUENTIAL PROCESSING: Process each parameter value sequentially
+            for n_val in n_values_for_this_transformer:
+                print(f"\n  📊 Processing {trans_name}-{n_val}")
+                
+                # Update and report progress
+                progress_count[0] += 1
+                run_idx = progress_count[0]
+                trans_type = "EXTRACT" if pipeline_type == "extraction" else "SELECT"
+                task_type = "REG" if is_regression else "CLF"
+                progress_msg = f"[{trans_type}-{task_type} CV] {run_idx}/{total_runs} => {ds_name} | {trans_name}-{n_val} | Missing: {missing_percentage*100:.0f}%"
+                print(f"  🎯 {progress_msg}")
+                logger.info(progress_msg)
+                log_pipeline_stage(f"{trans_type}_CV", dataset=ds_name, details=f"{trans_name}-{n_val} ({run_idx}/{total_runs})")
+
+                # Use the enhanced robust CV splitter with sample IDs for grouped CV
+                cv_splitter, n_splits, cv_type_used = create_robust_cv_splitter(idx_temp, y_temp, is_regression, sample_ids=common_ids)
+                
+                logger.info(f"Dataset: {ds_name}, using {cv_type_used} {n_splits}-fold CV with {len(idx_temp)} training samples")
+                logger.debug(f"[SEQUENTIAL_PIPELINE] {ds_name} - {trans_name}-{n_val}: Using {cv_type_used} {n_splits}-fold CV")
+                
+                # Log detailed CV summary for classification tasks
+                if not is_regression:
+                    log_cv_fold_summary(ds_name, y_temp, cv_splitter, cv_type_used, n_splits)
+                
+                # Define fusion techniques based on missing data
+                if missing_percentage == 0.0:
+                    # For 0% missing data, test ALL fusion techniques that work with clean data
+                    integration_techniques = [
+                        "attention_weighted", 
+                        "learnable_weighted", 
+                        "mkl", 
+                        "average", 
+                        "sum",
+                        "early_fusion_pca"
+                    ]
+                    print(f"    🔗 Fusion techniques for 0% missing: {len(integration_techniques)} methods")
+                else:
+                    # For missing data (>0%), test techniques that handle missing data
+                    integration_techniques = [
+                        "mkl", 
+                        "average", 
+                        "sum",
+                        "early_fusion_pca"
+                    ]
+                    print(f"    🔗 Fusion techniques for {missing_percentage*100:.0f}% missing: {len(integration_techniques)} methods")
+                
+                # SEQUENTIAL PROCESSING: Process each fusion technique sequentially
+                for fusion_idx, integration_technique in enumerate(integration_techniques, 1):
+                    print(f"\n    🔗 [{fusion_idx}/{len(integration_techniques)}] Fusion: {integration_technique}")
+                    
+                    try:
+                        cv_results = []
+                        model_candidates = {model_name: {"metric": None, "model": None, "fold_idx": None, "train_val": None} for model_name in models}
+                        model_yvals_folds = {model_name: [] for model_name in models}
+                        model_ypreds_folds = {model_name: [] for model_name in models}
+                        train_val_data = []  # Store (train_idx, val_idx, ...) for each fold
+                        
+                        logger.info(f"Processing {ds_name} with {trans_name}-{n_val}, missing={missing_percentage}%, integration={integration_technique}")
+                        
+                        # Process CV folds
+                        for fold_idx, (train_idx, val_idx) in enumerate(cv_splitter.split(idx_temp, y_temp)):
+                            try:
+                                train_val_data.append((train_idx, val_idx))
+                                with warnings.catch_warnings():
+                                    warnings.simplefilter("ignore", UserWarning)
+                                    if pipeline_type == "extraction":
+                                        if is_regression:
+                                            result, model_objs = process_cv_fold(
+                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                is_regression,
+                                                make_plots=False,
+                                                integration_technique=integration_technique
+                                            )
+                                        else:
+                                            result, model_objs, yvals, ypreds = process_cv_fold(
+                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                is_regression,
+                                                make_plots=False,
+                                                integration_technique=integration_technique
+                                            )
+                                    else:
+                                        if is_regression:
+                                            result, model_objs = process_cv_fold(
+                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                is_regression,
+                                                make_plots=False,
+                                                integration_technique=integration_technique
+                                            )
+                                        else:
+                                            result, model_objs, yvals, ypreds = process_cv_fold(
+                                                train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                                data_modalities, models, (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                                id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                                fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                                is_regression,
+                                                make_plots=False,
+                                                integration_technique=integration_technique
+                                            )
+                                    if result:
+                                        cv_results.append(result)
+                                        for model_name in models:
+                                            if not is_regression and model_name in yvals and model_name in ypreds:
+                                                model_yvals_folds[model_name].append(yvals[model_name])
+                                                model_ypreds_folds[model_name].append(ypreds[model_name])
+                                            
+                                            # Update model_candidates based on model performance
+                                            if model_name in result:
+                                                # Get key metric for comparing model performance
+                                                metric_name = 'r2' if is_regression else 'f1'  # Use R² for regression, F1 for classification
+                                                current_metric = result[model_name].get(metric_name)
+                                                
+                                                if current_metric is not None:
+                                                    # For regression, higher R² is better; for classification, higher F1 is better
+                                                    current_best = model_candidates[model_name]["metric"]
+                                                    
+                                                    # If we don't have a best model yet or this one is better, update
+                                                    if current_best is None or current_metric > current_best:
+                                                        model_candidates[model_name]["metric"] = current_metric
+                                                        model_candidates[model_name]["model"] = model_objs.get(model_name)
+                                                        model_candidates[model_name]["fold_idx"] = fold_idx
+                                                        model_candidates[model_name]["train_val"] = (train_idx, val_idx)
+                            except Exception as e:
+                                logger.error(f"Error processing fold {fold_idx} for {ds_name} with {trans_name}-{n_val} (missing={missing_percentage}%, integration={integration_technique}): {str(e)}")
+                                continue  # Continue to next fold
+                        
+                        # SEQUENTIAL PROCESSING: Process each model sequentially
+                        print(f"      🤖 Training models: {models}")
+                        best_fold_metrics = {}  # Store best fold metrics for CSV saving
+                        for model_idx, model_name in enumerate(models, 1):
+                            print(f"        [{model_idx}/{len(models)}] Model: {model_name}", end=" -> ")
+                            try:
+                                best_model = model_candidates[model_name]["model"]
+                                best_metric = model_candidates[model_name]["metric"]
+                                best_fold_idx = model_candidates[model_name]["fold_idx"]
+                                if best_model is not None and best_fold_idx is not None:
+                                    # Get the train/val indices for the best fold
+                                    train_idx, val_idx = train_val_data[best_fold_idx]
+                                    # Rerun process_cv_fold for the best fold, but with make_plots=True
+                                    if is_regression:
+                                        # Use a modified plot prefix with "best_fold", pipeline_type, missing_percentage, and integration technique
+                                        best_plot_prefix = f"{ds_name}_best_fold_{pipeline_type}_{trans_name}_{n_val}_{model_name}_{missing_percentage}_{integration_technique}"
+                                        
+                                        best_fold_results, best_model_obj = process_cv_fold(
+                                            train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                            data_modalities, [model_name], (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                            id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                            best_fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                            is_regression,
+                                            make_plots=True,
+                                            plot_prefix_override=best_plot_prefix,
+                                            integration_technique=integration_technique
+                                        )
+                                    else:
+                                        # Use a modified plot prefix with "best_fold", pipeline_type, missing_percentage, and integration technique
+                                        best_plot_prefix = f"{ds_name}_best_fold_{pipeline_type}_{trans_name}_{n_val}_{model_name}_{missing_percentage}_{integration_technique}"
+                                        
+                                        best_fold_results, best_model_obj, _, _ = process_cv_fold(
+                                            train_idx, val_idx, idx_temp, idx_test, y_temp, y_test,
+                                            data_modalities, [model_name], (clone(trans_obj) if hasattr(trans_obj, 'fit') else trans_obj), n_val, 
+                                            id_to_idx, idx_to_id, common_ids, missing_percentage,
+                                            best_fold_idx, base_out, ds_name, trans_name, pipeline_type,
+                                            is_regression,
+                                            make_plots=True,
+                                            plot_prefix_override=best_plot_prefix,
+                                            integration_technique=integration_technique
+                                        )
+                                    
+                                    # Store best fold metrics for this model
+                                    if model_name in best_fold_results:
+                                        best_fold_metrics[model_name] = best_fold_results[model_name].copy()
+                                        best_fold_metrics[model_name]['best_fold_idx'] = best_fold_idx
+                                        
+                                        # Print performance metric
+                                        metric_name = 'r2' if is_regression else 'f1'
+                                        metric_value = best_fold_results[model_name].get(metric_name, 0.0)
+                                        print(f"{metric_name.upper()}={metric_value:.3f}")
+                                    
+                                    # Save the best model with integration technique in filename
+                                    model_path = os.path.join(
+                                        base_out, "models",
+                                        f"best_model_{pipeline_type}_{model_name}_{trans_name}_{n_val}_{missing_percentage}_{integration_technique}.pkl"
+                                    )
+                                    # Save best_model_obj instead of best_model since it's the freshly retrained model
+                                    # with make_plots=True
+                                    if model_name in best_model_obj:
+                                        joblib.dump(best_model_obj[model_name], model_path)
+                                        logger.info(f"Saved best model for {model_name} to {model_path}")
+                                else:
+                                    print("FAILED")
+                            except Exception as e:
+                                print(f"ERROR: {str(e)}")
+                                logger.error(f"Error processing model {model_name} for {ds_name} with {trans_name}-{n_val} (missing={missing_percentage}%, integration={integration_technique}): {str(e)}")
+                                continue  # Continue to next model
+                        
+                        # Save best fold metrics to CSV
+                        if best_fold_metrics:
+                            try:
+                                best_metrics_path = os.path.join(
+                                    base_out, "metrics",
+                                    f"{ds_name}_best_fold_{pipeline_type}_{trans_name}_{n_val}_{missing_percentage}_{integration_technique}_metrics.csv"
+                                )
+                                # Convert to DataFrame and save
+                                metrics_df = pd.DataFrame(best_fold_metrics).T
+                                metrics_df.to_csv(best_metrics_path)
+                                logger.info(f"Saved best fold metrics to {best_metrics_path}")
+                            except Exception as e:
+                                logger.error(f"Error saving best fold metrics: {str(e)}")
+                        
+                        print(f"      ✅ Completed fusion: {integration_technique}")
+                        
+                    except Exception as e:
+                        print(f"      ❌ Failed fusion: {integration_technique} - {str(e)}")
+                        logger.error(f"Error processing integration technique {integration_technique} for {ds_name} with {trans_name}-{n_val} (missing={missing_percentage}%): {str(e)}")
+                        continue  # Continue to next integration technique
+                
+                print(f"  ✅ Completed {trans_name}-{n_val}")
+            
+            print(f"✅ Completed transformer: {trans_name}")
+        
+        print(f"✅ Completed missing percentage: {missing_percentage*100:.0f}%")
+    
+    print(f"\n🎉 SEQUENTIAL PIPELINE COMPLETED FOR {ds_name}")
+    print(f"{'='*80}\n")
+    
+    # Combine all best fold metrics at the end
+    try:
+        combine_best_fold_metrics(ds_name, base_out)
+        logger.info(f"Combined all best fold metrics for {ds_name}")
+    except Exception as e:
+        logger.error(f"Error combining best fold metrics for {ds_name}: {str(e)}")
+
+def run_sequential_extraction_pipeline(
+    ds_name: str, 
+    data_modalities: Dict[str, pd.DataFrame], 
+    common_ids: List[str], 
+    y: np.ndarray, 
+    base_out: str,
+    extractors: Dict[str, Any], 
+    n_comps_list: List[int], 
+    models: List[str],
+    progress_count: List[int], 
+    total_runs: int,
+    is_regression: bool = True
+):
+    """
+    Sequential extraction pipeline wrapper.
+    Processes one extractor at a time through all fusion techniques and models.
+    """
+    return _run_sequential_pipeline(
+        ds_name=ds_name,
+        data_modalities=data_modalities,
+        common_ids=common_ids,
+        y=y,
+        base_out=base_out,
+        transformers=extractors,
+        n_trans_list=n_comps_list,
+        models=models,
+        progress_count=progress_count,
+        total_runs=total_runs,
+        is_regression=is_regression,
+        pipeline_type="extraction"
+    )
+
+def run_sequential_selection_pipeline(
+    ds_name: str, 
+    data_modalities: Dict[str, pd.DataFrame], 
+    common_ids: List[str], 
+    y: np.ndarray, 
+    base_out: str,
+    selectors: Dict[str, str], 
+    n_feats_list: List[int], 
+    models: List[str],
+    progress_count: List[int], 
+    total_runs: int,
+    is_regression: bool = True
+):
+    """
+    Sequential selection pipeline wrapper.
+    Processes one selector at a time through all fusion techniques and models.
+    """
+    return _run_sequential_pipeline(
+        ds_name=ds_name,
+        data_modalities=data_modalities,
+        common_ids=common_ids,
+        y=y,
+        base_out=base_out,
+        transformers=selectors,
+        n_trans_list=n_feats_list,
+        models=models,
+        progress_count=progress_count,
+        total_runs=total_runs,
+        is_regression=is_regression,
+        pipeline_type="selection"
+    )

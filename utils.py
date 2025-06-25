@@ -592,6 +592,7 @@ def safe_cross_val_score(estimator, X, y, cv=None, scoring=None, n_jobs=None,
     1. Uses safe scoring functions for regression/classification
     2. Handles non-finite scores appropriately
     3. Provides meaningful fallback scores
+    4. Handles sklearn version compatibility (fit_params vs params)
     
     Parameters
     ----------
@@ -624,6 +625,7 @@ def safe_cross_val_score(estimator, X, y, cv=None, scoring=None, n_jobs=None,
     """
     from sklearn.model_selection import cross_val_score
     from sklearn.metrics import make_scorer
+    import sklearn
     
     # Convert string scoring to safe scorer if needed
     safe_scoring = scoring
@@ -634,12 +636,23 @@ def safe_cross_val_score(estimator, X, y, cv=None, scoring=None, n_jobs=None,
             safe_scoring = make_scorer(safe_mcc_score, greater_is_better=True)
     
     try:
-        # Use 'raise' to catch errors and handle them
-        scores = cross_val_score(
-            estimator, X, y, cv=cv, scoring=safe_scoring, n_jobs=n_jobs,
-            verbose=verbose, fit_params=fit_params, pre_dispatch=pre_dispatch,
-            error_score='raise'
-        )
+        # Handle sklearn version compatibility for fit_params vs params
+        sklearn_version = tuple(map(int, sklearn.__version__.split('.')[:2]))
+        
+        if sklearn_version >= (1, 4):
+            # For sklearn 1.4+, use 'params' instead of 'fit_params'
+            scores = cross_val_score(
+                estimator, X, y, cv=cv, scoring=safe_scoring, n_jobs=n_jobs,
+                verbose=verbose, params=fit_params, pre_dispatch=pre_dispatch,
+                error_score='raise'
+            )
+        else:
+            # For older sklearn versions, use 'fit_params'
+            scores = cross_val_score(
+                estimator, X, y, cv=cv, scoring=safe_scoring, n_jobs=n_jobs,
+                verbose=verbose, fit_params=fit_params, pre_dispatch=pre_dispatch,
+                error_score='raise'
+            )
         
         # Replace any non-finite scores with fallback values
         if not np.all(np.isfinite(scores)):
