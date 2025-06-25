@@ -1,0 +1,46 @@
+{
+  "best_params": {
+    "model__cv": 7,
+    "model__eps": 0.001,
+    "model__l1_ratio": 0.6,
+    "model__max_iter": 2000,
+    "model__n_alphas": 150,
+    "model__selection": "cyclic"
+  },
+  "best_score": 0.5305147965749105,
+  "dataset": "AML",
+  "task": "reg",
+  "model": "ElasticNet",
+  "fusion_method": "attention_weighted",
+  "n_features": 32,
+  "preprocessing": "fixed-feature-selection-4-phase-enhanced",
+  "data_shape": {
+    "total_samples": 165,
+    "n_features_per_modality": 32,
+    "n_modalities": 3,
+    "total_features_after_selection": 96,
+    "modality_shapes_before_selection": {
+      "mirna": [
+        165,
+        142
+      ],
+      "exp": [
+        165,
+        1418
+      ],
+      "methy": [
+        165,
+        1900
+      ]
+    }
+  },
+  "n_parameter_combinations": 30,
+  "search_method": "Custom Fixed Feature Selection Grid Search",
+  "cv_folds": 3,
+  "search_time_seconds": 7.501465320587158,
+  "timestamp": "2025-06-25 14:30:50",
+  "best_r2_score": 0.5305147965749105,
+  "best_mae_score": null,
+  "baseline_mae": 28.0,
+  "scoring_method": "Multi-metric: R\u00b2 (optimized) + MAE (tracked)"
+}

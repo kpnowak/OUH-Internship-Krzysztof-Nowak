@@ -1,0 +1,45 @@
+{
+  "best_params": {
+    "extractor__extractor__n_components": 16,
+    "model__alpha": 0.0001,
+    "model__epsilon": 1.2,
+    "model__max_iter": 3000,
+    "model__method": "theil_sen"
+  },
+  "best_score": -0.07776476670891015,
+  "dataset": "AML",
+  "task": "reg",
+  "model": "LinearRegression",
+  "fusion_method": "average",
+  "n_features": null,
+  "preprocessing": "fixed-feature-selection-4-phase-enhanced",
+  "data_shape": {
+    "total_samples": 165,
+    "n_features_per_modality": null,
+    "n_modalities": 3,
+    "total_features_after_selection": "Variable (extractor-dependent)",
+    "modality_shapes_before_selection": {
+      "mirna": [
+        165,
+        142
+      ],
+      "exp": [
+        165,
+        1418
+      ],
+      "methy": [
+        165,
+        1900
+      ]
+    }
+  },
+  "n_parameter_combinations": 30,
+  "search_method": "Custom Fixed Feature Selection Grid Search",
+  "cv_folds": 3,
+  "search_time_seconds": 6.559433698654175,
+  "timestamp": "2025-06-25 08:09:42",
+  "best_r2_score": -0.07776476670891015,
+  "best_mae_score": null,
+  "baseline_mae": 28.0,
+  "scoring_method": "Multi-metric: R\u00b2 (optimized) + MAE (tracked)"
+}

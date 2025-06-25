@@ -1,0 +1,44 @@
+{
+  "best_params": {
+    "extractor__extractor__gamma": 0.1,
+    "extractor__extractor__n_components": 64,
+    "model__C": 0.3981071705534973,
+    "model__class_weight": null,
+    "model__max_iter": 3000,
+    "model__penalty": "l1",
+    "model__solver": "liblinear"
+  },
+  "best_score": 0.0,
+  "dataset": "Breast",
+  "task": "clf",
+  "model": "LogisticRegression",
+  "fusion_method": "attention_weighted",
+  "n_features": null,
+  "preprocessing": "fixed-feature-selection-4-phase-enhanced",
+  "data_shape": {
+    "total_samples": 700,
+    "n_features_per_modality": null,
+    "n_modalities": 3,
+    "total_features_after_selection": "Variable (extractor-dependent)",
+    "modality_shapes_before_selection": {
+      "mirna": [
+        700,
+        142
+      ],
+      "exp": [
+        700,
+        1425
+      ],
+      "methy": [
+        700,
+        1900
+      ]
+    }
+  },
+  "n_parameter_combinations": 30,
+  "search_method": "Custom Fixed Feature Selection Grid Search",
+  "cv_folds": 3,
+  "search_time_seconds": 87.85552263259888,
+  "timestamp": "2025-06-25 15:12:00",
+  "scoring_method": "Matthews correlation coefficient"
+}

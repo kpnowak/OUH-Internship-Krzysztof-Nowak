@@ -27,7 +27,7 @@ The research methodology involves systematically evaluating state-of-the-art alg
 - **Feature Extraction Algorithms**: PCA, KPLS, Factor Analysis, PLS/PLS-DA, SparsePLS
 - **Feature Selection Algorithms**: ElasticNetFS, Random Forest Importance, Variance F-test, LASSO, f_regressionFS, LogisticL1, XGBoostFS
 - **Machine Learning Models**: Linear/Logistic Regression, Random Forest, ElasticNet, SVM
-- **Advanced Integration Strategies**: Attention-weighted fusion, learnable weighted fusion, MKL, SNF, early fusion PCA
+- **Advanced Integration Strategies**: Attention-weighted fusion, learnable weighted fusion, MKL, average fusion, sum fusion, early fusion PCA
 - **Missing Data Handling**: Modality-specific imputation, missing data indicators as features
 - **Parameter Variations**: Different numbers of components/features (8, 16, 32) and missing data percentages (0%, 20%, 50%)
 
@@ -44,20 +44,85 @@ The pipeline works with **multi-omics cancer data**, specifically:
 
 This multi-modal approach captures different layers of biological information, providing a comprehensive view of the molecular landscape in cancer patients.
 
+## Current Pipeline Architecture
+
+### Feature-First Processing (Default Implementation)
+
+The pipeline implements a **feature-first architecture** where feature extraction and selection algorithms are applied to each modality separately **before** fusion occurs. This represents the current state-of-the-art approach for multi-omics data processing:
+
+```
+Raw Multi-Omics Data
+    ↓
+Feature Processing (Applied to each modality separately)
+    ├── Gene Expression: PCA/ElasticNet/etc. → Processed Gene Features
+    ├── miRNA: PCA/ElasticNet/etc. → Processed miRNA Features  
+    └── Methylation: PCA/ElasticNet/etc. → Processed Methylation Features
+    ↓
+Fusion (Combine processed features from all modalities)
+    ↓ 
+Model Training (Train on fused processed features)
+```
+
+**Key Benefits of Feature-First Architecture:**
+- **Modality-Specific Optimization**: Each data type gets specialized preprocessing
+- **Better Feature Quality**: Fusion works with clean, optimized features
+- **Improved Interpretability**: Clear understanding of individual modality contributions
+- **Computational Efficiency**: Parallel processing of modalities possible
+
+### Fusion Workflow in Feature-First Architecture
+
+In the feature-first approach, fusion techniques operate on already-processed features:
+
+```
+Input: Raw Multi-Omics Data
+    ├── Gene Expression (20,000+ features)
+    ├── miRNA (2,000+ features)  
+    └── Methylation (25,000+ features)
+    
+Step 1: Feature Processing (Applied separately to each modality)
+    ├── Gene Expression → PCA/ElasticNet → 32 processed features
+    ├── miRNA → PCA/ElasticNet → 32 processed features
+    └── Methylation → PCA/ElasticNet → 32 processed features
+    
+Step 2: Fusion (Combine processed features)
+    Input: [gene_32_features, mirna_32_features, methy_32_features]
+    ↓
+    Apply Fusion Technique:
+    ├── Average: (gene + mirna + methy) / 3 → 32 fused features
+    ├── Sum: gene + mirna + methy → 32 fused features  
+    ├── Attention: weighted combination → 32 fused features
+    ├── MKL: kernel-based combination → 32 fused features
+    ├── Learnable: performance-weighted → 32 fused features
+    ├── Standard Concat: [gene | mirna | methy] → 96 fused features
+    └── Early PCA: concatenate then PCA → configurable fused features
+    
+Step 3: Model Training
+    Input: Fused features (typically 32-64 dimensions)
+    ↓
+    Train: LinearRegression/RandomForest/ElasticNet
+```
+
+This approach ensures that fusion techniques work with:
+- **Clean, optimized features** rather than noisy raw data
+- **Consistent dimensionality** across modalities (e.g., 32 features each)
+- **Biologically meaningful representations** from each modality
+- **Computationally manageable** feature spaces
+
 ## Current Pipeline Features
 
 ### 🔬 **4-Phase Enhanced Pipeline Architecture**
 - **Phase 1 - Early Data Quality Assessment**: Comprehensive data validation and quality scoring
-- **Phase 2 - Fusion-First Processing**: Fusion applied to raw modalities before feature processing
+- **Phase 2 - Feature-First Processing**: Feature extraction/selection applied to each modality separately before fusion
 - **Phase 3 - Centralized Missing Data Management**: Intelligent imputation and missing data handling
 - **Phase 4 - Coordinated Validation**: Enhanced cross-validation with numerical stability
 
 ### 🧩 **Missing Data-Adaptive Fusion Strategies**
-- **Clean Data (0% missing)**: 5 advanced methods - attention_weighted, learnable_weighted, mkl, snf, early_fusion_pca
-- **Missing Data (>0% missing)**: 3 robust methods - mkl, snf, early_fusion_pca
+- **Clean Data (0% missing)**: 7 advanced methods - attention_weighted, learnable_weighted, mkl, average, sum, standard_concat, early_fusion_pca
+- **Missing Data (>0% missing)**: 4 robust methods - mkl, average, sum, early_fusion_pca
 - **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific weighting
 - **Multiple Kernel Learning (MKL)**: RBF kernel-based fusion with automatic kernel weighting
-- **Similarity Network Fusion (SNF)**: Graph-based network integration with spectral clustering
+- **Average Fusion**: Simple averaging of modality features for robust baseline fusion
+- **Sum Fusion**: Simple summation of modality features for additive combination
 
 ### 🧬 **Enhanced Modality-Specific Preprocessing**
 - **Gene Expression**: Robust biomedical preprocessing with log transformation and robust scaling
@@ -101,7 +166,7 @@ This multi-modal approach captures different layers of biological information, p
 > **Full code and preliminary results are available in the GitHub repository**
 > **OUH-Internship-Krzysztof-Nowak**.
 
-The pipeline systematically evaluates all combinations of algorithms and parameters using the following enhanced experimental structure:
+The pipeline systematically evaluates all combinations of algorithms and parameters using the **feature-first architecture** with the following enhanced experimental structure:
 
 ```python
 # Regression branch algorithms (CURRENT IMPLEMENTATION)
@@ -119,31 +184,34 @@ FUSION_STRATEGIES_CLEAN_DATA = {
     'attention_weighted': 'Sample-specific attention weighting',
     'learnable_weighted': 'Performance-based modality weighting', 
     'mkl': 'Multiple Kernel Learning with RBF kernels',
-    'snf': 'Similarity Network Fusion with spectral clustering',
+    'average': 'Simple averaging for robust baseline fusion',
+    'sum': 'Simple summation for additive combination',
+    'standard_concat': 'Standard concatenation of processed features',
     'early_fusion_pca': 'PCA-based early integration'
 }
 
 FUSION_STRATEGIES_MISSING_DATA = {
     'mkl': 'Multiple Kernel Learning (robust to missing data)',
-    'snf': 'Similarity Network Fusion (handles missing data)',
+    'average': 'Simple averaging (handles missing data)',
+    'sum': 'Simple summation (handles missing data)',
     'early_fusion_pca': 'PCA-based early integration (robust)'
 }
 
-# CORRECTED Experimental loop for each dataset - FEATURE PROCESSING FIRST, then Fusion
+# CURRENT Experimental loop for each dataset - FEATURE PROCESSING FIRST, then Fusion
 for MISSING in [0, 0.20, 0.50]:  # Missing data scenarios first
     # STEP 1: Select fusion strategy based on missing data percentage
-            if MISSING == 0:
-                INTEGRATIONS = [attention_weighted, learnable_weighted, 
-                       mkl, snf, early_fusion_pca]  # 5 methods for clean data
+    if MISSING == 0:
+        INTEGRATIONS = [attention_weighted, learnable_weighted, 
+                       mkl, average, sum, standard_concat, early_fusion_pca]  # 7 methods for clean data
     else:  # missing data scenarios
-        INTEGRATIONS = [mkl, snf, early_fusion_pca]  # 3 robust methods for missing data
+        INTEGRATIONS = [mkl, average, sum, early_fusion_pca]  # 4 robust methods for missing data
             
     for ALGORITHM in EXTRACTORS + SELECTORS:  # Apply feature processing to raw modalities FIRST
-            for N_FEATURES in [8, 16, 32]:  # For selection methods only
+        for N_FEATURES in [8, 16, 32]:  # For selection methods only
             for INTEGRATION in INTEGRATIONS:  # Then apply fusion to processed features SECOND
                 for MODEL in TASK_SPECIFIC_MODELS:
                     run_experiment(
-                        # NEW ORDER: Feature Processing → Fusion → Model Training
+                        # CURRENT ORDER: Feature Processing → Fusion → Model Training
                         missing_rate=MISSING,           # 1. Missing data scenario
                         algorithm=ALGORITHM,            # 2. Feature processing applied to raw modalities FIRST
                         n_features=N_FEATURES if ALGORITHM in SELECTORS else None,  # Fixed for selectors
@@ -159,9 +227,9 @@ for MISSING in [0, 0.20, 0.50]:  # Missing data scenarios first
 ```
 
 ### Current Experimental Features:
-- **Missing Data-Based Strategy Selection**: 5 fusion methods for clean data (0% missing); 3 robust methods for missing data scenarios
-- **Corrected Pipeline Order**: Feature processing applied FIRST to raw modalities, then fusion applied to processed features
-- **4-Phase Pipeline Integration**: Early quality assessment, feature processing, fusion, coordinated validation
+- **Missing Data-Based Strategy Selection**: 7 fusion methods for clean data (0% missing); 4 robust methods for missing data scenarios
+- **Feature-First Pipeline Order**: Feature processing applied FIRST to raw modalities, then fusion applied to processed features
+- **4-Phase Pipeline Integration**: Early quality assessment, feature-first processing, missing data management, coordinated validation
 - **Enhanced Data Quality Analysis**: Comprehensive data quality assessment with automated reporting
 - **Modality-Specific Processing**: Tailored preprocessing configurations for gene expression, miRNA, and methylation data
 - **Robust Cross-Validation**: Enhanced CV with patient-level grouping and numerical stability checks
@@ -173,8 +241,8 @@ This comprehensive experimental design ensures systematic evaluation across:
   - **Selection methods**: Fixed at 8, 16, 32 features for systematic comparison
   - **Extraction methods**: Optimal number of components determined through hyperparameter tuning
 - **Missing data scenarios** (0%, 20%, 50% missing modalities)
-- **Missing data-adaptive integration strategies** (5 methods for clean data, 3 methods for missing data scenarios)
-- **Corrected Pipeline Architecture**: Feature Processing → Fusion → Model Training (optimal order for multi-modal genomics)
+- **Missing data-adaptive integration strategies** (7 methods for clean data, 4 methods for missing data scenarios)
+- **Feature-First Pipeline Architecture**: Feature Processing → Fusion → Model Training (current optimal order for multi-modal genomics)
 - **Predictive models** with hyperparameter optimization and numerical stability
 
 ## Deliverables
@@ -194,8 +262,8 @@ This comprehensive experimental design ensures systematic evaluation across:
    - Sample ID standardization and alignment across modalities
    - Quality-based preprocessing guidance and strategy recommendations
 
-2. **Phase 2 - Feature-First Processing**:
-   - Feature extraction/selection applied to each raw modality separately
+2. **Phase 2 - Feature-First Processing** (CURRENT ARCHITECTURE):
+   - Feature extraction/selection applied to each raw modality separately BEFORE fusion
    - Modality-specific preprocessing configurations (gene expression, miRNA, methylation)
    - Numerical stability checks with automatic problematic feature removal
    - Robust biomedical preprocessing pipeline with enhanced sparsity handling
@@ -219,9 +287,9 @@ This comprehensive experimental design ensures systematic evaluation across:
    - **Modality-Specific Processing**: Each modality processed independently with optimal parameters
    - **Intelligent Caching**: Cached results for expensive extraction/selection operations
 
-6. **Missing Data-Adaptive Fusion** (Applied SECOND - to Processed Features):
-   - **Clean Data (0% missing)**: 5 fusion methods tested - attention_weighted, learnable_weighted, mkl, snf, early_fusion_pca
-   - **Missing Data (>0% missing)**: 3 robust fusion methods - mkl, snf, early_fusion_pca  
+6. **Multi-Modal Fusion** (Applied SECOND - to Processed Features):
+   - **Clean Data (0% missing)**: 7 fusion methods tested - attention_weighted, learnable_weighted, mkl, average, sum, standard_concat, early_fusion_pca
+   - **Missing Data (>0% missing)**: 4 robust fusion methods - mkl, average, sum, early_fusion_pca  
    - **Strategy Selection**: Automatic based on missing data percentage, not task type
    - **Processed Feature Fusion**: Fusion applied to already-processed features from each modality
    - **Robust Fallbacks**: Graceful degradation when advanced fusion methods fail
@@ -271,17 +339,233 @@ This comprehensive experimental design ensures systematic evaluation across:
 
 #### Data Fusion Methods (CURRENT IMPLEMENTATION)
 
-**Clean Data Fusion (0% missing) - 5 methods tested:**
+**Clean Data Fusion (0% missing) - 7 methods tested:**
 - **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific modality weighting
 - **Learnable Weighted Fusion**: Cross-validation based performance weighting of modalities  
 - **MKL (Multiple Kernel Learning)**: RBF kernel-based fusion with automatic kernel parameter optimization
-- **SNF (Similarity Network Fusion)**: Graph-based network integration with spectral clustering
-- **Early Fusion PCA**: Dimensionality reduction applied to concatenated raw modalities before feature processing
+- **Average Fusion**: Simple averaging of modality features for robust baseline fusion
+- **Sum Fusion**: Simple summation of modality features for additive combination
+- **Standard Concatenation**: Direct concatenation of processed features without dimensionality reduction
+- **Early Fusion PCA**: Dimensionality reduction applied to concatenated processed features
 
-**Missing Data Fusion (>0% missing) - 3 robust methods tested:**
+**Missing Data Fusion (>0% missing) - 4 robust methods tested:**
 - **MKL (Multiple Kernel Learning)**: Robust to missing data with kernel approximation
-- **SNF (Similarity Network Fusion)**: Handles missing data through network completion
+- **Average Fusion**: Simple averaging that handles missing data gracefully
+- **Sum Fusion**: Simple summation that handles missing data gracefully
 - **Early Fusion PCA**: Simple and robust concatenation with PCA dimensionality reduction
+
+**Note**: In the current feature-first architecture, all fusion methods work on already-processed features from each modality, not on raw data.
+
+#### Detailed Fusion Technique Explanations
+
+##### 1. **Attention-Weighted Fusion**
+**How it works**: Uses neural attention mechanisms to learn sample-specific weights for each modality. For each sample, the attention network analyzes the feature patterns and assigns different importance weights to each modality.
+
+**Technical details**: 
+- Implements a multi-layer perceptron (MLP) with configurable hidden dimensions (default: 32)
+- Uses dropout (default: 0.3) for regularization
+- Optimized with Adam optimizer (learning rate: 0.001)
+- Training with early stopping (patience: 10 epochs, max: 100 epochs)
+
+**When to use**: 
+- When modalities have varying importance across different samples
+- For complex datasets where simple averaging is insufficient
+- When you have sufficient training data to learn attention patterns
+
+**Advantages**: Adaptive, learns from data, can capture complex modality interactions
+**Disadvantages**: Requires more computational resources, needs sufficient training data
+
+##### 2. **Learnable Weighted Fusion**
+**How it works**: Determines optimal static weights for each modality through cross-validation performance evaluation. Each modality gets a fixed weight based on its contribution to predictive performance.
+
+**Technical details**:
+- Uses 3-fold cross-validation by default (adaptive based on dataset size)
+- Evaluates each modality individually using the target model
+- Assigns weights proportional to individual modality performance
+- Supports both regression (R²) and classification (AUC) scoring
+
+**When to use**:
+- When modalities have consistently different predictive power
+- For interpretable fusion where you want to understand modality importance
+- When computational efficiency is important
+
+**Advantages**: Interpretable weights, computationally efficient, stable performance
+**Disadvantages**: Static weights across all samples, requires cross-validation overhead
+
+##### 3. **Multiple Kernel Learning (MKL)**
+**How it works**: Creates separate RBF (Radial Basis Function) kernels for each modality and learns optimal kernel weights. Combines kernel similarities rather than raw features.
+
+**Technical details**:
+- Uses RBF kernels with gamma parameter optimization
+- Implements kernel weight learning through performance-based optimization
+- Falls back to kernel approximation when full kernel computation is expensive
+- Handles missing modalities through kernel interpolation
+
+**When to use**:
+- For non-linear relationships between modalities
+- When modalities have different scales and distributions
+- For robust handling of missing data scenarios
+
+**Advantages**: Handles non-linear relationships, robust to missing data, theoretically grounded
+**Disadvantages**: Computationally intensive, requires kernel parameter tuning
+
+##### 4. **Average Fusion**
+**How it works**: Simple element-wise averaging of processed features from all modalities. Each modality contributes equally to the final representation.
+
+**Technical details**:
+- Computes element-wise mean: `fused_features = (mod1_features + mod2_features + mod3_features) / 3`
+- Handles missing modalities by averaging only available modalities
+- No parameters to tune, deterministic output
+- Memory efficient implementation
+
+**When to use**:
+- As a robust baseline for comparison
+- When all modalities are equally important
+- For quick prototyping and testing
+- When interpretability is crucial
+
+**Advantages**: Simple, interpretable, robust, no hyperparameters, fast computation
+**Disadvantages**: Assumes equal modality importance, may not capture complex relationships
+
+##### 5. **Sum Fusion**
+**How it works**: Simple element-wise summation of processed features from all modalities. Creates an additive combination where features accumulate.
+
+**Technical details**:
+- Computes element-wise sum: `fused_features = mod1_features + mod2_features + mod3_features`
+- Handles missing modalities by summing only available modalities
+- Preserves feature magnitude (unlike averaging)
+- No normalization applied
+
+**When to use**:
+- When features represent counts or additive quantities
+- For preserving the absolute magnitude of feature contributions
+- As an alternative baseline to averaging
+- When modality contributions should accumulate
+
+**Advantages**: Preserves feature magnitude, simple implementation, fast computation
+**Disadvantages**: Can amplify noise, sensitive to feature scaling, assumes additive relationships
+
+##### 6. **Standard Concatenation**
+**How it works**: Direct horizontal concatenation of processed features from all modalities without any transformation or dimensionality reduction. Creates a unified high-dimensional representation preserving all information.
+
+**Technical details**:
+- Concatenates features: `[mod1_features | mod2_features | mod3_features]`
+- No transformation applied, preserves all processed features
+- Output dimensionality = sum of input modality dimensions
+- Memory efficient implementation using numpy/pandas concatenation
+- Maintains original feature interpretability
+
+**When to use**:
+- When you want to preserve all processed feature information
+- For downstream algorithms that can handle higher dimensions
+- When interpretability of individual modality features is important
+- As a baseline before applying dimensionality reduction
+
+**Advantages**: Preserves all information, maintains interpretability, simple implementation, no information loss
+**Disadvantages**: High dimensionality, potential curse of dimensionality, no modality weighting
+
+##### 7. **Early Fusion PCA**
+**How it works**: Concatenates processed features from all modalities and applies Principal Component Analysis for dimensionality reduction. Creates a unified low-dimensional representation.
+
+**Technical details**:
+- Concatenates features: `[mod1_features | mod2_features | mod3_features]`
+- Applies PCA with configurable number of components (default: optimized based on explained variance)
+- Uses scikit-learn's PCA implementation with SVD solver
+- Handles missing modalities by imputing before concatenation
+
+**When to use**:
+- When you need dimensionality reduction of the fused representation
+- For capturing global patterns across all modalities
+- When memory constraints require lower-dimensional features
+- As a preprocessing step for downstream algorithms
+
+**Advantages**: Reduces dimensionality, captures global variance, computationally efficient
+**Disadvantages**: Linear transformation only, may lose modality-specific patterns, requires complete data
+
+#### Mathematical Formulations
+
+For mathematical clarity, let's define the fusion operations where we have M modalities with processed features X₁, X₂, ..., Xₘ ∈ ℝⁿˣᵈ (n samples, d features each):
+
+**Average Fusion:**
+```
+F_avg = (1/M) × Σᵢ₌₁ᴹ Xᵢ
+```
+
+**Sum Fusion:**
+```
+F_sum = Σᵢ₌₁ᴹ Xᵢ
+```
+
+**Learnable Weighted Fusion:**
+```
+F_weighted = Σᵢ₌₁ᴹ wᵢ × Xᵢ
+where wᵢ = performance_score(Xᵢ, y) / Σⱼ performance_score(Xⱼ, y)
+```
+
+**Attention-Weighted Fusion:**
+```
+F_attention = Σᵢ₌₁ᴹ αᵢ(x) × Xᵢ
+where αᵢ(x) = softmax(MLP([X₁, X₂, ..., Xₘ]))ᵢ
+```
+
+**MKL Fusion:**
+```
+F_mkl = Σᵢ₌₁ᴹ βᵢ × K(Xᵢ, Xᵢ)
+where K(Xᵢ, Xᵢ) is the RBF kernel matrix and βᵢ are learned kernel weights
+```
+
+**Standard Concatenation:**
+```
+F_concat = [X₁ | X₂ | ... | Xₘ]
+where [X₁ | X₂ | ... | Xₘ] represents horizontal concatenation
+```
+
+**Early Fusion PCA:**
+```
+F_pca = PCA([X₁ | X₂ | ... | Xₘ])
+where [X₁ | X₂ | ... | Xₘ] represents horizontal concatenation
+```
+
+#### Fusion Strategy Selection Guide
+
+| Fusion Method | Complexity | Performance | Interpretability | Missing Data | Computational Cost |
+|---------------|------------|-------------|------------------|--------------|-------------------|
+| **Average** | Low | Good baseline | High | Excellent | Very Low |
+| **Sum** | Low | Good baseline | High | Excellent | Very Low |
+| **Standard Concat** | Low | Good | High | Poor | Very Low |
+| **Learnable Weighted** | Medium | Good | Medium | Good | Medium |
+| **Early Fusion PCA** | Medium | Good | Medium | Fair | Medium |
+| **MKL** | High | Excellent | Low | Excellent | High |
+| **Attention-Weighted** | High | Excellent | Low | Good | High |
+
+#### Practical Fusion Selection Guidelines
+
+**For beginners and baseline comparisons:**
+- Start with **Average Fusion** - simple, robust, and interpretable
+- Use **Sum Fusion** as an alternative baseline
+- Try **Standard Concatenation** when you want to preserve all feature information
+- These provide solid performance benchmarks with zero hyperparameter tuning
+
+**For improved performance with moderate complexity:**
+- Use **Learnable Weighted Fusion** when modalities have different predictive power
+- Use **Early Fusion PCA** when dimensionality reduction is beneficial
+- Both offer good performance improvements over simple baselines
+
+**For maximum performance with advanced techniques:**
+- Use **Attention-Weighted Fusion** for complex datasets with sample-varying modality importance
+- Use **MKL** for non-linear relationships and robust missing data handling
+- These require more computational resources but often achieve best performance
+
+**For missing data scenarios:**
+- **Best**: MKL (excellent missing data handling)
+- **Good**: Average, Sum (simple and robust)
+- **Fair**: Early Fusion PCA (requires imputation)
+- **Avoid**: Standard Concatenation, Attention-Weighted (poor missing data handling)
+
+**For computational constraints:**
+- **Fastest**: Average, Sum, Standard Concatenation (milliseconds)
+- **Medium**: Learnable Weighted, Early Fusion PCA (seconds)
+- **Slowest**: MKL, Attention-Weighted (minutes for large datasets)
 
 #### Machine Learning Models
 - **Regression**: Linear Regression, ElasticNet, Random Forest Regressor (with pre-tuned hyperparameters)
@@ -320,15 +604,15 @@ data/
 
 Run the complete pipeline with all datasets and algorithms:
 
-#### Feature-First Architecture (DEFAULT)
+#### Feature-First Architecture (DEFAULT - CURRENT IMPLEMENTATION)
 ```bash
-# Use the standard Feature Processing → Fusion → Model Training order
+# Use the current Feature Processing → Fusion → Model Training order
 python main.py
 ```
 
 #### Fusion-First Architecture (LEGACY)
 ```bash
-# Use the legacy Fusion → Feature Processing → Model Training order
+# Use the legacy Fusion → Feature Processing → Model Training order (for comparison/research)
 python main.py --fusion-first
 ```
 
@@ -388,8 +672,8 @@ python main.py --dataset AML --debug --n-val 16
 python main.py --classification-only --verbose --skip-mad
 
 # Example: Compare both architectures on the same dataset
-python main.py --dataset Breast                # Feature-first (default)
-python main.py --dataset Breast --fusion-first # Fusion-first (legacy)
+python main.py --dataset Breast                # Feature-first (current implementation)
+python main.py --dataset Breast --fusion-first # Fusion-first (legacy for comparison)
 ```
 
 ### Advanced Configuration
@@ -754,7 +1038,7 @@ OUH-Internship-Krzysztof-Nowak/
 ## Recent Pipeline Enhancements
 
 ### Version 4.0 - Feature-First Architecture Implementation (CURRENT)
-- ✅ **NEW: Feature-First Architecture**: Complete implementation of Feature Processing → Fusion → Model Training pipeline order
+- ✅ **CURRENT: Feature-First Architecture**: Complete implementation of Feature Processing → Fusion → Model Training pipeline order
 - ✅ **Dual Architecture Support**: Feature-first as default, legacy fusion-first via `--fusion-first` flag
 - ✅ **Modality-Specific Processing**: Apply extractors/selectors to each modality independently before fusion
 - ✅ **Enhanced Experimental Loop**: Algorithm → Features → Fusion → Model order for comprehensive evaluation
@@ -768,9 +1052,9 @@ OUH-Internship-Krzysztof-Nowak/
 - ✅ **Numerical Stability**: Comprehensive safeguards throughout the pipeline
 
 ### Version 3.0 - 4-Phase Enhanced Pipeline Architecture
-- ✅ **4-Phase Integration**: Early quality assessment, fusion-first processing, centralized missing data, coordinated validation
-- ✅ **Corrected Pipeline Order**: Fusion applied FIRST to raw modalities, then feature processing applied to fused data
-- ✅ **Missing Data-Adaptive Fusion**: 5 fusion methods for clean data, 3 robust methods for missing data scenarios
+- ✅ **4-Phase Integration**: Early quality assessment, feature-first processing, centralized missing data, coordinated validation
+- ✅ **Feature-First Pipeline Order**: Feature processing applied FIRST to raw modalities, then fusion applied to processed features
+- ✅ **Missing Data-Adaptive Fusion**: 7 fusion methods for clean data, 4 robust methods for missing data scenarios
 - ✅ **Comprehensive Data Quality Analysis**: Automated quality scoring with detailed reporting and preprocessing guidance
 - ✅ **Enhanced Cross-Validation**: Patient-level grouping, numerical stability checks, and robust fold creation
 - ✅ **Pre-Tuned Hyperparameters**: Optimized parameters stored in `hp_best/` for immediate high performance
@@ -782,7 +1066,7 @@ OUH-Internship-Krzysztof-Nowak/
 - ✅ **Enhanced Missing Data Handling**: Intelligent pattern analysis and adaptive imputation strategies
 
 ### Version 2.0 - Multi-Modal Fusion Integration  
-- ✅ **Advanced Fusion Methods**: SNF, MKL, attention-weighted, learnable weighted, and early fusion PCA
+- ✅ **Advanced Fusion Methods**: MKL, attention-weighted, learnable weighted, average, sum, and early fusion PCA
 - ✅ **Fusion-First Architecture**: Fusion applied to raw modalities before feature processing
 - ✅ **Performance Monitoring**: Real-time memory usage tracking and computational efficiency optimization
 - ✅ **Intelligent Caching**: LRU caching system for expensive extraction/selection operations
@@ -800,21 +1084,23 @@ OUH-Internship-Krzysztof-Nowak/
 | **Interpretability** | Clear modality contributions | Mixed modality features harder to interpret |
 | **Scalability** | Better for large feature spaces | Can struggle with high-dimensional fused data |
 | **Fusion Quality** | Works with optimized features | Works with raw noisy data |
+| **Current Status** | **CURRENT IMPLEMENTATION** | **LEGACY SUPPORT** |
 | **Usage** | `python main.py` (default) | `python main.py --fusion-first` |
 
-### When to Use Feature-First Architecture
+### When to Use Feature-First Architecture (RECOMMENDED)
 
+- **Standard use cases**: This is the current default and recommended approach
 - **Large feature spaces**: When individual modalities have thousands of features
 - **Modality-specific optimization**: When different data types need specialized processing
 - **Interpretable results**: When understanding individual modality contributions is important
 - **Computational constraints**: When parallel processing of modalities is beneficial
 - **Quality fusion**: When fusion should work with clean, optimized features
 
-### When to Use Fusion-First Architecture
+### When to Use Fusion-First Architecture (LEGACY)
 
-- **Legacy compatibility**: When reproducing previous results
+- **Legacy compatibility**: When reproducing previous results or research comparisons
 - **Simple fusion methods**: When using basic concatenation or averaging
-- **Small datasets**: When computational efficiency is not a concern
+- **Research purposes**: When comparing different architectural approaches
 - **Exploratory analysis**: When testing different fusion strategies quickly
 
 ## Contributing
@@ -839,6 +1125,40 @@ If you use this pipeline in your research, please cite:
 }
 ```
 
+## Pipeline Implementation Status
+
+### Current Implementation (Version 4.0)
+
+✅ **Feature-First Architecture**: The pipeline currently implements feature-first processing as the default approach
+- Feature extraction/selection applied to each modality separately **before** fusion
+- Use `python main.py` to run with the current implementation
+- Optimal for multi-omics data with modality-specific preprocessing needs
+
+✅ **Legacy Support**: Fusion-first architecture available for research comparison
+- Use `python main.py --fusion-first` to run the legacy implementation
+- Maintained for backward compatibility and research purposes
+
+✅ **Memory Optimization**: Sequential processing available for memory-constrained environments
+- Use `python main.py --sequential` for memory-friendly processing
+- Processes one algorithm at a time through all fusion techniques
+
+### Recommended Usage
+
+For **standard research and analysis**: Use the default feature-first implementation:
+```bash
+python main.py  # Feature-first architecture (recommended)
+```
+
+For **memory-constrained systems**: Use sequential processing:
+```bash
+python main.py --sequential  # Memory-optimized feature-first
+```
+
+For **research comparison**: Legacy fusion-first is available:
+```bash
+python main.py --fusion-first  # Legacy implementation
+```
+
 ## Acknowledgments
 
 - VU Amsterdam Faculty of Science
@@ -854,8 +1174,8 @@ This pipeline supports multiple processing architectures:
 
 | Architecture | Processing Order | Usage | Memory Management |
 |-------------|------------------|-------|-------------------|
-| **Feature-First** (DEFAULT) | Raw Data -> Feature Processing -> Fusion -> Model Training | `python main.py` | Efficient, processes all modalities together |
-| **Sequential** (NEW) | Raw Data -> One Extractor/Selector -> All Fusion Techniques -> All Models (repeat) | `python main.py --sequential` | Memory-friendly, processes one algorithm at a time |
+| **Feature-First** (CURRENT DEFAULT) | Raw Data -> Feature Processing -> Fusion -> Model Training | `python main.py` | Efficient, processes all modalities together |
+| **Sequential** (MEMORY-OPTIMIZED) | Raw Data -> One Extractor/Selector -> All Fusion Techniques -> All Models (repeat) | `python main.py --sequential` | Memory-friendly, processes one algorithm at a time |
 | **Fusion-First** (LEGACY) | Raw Data -> Fusion -> Feature Processing -> Model Training | `python main.py --fusion-first` | Legacy compatibility |
 
 ### Sequential Processing Benefits
@@ -913,21 +1233,56 @@ Dataset (e.g., AML regression)
 
   📊 Processing PCA-8
   🎯 [EXTRACT-REG CV] 1/45 => AML | PCA-8 | Missing: 0%
-    🔗 Fusion techniques for 0% missing: 6 methods
+    🔗 Fusion techniques for 0% missing: 7 methods
 
-    🔗 [1/6] Fusion: attention_weighted
+    🔗 [1/7] Fusion: attention_weighted
       🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
         [1/3] Model: LinearRegression -> R2=0.234
         [2/3] Model: ElasticNet -> R2=0.189
         [3/3] Model: RandomForestRegressor -> R2=0.267
       ✅ Completed fusion: attention_weighted
 
-    🔗 [2/6] Fusion: learnable_weighted
+    🔗 [2/7] Fusion: learnable_weighted
       🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
         [1/3] Model: LinearRegression -> R2=0.241
         [2/3] Model: ElasticNet -> R2=0.195
         [3/3] Model: RandomForestRegressor -> R2=0.273
       ✅ Completed fusion: learnable_weighted
+
+    🔗 [3/7] Fusion: mkl
+      🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
+        [1/3] Model: LinearRegression -> R2=0.228
+        [2/3] Model: ElasticNet -> R2=0.202
+        [3/3] Model: RandomForestRegressor -> R2=0.251
+      ✅ Completed fusion: mkl
+
+    🔗 [4/7] Fusion: average
+      🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
+        [1/3] Model: LinearRegression -> R2=0.215
+        [2/3] Model: ElasticNet -> R2=0.178
+        [3/3] Model: RandomForestRegressor -> R2=0.239
+      ✅ Completed fusion: average
+
+    🔗 [5/7] Fusion: sum
+      🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
+        [1/3] Model: LinearRegression -> R2=0.218
+        [2/3] Model: ElasticNet -> R2=0.181
+        [3/3] Model: RandomForestRegressor -> R2=0.242
+      ✅ Completed fusion: sum
+
+    🔗 [6/7] Fusion: standard_concat
+      🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
+        [1/3] Model: LinearRegression -> R2=0.231
+        [2/3] Model: ElasticNet -> R2=0.186
+        [3/3] Model: RandomForestRegressor -> R2=0.249
+      ✅ Completed fusion: standard_concat
+
+    🔗 [7/7] Fusion: early_fusion_pca
+      🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
+        [1/3] Model: LinearRegression -> R2=0.223
+        [2/3] Model: ElasticNet -> R2=0.194
+        [3/3] Model: RandomForestRegressor -> R2=0.255
+      ✅ Completed fusion: early_fusion_pca
 
   ✅ Completed PCA-8
 
@@ -942,13 +1297,13 @@ Dataset (e.g., AML regression)
 
 ### Basic Usage
 ```bash
-# Default feature-first processing
+# Default feature-first processing (CURRENT IMPLEMENTATION)
 python main.py
 
 # Sequential processing (memory-friendly)
 python main.py --sequential
 
-# Legacy fusion-first processing
+# Legacy fusion-first processing (for research comparison)
 python main.py --fusion-first
 ```
 
@@ -981,8 +1336,8 @@ The pipeline supports both regression and classification datasets:
 
 ### Fusion Techniques
 
-- **For clean data (0% missing)**: attention_weighted, learnable_weighted, mkl, average, sum, early_fusion_pca
-- **For missing data (>0% missing)**: mkl, average, sum, early_fusion_pca
+- **For clean data (0% missing)**: attention_weighted, learnable_weighted, mkl, average, sum, standard_concat, early_fusion_pca (7 methods)
+- **For missing data (>0% missing)**: mkl, average, sum, early_fusion_pca (4 methods)
 
 ### Machine Learning Models
 

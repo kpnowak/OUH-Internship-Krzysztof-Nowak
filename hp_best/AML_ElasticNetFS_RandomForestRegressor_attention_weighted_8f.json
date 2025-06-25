@@ -1,0 +1,46 @@
+{
+  "best_params": {
+    "model__bootstrap": false,
+    "model__max_depth": 20,
+    "model__max_features": "sqrt",
+    "model__min_samples_leaf": 3,
+    "model__min_samples_split": 10,
+    "model__n_estimators": 100
+  },
+  "best_score": 0.4626846084211424,
+  "dataset": "AML",
+  "task": "reg",
+  "model": "RandomForestRegressor",
+  "fusion_method": "attention_weighted",
+  "n_features": 8,
+  "preprocessing": "fixed-feature-selection-4-phase-enhanced",
+  "data_shape": {
+    "total_samples": 165,
+    "n_features_per_modality": 8,
+    "n_modalities": 3,
+    "total_features_after_selection": 24,
+    "modality_shapes_before_selection": {
+      "mirna": [
+        165,
+        142
+      ],
+      "exp": [
+        165,
+        1418
+      ],
+      "methy": [
+        165,
+        1900
+      ]
+    }
+  },
+  "n_parameter_combinations": 30,
+  "search_method": "Custom Fixed Feature Selection Grid Search",
+  "cv_folds": 3,
+  "search_time_seconds": 30.368061542510986,
+  "timestamp": "2025-06-25 12:53:15",
+  "best_r2_score": 0.4626846084211424,
+  "best_mae_score": null,
+  "baseline_mae": 28.0,
+  "scoring_method": "Multi-metric: R\u00b2 (optimized) + MAE (tracked)"
+}

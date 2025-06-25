@@ -2708,8 +2708,9 @@ def get_regression_extractors() -> Dict[str, Any]:
         ),
         "FA": FactorAnalysis(
             random_state=42,
-            max_iter=5000,  # Increased max iterations
-            tol=1e-3       # Relaxed tolerance
+            max_iter=100,   # Very low for speed - FA is inherently slow on genomic data
+            tol=1e-1,      # Very relaxed tolerance for speed
+            n_components=4  # Fixed low default to prevent slow high-component searches
         ),
         "PLS": PLSRegression(
             n_components=5,        # Reduced from 8 to 5 for consistency
@@ -2788,8 +2789,9 @@ def get_classification_extractors() -> Dict[str, Any]:
         ),
         "FA": FactorAnalysis(
             random_state=42,
-            max_iter=5000,
-            tol=1e-3
+            max_iter=100,   # Very low for speed - FA is inherently slow on genomic data
+            tol=1e-1,      # Very relaxed tolerance for speed
+            n_components=4  # Fixed low default to prevent slow high-component searches
         ),
         "LDA": LDA(),
         "PLS-DA": PLSDiscriminantAnalysis(

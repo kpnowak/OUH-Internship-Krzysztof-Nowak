@@ -583,9 +583,13 @@ def param_space_extractors(extr, mdl, X_shape=None):
         p["extractor__extractor__alpha"] = np.logspace(-1, 0, 3)
     
     if extr == "FA":
-        p["extractor__extractor__n_components"] = component_options
-        p["extractor__extractor__max_iter"] = [1000, 3000]
-        p["extractor__extractor__tol"] = [1e-3, 1e-2]
+        # Very aggressive FA optimization for speed - FA is inherently slow on high-dimensional data
+        safe_fa_components = [min(c, 8) for c in component_options if c <= 8]  # Cap FA at 8 components max
+        if not safe_fa_components:
+            safe_fa_components = [2, 4]  # Fallback to very small components
+        p["extractor__extractor__n_components"] = safe_fa_components
+        p["extractor__extractor__max_iter"] = [50, 100]  # Very low iterations for speed
+        p["extractor__extractor__tol"] = [1e-1, 1e0]  # Very relaxed tolerance for speed
     
     if extr == "LDA":
         p["extractor__extractor__solver"] = ["lsqr", "svd", "eigen"]
