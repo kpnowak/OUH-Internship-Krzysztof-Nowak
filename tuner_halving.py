@@ -2682,9 +2682,15 @@ def _tune_internal(dataset, task, extractor, model, fusion_method="average", n_f
             return obj
         
         # Make best_params JSON serializable
+        # FIX: Handle case when best_params_ is None (all combinations failed)
         serializable_best_params = {}
-        for key, value in search.best_params_.items():
-            serializable_best_params[key] = make_json_serializable(value)
+        if search.best_params_ is not None:
+            for key, value in search.best_params_.items():
+                serializable_best_params[key] = make_json_serializable(value)
+        else:
+            logger.warning("No valid parameter combinations found (best_params_ is None)")
+            # Use empty params as fallback
+            serializable_best_params = {}
         
         # Update the best dict with serializable parameters
         best["best_params"] = serializable_best_params
@@ -2723,8 +2729,11 @@ def _tune_internal(dataset, task, extractor, model, fusion_method="average", n_f
         
         # Log best parameters
         logger.info("Best Parameters:")
-        for param, value in search.best_params_.items():
-            logger.info(f"  {param}: {value}")
+        if search.best_params_ is not None:
+            for param, value in search.best_params_.items():
+                logger.info(f"  {param}: {value}")
+        else:
+            logger.info("  No valid parameters found (all combinations failed)")
         
         log_stage(logger, "TUNING_COMPLETED", {
             "status": "SUCCESS",

@@ -1,0 +1,43 @@
+{
+  "best_params": {
+    "model__class_weight": "balanced",
+    "model__max_depth": 20,
+    "model__max_features": 0.9,
+    "model__min_samples_leaf": 2,
+    "model__min_samples_split": 5,
+    "model__n_estimators": 300
+  },
+  "best_score": -0.003427483746858215,
+  "dataset": "Breast",
+  "task": "clf",
+  "model": "RandomForestClassifier",
+  "fusion_method": "average",
+  "n_features": 16,
+  "preprocessing": "fixed-feature-selection-4-phase-enhanced",
+  "data_shape": {
+    "total_samples": 700,
+    "n_features_per_modality": 16,
+    "n_modalities": 3,
+    "total_features_after_selection": 48,
+    "modality_shapes_before_selection": {
+      "mirna": [
+        700,
+        142
+      ],
+      "exp": [
+        700,
+        1425
+      ],
+      "methy": [
+        700,
+        1900
+      ]
+    }
+  },
+  "n_parameter_combinations": 30,
+  "search_method": "Custom Fixed Feature Selection Grid Search",
+  "cv_folds": 3,
+  "search_time_seconds": 44.61016798019409,
+  "timestamp": "2025-06-26 00:13:37",
+  "scoring_method": "Matthews correlation coefficient"
+}

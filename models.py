@@ -3607,13 +3607,153 @@ def build_selector(name, n_features=16):
     
     elif selector_code == "lasso_regression":
         # LASSO-based feature selection for regression
+        # FIX: Use adaptive threshold to prevent 0 feature selection
         base_estimator = Lasso(random_state=42, max_iter=2000)
-        return SelectFromModel(base_estimator, max_features=n_features)
+        
+        # Create adaptive SelectFromModel that guarantees at least some features
+        class AdaptiveLassoSelectorRegression:
+            def __init__(self, base_estimator, max_features):
+                self.base_estimator = base_estimator
+                self.max_features = max_features
+                self.selector_ = None
+                self.feature_mask_ = None
+                
+            def fit(self, X, y):
+                import numpy as np
+                from sklearn.feature_selection import SelectFromModel
+                
+                # Try multiple threshold strategies to avoid 0 features
+                thresholds_to_try = [
+                    'mean',      # Default sklearn threshold
+                    'median',    # More permissive
+                    '0.25*mean', # Much more permissive
+                    '0.1*mean',  # Very permissive
+                    '0.01*mean'  # Extremely permissive
+                ]
+                
+                for threshold in thresholds_to_try:
+                    try:
+                        # Fit the base estimator
+                        fitted_estimator = self.base_estimator.fit(X, y)
+                        
+                        # Try this threshold
+                        selector = SelectFromModel(fitted_estimator, threshold=threshold, max_features=self.max_features)
+                        selector.fit(X, y)
+                        
+                        # Check if we selected any features
+                        if hasattr(selector, 'get_support'):
+                            support = selector.get_support()
+                            n_selected = np.sum(support)
+                            
+                            if n_selected > 0:
+                                # Success! We found a threshold that selects features
+                                self.selector_ = selector
+                                self.feature_mask_ = support
+                                return self
+                                
+                    except Exception as e:
+                        # This threshold failed, try the next one
+                        continue
+                
+                # If all thresholds failed, use a simple variance-based fallback
+                print(f"Warning: LASSO selector failed to select features, using f_regression fallback")
+                from sklearn.feature_selection import SelectKBest, f_regression
+                self.selector_ = SelectKBest(score_func=f_regression, k=min(self.max_features, X.shape[1]))
+                self.selector_.fit(X, y)
+                self.feature_mask_ = self.selector_.get_support()
+                return self
+                
+            def transform(self, X):
+                if self.selector_ is None:
+                    raise ValueError("Selector not fitted yet")
+                return self.selector_.transform(X)
+                
+            def fit_transform(self, X, y):
+                return self.fit(X, y).transform(X)
+                
+            def get_support(self, indices=False):
+                if self.feature_mask_ is None:
+                    raise ValueError("Selector not fitted yet")
+                if indices:
+                    return np.where(self.feature_mask_)[0]
+                return self.feature_mask_
+        
+        return AdaptiveLassoSelectorRegression(base_estimator, n_features)
     
     elif selector_code == "lasso_classification":
         # L1-regularized logistic regression for classification
+        # FIX: Use adaptive threshold to prevent 0 feature selection
         base_estimator = LogisticRegression(penalty='l1', solver='liblinear', random_state=42, max_iter=2000)
-        return SelectFromModel(base_estimator, max_features=n_features)
+        
+        # Create adaptive SelectFromModel that guarantees at least some features
+        class AdaptiveLassoSelector:
+            def __init__(self, base_estimator, max_features):
+                self.base_estimator = base_estimator
+                self.max_features = max_features
+                self.selector_ = None
+                self.feature_mask_ = None
+                
+            def fit(self, X, y):
+                import numpy as np
+                from sklearn.feature_selection import SelectFromModel
+                
+                # Try multiple threshold strategies to avoid 0 features
+                thresholds_to_try = [
+                    'mean',      # Default sklearn threshold
+                    'median',    # More permissive
+                    '0.25*mean', # Much more permissive
+                    '0.1*mean',  # Very permissive
+                    '0.01*mean'  # Extremely permissive
+                ]
+                
+                for threshold in thresholds_to_try:
+                    try:
+                        # Fit the base estimator
+                        fitted_estimator = self.base_estimator.fit(X, y)
+                        
+                        # Try this threshold
+                        selector = SelectFromModel(fitted_estimator, threshold=threshold, max_features=self.max_features)
+                        selector.fit(X, y)
+                        
+                        # Check if we selected any features
+                        if hasattr(selector, 'get_support'):
+                            support = selector.get_support()
+                            n_selected = np.sum(support)
+                            
+                            if n_selected > 0:
+                                # Success! We found a threshold that selects features
+                                self.selector_ = selector
+                                self.feature_mask_ = support
+                                return self
+                                
+                    except Exception as e:
+                        # This threshold failed, try the next one
+                        continue
+                
+                # If all thresholds failed, use a simple variance-based fallback
+                print(f"Warning: LASSO selector failed to select features, using variance fallback")
+                from sklearn.feature_selection import SelectKBest, f_classif
+                self.selector_ = SelectKBest(score_func=f_classif, k=min(self.max_features, X.shape[1]))
+                self.selector_.fit(X, y)
+                self.feature_mask_ = self.selector_.get_support()
+                return self
+                
+            def transform(self, X):
+                if self.selector_ is None:
+                    raise ValueError("Selector not fitted yet")
+                return self.selector_.transform(X)
+                
+            def fit_transform(self, X, y):
+                return self.fit(X, y).transform(X)
+                
+            def get_support(self, indices=False):
+                if self.feature_mask_ is None:
+                    raise ValueError("Selector not fitted yet")
+                if indices:
+                    return np.where(self.feature_mask_)[0]
+                return self.feature_mask_
+        
+        return AdaptiveLassoSelector(base_estimator, n_features)
     
     else:
         # Fallback to univariate selection
