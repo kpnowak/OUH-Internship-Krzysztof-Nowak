@@ -144,7 +144,7 @@ class FeatureFirstPipeline:
             # Step 3: Train model on fused processed features
             results = self._train_model_on_fused_features(
                 fused_features, y, model_name, model_obj, cv_strategy, cv_groups, 
-                dataset_name, algorithm_name, fold_idx
+                dataset_name, algorithm_name, fold_idx, n_features_or_components
             )
             
             # Add metadata
@@ -231,28 +231,30 @@ class FeatureFirstPipeline:
                         # Selection algorithm
                         selector, X_processed = cached_fit_transform_selector_regression(
                             X_aligned, y_aligned, algorithm_obj, n_features_or_components,
-                            ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx
+                            ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx,
+                            model_name=model_name, fusion_method=self.fusion_method
                         )
                     else:
                         # Extraction algorithm
                         extractor, X_processed = cached_fit_transform_extractor_regression(
                             X_aligned, y_aligned, algorithm_obj, n_features_or_components,
                             ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx,
-                            model_name=model_name
+                            model_name=model_name, fusion_method=self.fusion_method
                         )
                 else:
                     if "selection" in algorithm_name.lower() or algorithm_name in ['ElasticNetFS', 'RFImportance', 'VarianceFTest', 'LASSO', 'LogisticL1']:
                         # Selection algorithm
                         selector, X_processed = cached_fit_transform_selector_classification(
                             X_aligned, y_aligned, algorithm_obj, n_features_or_components,
-                            ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx
+                            ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx,
+                            model_name=model_name, fusion_method=self.fusion_method
                         )
                     else:
                         # Extraction algorithm
                         extractor, X_processed = cached_fit_transform_extractor_classification(
                             X_aligned, y_aligned, algorithm_obj, n_features_or_components,
                             ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx,
-                            model_name=model_name
+                            model_name=model_name, fusion_method=self.fusion_method
                         )
                 
                 if X_processed is not None and X_processed.size > 0:
@@ -374,7 +376,8 @@ class FeatureFirstPipeline:
                                      cv_groups: Any,
                                      dataset_name: str,
                                      algorithm_name: str,
-                                     fold_idx: int) -> Dict[str, Any]:
+                                     fold_idx: int,
+                                     n_features_or_components: int = None) -> Dict[str, Any]:
         """
         Train model on fused processed features.
         
@@ -398,6 +401,8 @@ class FeatureFirstPipeline:
             Feature processing algorithm name
         fold_idx : int
             Fold index
+        n_features_or_components : int, optional
+            Number of features/components used in feature processing (needed for selector hyperparameter loading)
             
         Returns
         -------
@@ -408,6 +413,44 @@ class FeatureFirstPipeline:
         try:
             logger.info(f"Training {model_name} on fused features: {fused_features.shape}")
             logger.debug(f"Target array shape: {y.shape}")
+            
+            # Load and apply hyperparameters for the final model training
+            from models import load_feature_first_hyperparameters
+            
+            # Determine approach based on algorithm name
+            if "selection" in algorithm_name.lower() or algorithm_name in ['ElasticNetFS', 'RFImportance', 'VarianceFTest', 'LASSO', 'f_regressionFS', 'LogisticL1']:
+                approach = "selector"
+                # For selectors, use the n_features_or_components value that was passed to this function
+                n_features_for_hyperparams = n_features_or_components
+                if n_features_for_hyperparams is None:
+                    # Fallback if not provided
+                    n_features_for_hyperparams = 16
+                    logger.warning(f"n_features_or_components not provided for selector {algorithm_name}, using default {n_features_for_hyperparams}")
+                logger.debug(f"Using n_features={n_features_for_hyperparams} for selector hyperparameter loading")
+            else:
+                approach = "extractor"
+                n_features_for_hyperparams = None
+            
+            try:
+                hyperparams = load_feature_first_hyperparameters(
+                    dataset=dataset_name,
+                    algorithm=algorithm_name,
+                    model=model_name,
+                    fusion_method=self.fusion_method,
+                    n_features=n_features_for_hyperparams,
+                    approach=approach
+                )
+                
+                # Apply model hyperparameters if available
+                if hyperparams['model_params']:
+                    logger.info(f"Applying model hyperparameters for {dataset_name}_{algorithm_name}_{model_name}_{self.fusion_method}: {hyperparams['model_params']}")
+                    model_obj.set_params(**hyperparams['model_params'])
+                else:
+                    logger.debug(f"No model hyperparameters found for {dataset_name}_{algorithm_name}_{model_name}_{self.fusion_method}, using defaults")
+                    
+            except Exception as hp_error:
+                logger.warning(f"Failed to load/apply hyperparameters: {hp_error}")
+                logger.debug(f"Continuing with default hyperparameters for {model_name}")
             
             # CRITICAL FIX: Use fused_features dimensions, don't truncate based on y
             # The fused_features should already be aligned with y from previous steps

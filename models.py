@@ -2542,7 +2542,7 @@ def _generate_cache_key(ds_name, fold_idx, name, obj_type, n_val, input_shape=No
     return hash_obj.hexdigest()
 
 # Update cache functions to use the new key generation and caching strategy
-def cached_fit_transform_selector_regression(X, y, selector, n_feats, ds_name=None, modality_name=None, fold_idx=0):
+def cached_fit_transform_selector_regression(X, y, selector, n_feats, ds_name=None, modality_name=None, fold_idx=0, model_name=None, fusion_method="attention_weighted"):
     """
     Cached version of fit_transform for regression selectors.
     
@@ -2639,6 +2639,45 @@ def cached_fit_transform_selector_regression(X, y, selector, n_feats, ds_name=No
         # Create selector object with correct effective_n_feats if we have a selector_code
         if selector is None and 'selector_code' in locals():
             selector = get_selector_object(selector_code, effective_n_feats)
+        
+        # Load and apply hyperparameters if dataset name and model name are provided
+        if ds_name and model_name and selector is not None and hasattr(selector, 'set_params'):
+            try:
+                # Get the selector code for hyperparameter loading
+                selector_algorithm = None
+                if 'selector_code' in locals():
+                    selector_algorithm = selector_code
+                elif original_selector_code:
+                    selector_algorithm = original_selector_code
+                elif hasattr(selector, '__class__'):
+                    selector_algorithm = selector.__class__.__name__
+                
+                if selector_algorithm:
+                    hyperparams = load_feature_first_hyperparameters(
+                        dataset=ds_name,
+                        algorithm=selector_algorithm,
+                        model=model_name,
+                        fusion_method=fusion_method,
+                        n_features=n_feats,
+                        approach="selector"
+                    )
+                    
+                    if hyperparams['model_params']:
+                        # Apply model hyperparameters to the selector's base estimator if applicable
+                        if hasattr(selector, 'estimator') and hasattr(selector.estimator, 'set_params'):
+                            selector.estimator.set_params(**hyperparams['model_params'])
+                            logger.info(f"Applied selector model hyperparameters for {ds_name}_{selector_algorithm}_{model_name}: {hyperparams['model_params']}")
+                        elif hasattr(selector, 'set_params'):
+                            # Try applying directly to the selector
+                            selector.set_params(**hyperparams['model_params'])
+                            logger.info(f"Applied selector hyperparameters for {ds_name}_{selector_algorithm}_{model_name}: {hyperparams['model_params']}")
+                            
+                    if hyperparams['selector_params']:
+                        selector.set_params(**hyperparams['selector_params'])
+                        logger.info(f"Applied selector-specific hyperparameters for {ds_name}_{selector_algorithm}: {hyperparams['selector_params']}")
+                        
+            except Exception as e:
+                logger.warning(f"Failed to apply selector hyperparameters for {ds_name}_{selector_algorithm}_{model_name}: {str(e)}")
         
         # Use basic feature selection as fallback
         if selector is None:
@@ -2906,7 +2945,7 @@ def validate_and_fix_shape_mismatch(X, y, name="data", fold_idx=None, allow_trun
     
     return X, y
 
-def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None):
+def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None, fusion_method="attention_weighted"):
     """
     Cached version of fit_transform for regression extractors with hyperparameter loading.
     
@@ -2945,8 +2984,14 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
     try:
         # Load and apply hyperparameters if dataset name is provided
         if ds_name and model_name:
-            # Use the specific model name to load appropriate hyperparameters
-            hyperparams = load_best_hyperparameters(ds_name, extractor_name, model_name, "reg")
+            # Use the new feature-first hyperparameter loading system
+            hyperparams = load_feature_first_hyperparameters(
+                dataset=ds_name,
+                algorithm=extractor_name,
+                model=model_name,
+                fusion_method=fusion_method,
+                approach="extractor"
+            )
             
             if hyperparams['extractor_params']:
                 best_hyperparams = hyperparams
@@ -2958,7 +3003,13 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
                 for fallback_model in model_candidates:
                     if fallback_model == model_name:
                         continue  # Skip the one we already tried
-                    hyperparams = load_best_hyperparameters(ds_name, extractor_name, fallback_model, "reg")
+                    hyperparams = load_feature_first_hyperparameters(
+                        dataset=ds_name,
+                        algorithm=extractor_name,
+                        model=fallback_model,
+                        fusion_method=fusion_method,
+                        approach="extractor"
+                    )
                     if hyperparams['extractor_params']:
                         best_hyperparams = hyperparams
                         logger.warning(f"Using fallback hyperparameters from {fallback_model} for {model_name}")
@@ -3063,7 +3114,7 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         
         return None, None
 
-def cached_fit_transform_extractor_classification(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None):
+def cached_fit_transform_extractor_classification(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None, fusion_method="attention_weighted"):
     """
     Cached version of fit_transform for classification extractors with hyperparameter loading.
     
@@ -3102,8 +3153,14 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
     try:
         # Load and apply hyperparameters if dataset name is provided
         if ds_name and model_name:
-            # Use the specific model name to load appropriate hyperparameters
-            hyperparams = load_best_hyperparameters(ds_name, extractor_name, model_name, "clf")
+            # Use the new feature-first hyperparameter loading system
+            hyperparams = load_feature_first_hyperparameters(
+                dataset=ds_name,
+                algorithm=extractor_name,
+                model=model_name,
+                fusion_method=fusion_method,
+                approach="extractor"
+            )
             
             if hyperparams['extractor_params']:
                 best_hyperparams = hyperparams
@@ -3115,7 +3172,13 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
                 for fallback_model in model_candidates:
                     if fallback_model == model_name:
                         continue  # Skip the one we already tried
-                    hyperparams = load_best_hyperparameters(ds_name, extractor_name, fallback_model, "clf")
+                    hyperparams = load_feature_first_hyperparameters(
+                        dataset=ds_name,
+                        algorithm=extractor_name,
+                        model=fallback_model,
+                        fusion_method=fusion_method,
+                        approach="extractor"
+                    )
                     if hyperparams['extractor_params']:
                         best_hyperparams = hyperparams
                         logger.warning(f"Using fallback hyperparameters from {fallback_model} for {model_name}")
@@ -3283,7 +3346,7 @@ def transform_extractor_classification(X, fitted_extractor):
         logger.warning(f"Transform extractor classification failed: {str(e)}")
         return None
 
-def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, ds_name=None, modality_name=None, fold_idx=0):
+def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, ds_name=None, modality_name=None, fold_idx=0, model_name=None, fusion_method="attention_weighted"):
     """
     Cached version of fit_transform for classification selectors.
     
@@ -3303,6 +3366,10 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
         Modality name (unused but kept for compatibility)
     fold_idx : int
         Fold index for caching
+    model_name : str, optional
+        Model name for hyperparameter loading
+    fusion_method : str, optional
+        Fusion method for hyperparameter loading
         
     Returns
     -------
@@ -3343,6 +3410,35 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
         
         # Create selector object
         selector = get_selector_object(selector_code, effective_n_feats)
+        
+        # Load and apply hyperparameters if dataset name and model name are provided
+        if ds_name and model_name and hasattr(selector, 'set_params'):
+            try:
+                hyperparams = load_feature_first_hyperparameters(
+                    dataset=ds_name,
+                    algorithm=selector_code,
+                    model=model_name,
+                    fusion_method=fusion_method,
+                    n_features=n_feats,
+                    approach="selector"
+                )
+                
+                if hyperparams['model_params']:
+                    # Apply model hyperparameters to the selector's base estimator if applicable
+                    if hasattr(selector, 'estimator') and hasattr(selector.estimator, 'set_params'):
+                        selector.estimator.set_params(**hyperparams['model_params'])
+                        logger.info(f"Applied selector model hyperparameters for {ds_name}_{selector_code}_{model_name}: {hyperparams['model_params']}")
+                    elif hasattr(selector, 'set_params'):
+                        # Try applying directly to the selector
+                        selector.set_params(**hyperparams['model_params'])
+                        logger.info(f"Applied selector hyperparameters for {ds_name}_{selector_code}_{model_name}: {hyperparams['model_params']}")
+                        
+                if hyperparams['selector_params']:
+                    selector.set_params(**hyperparams['selector_params'])
+                    logger.info(f"Applied selector-specific hyperparameters for {ds_name}_{selector_code}: {hyperparams['selector_params']}")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to apply selector hyperparameters for {ds_name}_{selector_code}_{model_name}: {str(e)}")
         
         # Use basic feature selection as fallback
         if selector is None:
@@ -3442,45 +3538,7 @@ def transform_selector_classification(X, selected_features):
         logger.warning(f"Transform selector classification failed: {str(e)}")
         return None
 
-def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, ds_name=None, modality_name=None, fold_idx=0):
-    """Cached version of fit_transform for classification selectors."""
-    key = _generate_cache_key(ds_name, fold_idx, selector_code, "sel_clf", n_feats, X.shape if X is not None else None)
-    cached_result = _selector_cache["sel_clf"].get(key)
-    if cached_result is not None:
-        return cached_result
-    try:
-        X_arr = np.asarray(X)
-        y_arr = np.asarray(y)
-        X_arr = np.nan_to_num(X_arr, nan=0.0)
-        X_arr, y_arr = validate_and_fix_shape_mismatch(X_arr, y_arr, name=f"{ds_name if ds_name else 'unknown'} classification selector data", fold_idx=fold_idx, allow_truncation=False)
-        if X_arr is None or y_arr is None:
-            logger.warning(f"Data alignment failure in selector for {ds_name}")
-            return None, None
-        max_possible_feats = min(X_arr.shape[0], X_arr.shape[1])
-        effective_n_feats = min(n_feats, max_possible_feats)
-        selector = get_selector_object(selector_code, effective_n_feats)
-        if selector is None:
-            from sklearn.feature_selection import SelectKBest, f_classif
-            selector = SelectKBest(f_classif, k=effective_n_feats)
-        selector.fit(X_arr, y_arr)
-        X_selected = selector.transform(X_arr)
-        if hasattr(selector, "get_support"):
-            selected_features = selector.get_support()
-        else:
-            selected_features = np.arange(X_selected.shape[1])
-        result = (selected_features, X_selected)
-        _selector_cache["sel_clf"].put(key, result, item_size=X_selected.nbytes if hasattr(X_selected, "nbytes") else X_selected.size * 8)
-        return result
-    except Exception as e:
-        logger.warning(f"Selector classification failed for {ds_name}: {str(e)}")
-        if X is not None and X.shape[1] > 0:
-            mask = np.zeros(X.shape[1], dtype=bool)
-            mask[0] = True
-            selected_features = mask
-            transformed_X = X[:min(len(X), 10), [0]]
-            result = (selected_features, transformed_X)
-            return result
-        return None, None
+
 
 def transform_selector_regression(X, selected_features):
     """Transform data using selected features for regression."""
@@ -4001,3 +4059,191 @@ def get_extraction_n_components_list(dataset, extractors, task):
             extraction_n_components[extractor_name] = [8]
     
     return extraction_n_components
+
+def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method, n_features=None, approach="extractor"):
+    """
+    Load best hyperparameters for feature-first pipeline with correct file naming convention.
+    
+    MAPPING RULES:
+    - Dataset mapping: AML (regression) for AML/Sarcoma, Breast (classification) for Breast/Colon/Kidney/Liver/Lung/Melanoma/Ovarian
+    - Fusion mapping: attention_weighted for attention_weighted/learnable_weighted/standard_concat, average for average/mkl/sum/early_fusion_pca
+    - Extractor approach: {dataset}_{extractor}_{model}_{fusion}.json
+    - Selector approach: {dataset}_{selector}_{model}_{fusion}_{f_number}.json
+    
+    Parameters
+    ----------
+    dataset : str
+        Original dataset name (e.g., "AML", "Breast", "Colon", etc.)
+    algorithm : str
+        Algorithm name (extractor like "FA", "PCA" or selector like "LASSO", "RFImportance")
+    model : str
+        Model name (e.g., "LinearRegression", "ElasticNet", "LogisticRegression")
+    fusion_method : str
+        Fusion technique (e.g., "attention_weighted", "average", "mkl", etc.)
+    n_features : int, optional
+        Number of features (required for selectors, ignored for extractors)
+    approach : str
+        Either "extractor" or "selector"
+        
+    Returns
+    -------
+    dict
+        Best hyperparameters with separate extractor/selector and model params, or empty dict if not found
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Step 1: Map dataset to source dataset based on user specifications
+    # AML (regression) → source for all regression databases: AML, Sarcoma
+    # Breast (classification) → source for all classification databases: Breast, Colon, Kidney, Liver, Lung, Melanoma, Ovarian
+    
+    regression_datasets = ["AML", "Sarcoma"]
+    classification_datasets = ["Breast", "Colon", "Kidney", "Liver", "Lung", "Melanoma", "Ovarian"]
+    
+    if dataset in regression_datasets:
+        source_dataset = "AML"  # AML for all regression datasets
+    elif dataset in classification_datasets:
+        source_dataset = "Breast"  # Breast for all classification datasets
+    else:
+        # Fallback: determine by model type if dataset not recognized
+        logger.warning(f"Dataset {dataset} not in known regression/classification lists, determining by model")
+        is_regression = model in ["LinearRegression", "ElasticNet", "RandomForestRegressor", "SVR"]
+        source_dataset = "AML" if is_regression else "Breast"
+    
+    # Step 2: Map fusion technique to source fusion based on user specifications
+    # attention_weighted/learnable_weighted/standard_concat → use attention_weighted params
+    # average/mkl/sum/early_fusion_pca → use average params
+    if fusion_method in ["attention_weighted", "learnable_weighted", "standard_concat"]:
+        source_fusion = "attention_weighted"
+    elif fusion_method in ["average", "mkl", "sum", "early_fusion_pca"]:
+        source_fusion = "average"
+    else:
+        source_fusion = fusion_method  # Use as-is if not in mapping
+    
+    # Step 3: Construct filename based on approach
+    if approach == "extractor":
+        # Format: {dataset}_{extractor}_{model}_{fusion}.json
+        filename = f"{source_dataset}_{algorithm}_{model}_{source_fusion}.json"
+    else:  # selector
+        # Format: {dataset}_{selector}_{model}_{fusion}_{f_number}.json
+        if n_features is None:
+            logger.error(f"n_features is required for selector approach but was None")
+            return {'extractor_params': {}, 'model_params': {}, 'source': 'error: missing n_features'}
+        filename = f"{source_dataset}_{algorithm}_{model}_{source_fusion}_{n_features}f.json"
+    
+    file_path = HP_DIR / filename
+    
+    logger.debug(f"Looking for hyperparameters: {filename}")
+    logger.debug(f"  Original: dataset={dataset}, algorithm={algorithm}, model={model}, fusion={fusion_method}")
+    logger.debug(f"  Mapped: source_dataset={source_dataset}, source_fusion={source_fusion}")
+    
+    # Step 4: Try to load the file
+    if file_path.exists():
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                raw_params = data.get("best_params", {})
+                
+                if not raw_params:
+                    logger.warning(f"No best_params found in {filename}")
+                    return {'extractor_params': {}, 'model_params': {}, 'source': f'empty best_params in {filename}'}
+                
+                # Step 5: Separate algorithm and model parameters
+                algorithm_params = {}
+                model_params = {}
+                
+                for key, value in raw_params.items():
+                    if key.startswith('extractor__extractor__'):
+                        # Remove extractor__extractor__ prefix for direct application
+                        actual_key = key.replace('extractor__extractor__', '')
+                        algorithm_params[actual_key] = value
+                    elif key.startswith('extractor__'):
+                        # Remove extractor__ prefix
+                        actual_key = key.replace('extractor__', '')
+                        algorithm_params[actual_key] = value
+                    elif key.startswith('selector__'):
+                        # Remove selector__ prefix (for selectors)
+                        actual_key = key.replace('selector__', '')
+                        algorithm_params[actual_key] = value
+                    elif key.startswith('model__'):
+                        # Remove model__ prefix
+                        actual_key = key.replace('model__', '')
+                        model_params[actual_key] = value
+                    else:
+                        # Unknown prefix, assign to algorithm params as fallback
+                        algorithm_params[key] = value
+                
+                logger.info(f"Loaded hyperparameters from {filename}")
+                logger.debug(f"  Algorithm params: {algorithm_params}")
+                logger.debug(f"  Model params: {model_params}")
+                
+                # Return with both extractor_params and selector_params for compatibility
+                return {
+                    'extractor_params': algorithm_params,  # For backward compatibility
+                    'selector_params': algorithm_params,   # For selectors
+                    'algorithm_params': algorithm_params,  # Generic name
+                    'model_params': model_params,
+                    'source': filename,
+                    'n_components': algorithm_params.get('n_components'),  # Extract n_components if present
+                }
+                
+        except Exception as e:
+            logger.warning(f"Failed to load hyperparameters from {file_path}: {str(e)}")
+    
+    # Step 6: Fallback - try without specific mapping (original dataset/fusion)
+    if approach == "extractor":
+        fallback_filename = f"{dataset}_{algorithm}_{model}_{fusion_method}.json"
+    else:
+        fallback_filename = f"{dataset}_{algorithm}_{model}_{fusion_method}_{n_features}f.json"
+    
+    fallback_path = HP_DIR / fallback_filename
+    
+    if fallback_path.exists() and fallback_filename != filename:
+        logger.info(f"Trying fallback: {fallback_filename}")
+        try:
+            with open(fallback_path, 'r') as f:
+                data = json.load(f)
+                raw_params = data.get("best_params", {})
+                
+                algorithm_params = {}
+                model_params = {}
+                
+                for key, value in raw_params.items():
+                    if key.startswith('extractor__extractor__'):
+                        actual_key = key.replace('extractor__extractor__', '')
+                        algorithm_params[actual_key] = value
+                    elif key.startswith('extractor__'):
+                        actual_key = key.replace('extractor__', '')
+                        algorithm_params[actual_key] = value
+                    elif key.startswith('selector__'):
+                        actual_key = key.replace('selector__', '')
+                        algorithm_params[actual_key] = value
+                    elif key.startswith('model__'):
+                        actual_key = key.replace('model__', '')
+                        model_params[actual_key] = value
+                    else:
+                        algorithm_params[key] = value
+                
+                logger.info(f"Loaded fallback hyperparameters from {fallback_filename}")
+                
+                return {
+                    'extractor_params': algorithm_params,
+                    'selector_params': algorithm_params,
+                    'algorithm_params': algorithm_params,
+                    'model_params': model_params,
+                    'source': f"{fallback_filename} (fallback)",
+                    'n_components': algorithm_params.get('n_components'),
+                }
+                
+        except Exception as e:
+            logger.warning(f"Failed to load fallback hyperparameters from {fallback_path}: {str(e)}")
+    
+    # No hyperparameters found
+    logger.debug(f"No hyperparameters found for {filename} or {fallback_filename}")
+    return {
+        'extractor_params': {},
+        'selector_params': {},
+        'algorithm_params': {},
+        'model_params': {},
+        'source': 'default (no tuned params found)',
+        'n_components': None,
+    }
