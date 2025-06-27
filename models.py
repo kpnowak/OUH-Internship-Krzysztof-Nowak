@@ -29,14 +29,27 @@ def _map_extractor_class_to_hyperparameter_name(extractor_class_name):
         The corresponding hyperparameter file prefix
     """
     mapping = {
+        # Extractors
         'KernelPCA': 'KPCA',
+        'KernelPCAMedianHeuristic': 'KPCA',  # Custom KPCA implementation
         'LinearDiscriminantAnalysis': 'LDA',
         'PLSDiscriminantAnalysis': 'PLS-DA',
-        'PLSRegression': 'PLS',
-        'FactorAnalysis': 'FA',
+        'PLSRegression': 'KPLS',  # Maps to KPLS files
         'KernelPLSRegression': 'KPLS',
+        'FactorAnalysis': 'FA',
         'SparsePLS': 'SparsePLS',
-        'PCA': 'PCA'
+        'SparsePLSDA': 'SparsePLS',  # Classification version maps to same files
+        'PCA': 'PCA',
+        'FastICA': 'ICA',
+        'NMF': 'NMF',
+        # Selectors (might be used in same function)
+        'Lasso': 'LASSO',
+        'ElasticNet': 'ElasticNetFS',
+        'SelectFromModel': 'RFImportance',  # When using RandomForest importance
+        'SelectKBest': 'VarianceFTest',     # When using f_regression/f_classif
+        'RFE': 'RFE',
+        'mutual_info': 'MutualInfo',
+        'boruta': 'Boruta'
     }
     return mapping.get(extractor_class_name, extractor_class_name)
 
@@ -245,7 +258,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def _sanitize_extractor_hyperparameters(extractor, extractor_name, hyperparams):
+def _sanitize_extractor_hyperparameters(extractor, extractor_class_name, hyperparams):
     """
     Sanitize and validate hyperparameters before applying to extractor.
     
@@ -253,8 +266,8 @@ def _sanitize_extractor_hyperparameters(extractor, extractor_name, hyperparams):
     ----------
     extractor : object
         The extractor object
-    extractor_name : str
-        Name of the extractor (for logging)
+    extractor_class_name : str
+        Name of the extractor class (for checking attributes and logging)
     hyperparams : dict
         Raw hyperparameters to sanitize
         
@@ -266,9 +279,20 @@ def _sanitize_extractor_hyperparameters(extractor, extractor_name, hyperparams):
     validated_params = {}
     
     for param_name, param_value in hyperparams.items():
-        if hasattr(extractor, param_name):
+        # Handle parameter name prefixes from hyperparameter files
+        # Parameters may come with prefixes like "extractor__extractor__n_components"
+        # We need to extract the actual parameter name
+        actual_param_name = param_name
+        
+        # Strip common prefixes used in hyperparameter files
+        if param_name.startswith("extractor__extractor__"):
+            actual_param_name = param_name[len("extractor__extractor__"):]
+        elif param_name.startswith("extractor__"):
+            actual_param_name = param_name[len("extractor__"):]
+        
+        if hasattr(extractor, actual_param_name):
             # Special handling for KernelPCA gamma parameter
-            if param_name == 'gamma' and extractor_name == 'KernelPCA':
+            if actual_param_name == 'gamma' and extractor_class_name in ['KernelPCA', 'KernelPCAMedianHeuristic']:
                 if isinstance(param_value, str) and param_value in ['scale', 'auto']:
                     # Convert deprecated string values to numeric defaults
                     param_value = 1.0  # Use median heuristic-like value
@@ -280,9 +304,72 @@ def _sanitize_extractor_hyperparameters(extractor, extractor_name, hyperparams):
                     # Invalid gamma, use default
                     param_value = 1.0
                     logger.warning(f"Invalid gamma value {param_value}, using default 1.0")
-            validated_params[param_name] = param_value
+            
+            # Use the actual parameter name (without prefix) for setting
+            validated_params[actual_param_name] = param_value
+            logger.debug(f"Mapped hyperparameter {param_name} → {actual_param_name} = {param_value} for {extractor_class_name}")
         else:
-            logger.debug(f"Skipping unknown parameter {param_name} for {extractor_name}")
+            logger.debug(f"Skipping unknown parameter {param_name} (mapped to {actual_param_name}) for {extractor_class_name}")
+    
+    # Special post-processing for LDA to prevent matrix factorization errors
+    if extractor_class_name == 'LinearDiscriminantAnalysis' or 'LDA' in extractor_class_name:
+        # Check for problematic parameter combinations that cause matrix factorization errors
+        shrinkage = validated_params.get('shrinkage')
+        solver = validated_params.get('solver')
+        
+        # The 'eigen' solver with shrinkage=None often fails on high-dimensional data
+        # When shrinkage=None and solver=eigen, the within-class scatter matrix can be singular
+        if 'shrinkage' in validated_params and shrinkage is None and solver == 'eigen':
+            logger.info(f"LDA: Detected problematic combination (shrinkage=None, solver=eigen) - switching to SVD solver for stability")
+            validated_params['solver'] = 'svd'  # SVD solver is more stable for high-dimensional data
+            # Remove shrinkage parameter when using SVD solver (not applicable)
+            del validated_params['shrinkage']
+            logger.debug("LDA: Removed shrinkage parameter when using SVD solver")
+        
+        # If only shrinkage=None is specified, add appropriate solver
+        elif 'shrinkage' in validated_params and shrinkage is None and 'solver' not in validated_params:
+            logger.info("LDA: Setting SVD solver for shrinkage=None to prevent matrix factorization issues")
+            validated_params['solver'] = 'svd'
+            del validated_params['shrinkage']  # Remove shrinkage for SVD
+        
+        # If using eigen solver with explicit shrinkage=None, set shrinkage to auto
+        elif 'shrinkage' in validated_params and solver == 'eigen' and shrinkage is None:
+            logger.info("LDA: Setting shrinkage='auto' for eigen solver to prevent matrix factorization issues")
+            validated_params['shrinkage'] = 'auto'
+    
+    # Special post-processing for KPCA to prevent zero-size eigenvalue array errors
+    elif extractor_class_name in ['KernelPCA', 'KernelPCAMedianHeuristic']:
+        gamma = validated_params.get('gamma')
+        n_components = validated_params.get('n_components')
+        
+        # Very small gamma values can cause eigenvalue computation issues
+        if gamma is not None and isinstance(gamma, (int, float)):
+            if gamma < 1e-3:  # Too small gamma
+                logger.info(f"KPCA: Detected very small gamma ({gamma}), increasing to 1e-3 for stability")
+                validated_params['gamma'] = 1e-3
+            elif gamma > 10.0:  # Too large gamma
+                logger.info(f"KPCA: Detected very large gamma ({gamma}), reducing to 10.0 for stability")
+                validated_params['gamma'] = 10.0
+        
+        # Ensure eigen_solver is set to 'auto' to let sklearn choose the best method
+        if 'eigen_solver' not in validated_params:
+            validated_params['eigen_solver'] = 'auto'
+            logger.debug("KPCA: Set eigen_solver to 'auto' for improved stability")
+    
+    # Special post-processing for SparsePLS to prevent zero weights
+    elif extractor_class_name == 'SparsePLS':
+        alpha = validated_params.get('alpha')
+        
+        # Alpha=1.0 is often too aggressive and causes all weights to become zero
+        if alpha is not None and isinstance(alpha, (int, float)):
+            if alpha >= 1.0:  # Too aggressive sparsity
+                new_alpha = 0.3  # More conservative value
+                logger.info(f"SparsePLS: Detected aggressive alpha ({alpha}), reducing to {new_alpha} to prevent zero weights")
+                validated_params['alpha'] = new_alpha
+            elif alpha > 0.7:  # Moderately aggressive
+                new_alpha = alpha * 0.5  # Reduce by half
+                logger.info(f"SparsePLS: Detected high alpha ({alpha}), reducing to {new_alpha:.2f} to prevent zero weights")
+                validated_params['alpha'] = new_alpha
     
     return validated_params
 
@@ -846,9 +933,16 @@ class SparsePLSDA:
             X_scaled = X.copy()
             Y_scaled = Y.copy()
             
-        # Determine actual number of components
-        max_components = min(n_samples - 1, n_features, Y.shape[1], self.n_components)
-        actual_components = max_components
+        # RESPECT TUNED HYPERPARAMETERS: Use requested components with minimal safety checks
+        actual_components = self.n_components
+        
+        # Only apply essential mathematical constraints
+        actual_components = min(actual_components, n_samples - 1)  # Can't exceed samples-1
+        actual_components = min(actual_components, Y.shape[1])     # Can't exceed number of classes
+        actual_components = max(1, actual_components)              # At least 1 component
+        
+        logger.debug(f"SparsePLSDA: Using {actual_components} components as specified by hyperparameters "
+                    f"(n_samples={n_samples}, n_features={n_features}, n_classes={Y.shape[1]})")
         
         # Initialize arrays
         self.x_weights_ = np.zeros((n_features, actual_components))
@@ -1061,23 +1155,19 @@ class SparsePLS:
         n_samples, n_features = X.shape
         n_targets = y.shape[1]
         
-        # Adaptive component selection based on data size to prevent overfitting
-        max_safe_components = min(
-            self.n_components,
-            n_samples // 5,  # Relaxed: at least 5 samples per component (was 3)
-            max(1, n_features // 3),  # FIXED: at least 3 features per component, minimum 1
-            max(1, n_targets * 2)    # At most 2x the number of targets, minimum 1
-        )
+        # RESPECT TUNED HYPERPARAMETERS: Use the requested n_components directly
+        # The hyperparameter tuning process already found optimal values through cross-validation
+        # Removing hard-coded safety limits that override tuned parameters
+        actual_components = self.n_components
         
-        # Ensure we always have at least 1 component
-        max_safe_components = max(1, max_safe_components)
+        # Only apply minimal safety check to prevent extreme cases
+        if actual_components > n_samples:
+            logger.warning(f"SparsePLS: Requested {actual_components} components but only {n_samples} samples available. "
+                          f"Limiting to {n_samples - 1} components.")
+            actual_components = max(1, n_samples - 1)
         
-        if max_safe_components < self.n_components:
-            logger.info(f"SparsePLS: Reducing components from {self.n_components} to {max_safe_components} "
-                       f"to prevent overfitting (n_samples={n_samples}, n_features={n_features})")
-            actual_components = max_safe_components
-        else:
-            actual_components = self.n_components
+        logger.debug(f"SparsePLS: Using {actual_components} components as specified by hyperparameters "
+                    f"(n_samples={n_samples}, n_features={n_features})")
         
         # Center and scale data - use RobustScaler for outlier-heavy genomic data
         if self.scale:
@@ -1112,8 +1202,46 @@ class SparsePLS:
             w = np.random.randn(n_features)
             w = w / np.linalg.norm(w)
             
-            # Adaptive sparsity: increase penalty for later components
-            adaptive_alpha = self.alpha * (1 + 0.5 * k)  # Increase sparsity for later components
+            # ROBUST ADAPTIVE ALPHA: Prevent complete weight zeroing while maintaining sparsity
+            # Problem: alpha=1.0 is too aggressive for genomic data with many features
+            # Solution: Scale alpha based on data characteristics and component success
+            
+            # Detect if this is high-dimensional genomic data
+            is_genomic_data = n_features > 1000
+            
+            # For genomic data, use much more conservative alpha scaling
+            if is_genomic_data:
+                # Scale alpha based on feature dimensionality (higher dims need lower alpha)
+                dimensionality_factor = max(0.1, 1000.0 / n_features)  # Decreases as features increase
+                
+                # Scale based on component index (later components need lower alpha)
+                component_factor = max(0.05, 1.0 / (1.0 + 0.5 * k))
+                
+                # Additional scaling for high base alpha values
+                if self.alpha > 0.5:
+                    alpha_adjustment = 0.3  # Strong reduction for high alpha
+                elif self.alpha > 0.1:
+                    alpha_adjustment = 0.5  # Moderate reduction for medium alpha
+                else:
+                    alpha_adjustment = 0.8  # Light reduction for low alpha
+                
+                adaptive_alpha = self.alpha * dimensionality_factor * component_factor * alpha_adjustment
+            else:
+                # For low-dimensional data, use original scaling
+                component_scale_factor = max(0.1, 1.0 / (1.0 + 0.1 * k))
+                adaptive_alpha = self.alpha * component_scale_factor
+            
+            # Ensure alpha is within reasonable bounds
+            adaptive_alpha = max(0.001, min(adaptive_alpha, 0.5))  # Cap maximum alpha at 0.5
+            
+            if k < 3:  # Log for first few components
+                if is_genomic_data:
+                    logger.debug(f"SparsePLS: Component {k+1} using adaptive_alpha={adaptive_alpha:.4f} "
+                               f"(base={self.alpha}, genomic_scaling=True, dim_factor={dimensionality_factor:.3f}, "
+                               f"comp_factor={component_factor:.3f}, alpha_adj={alpha_adjustment:.3f})")
+                else:
+                    logger.debug(f"SparsePLS: Component {k+1} using adaptive_alpha={adaptive_alpha:.4f} "
+                               f"(base={self.alpha}, genomic_scaling=False, component_scale={component_scale_factor:.3f})")
             
             for iteration in range(self.max_iter):
                 w_old = w.copy()
@@ -1127,14 +1255,63 @@ class SparsePLS:
                 # Apply adaptive sparsity constraint
                 w = self._soft_threshold(w, adaptive_alpha)
                 
-                # Normalize
+                # Normalize with improved tolerance for sparse weights
                 w_norm = np.linalg.norm(w)
-                if w_norm > 1e-8:
+                
+                # Use adaptive tolerance based on the sparsity level
+                tolerance = max(1e-10, adaptive_alpha * 1e-6)
+                
+                if w_norm > tolerance:
                     w = w / w_norm
                 else:
-                    logger.warning(f"SparsePLS: Component {k+1} weights became zero, stopping early")
-                    actual_components = k
-                    break
+                    # Enhanced recovery mechanism with multiple fallback strategies
+                    recovered = False
+                    
+                    # Strategy 1: Try with progressively reduced sparsity
+                    if adaptive_alpha > 0.001:
+                        for reduction_factor in [0.5, 0.1, 0.01]:
+                            recovery_alpha = adaptive_alpha * reduction_factor
+                            w_recovered = self._soft_threshold(X_residual.T @ u / (u.T @ u + 1e-8), recovery_alpha)
+                            w_recovered_norm = np.linalg.norm(w_recovered)
+                            
+                            if w_recovered_norm > tolerance:
+                                w = w_recovered / w_recovered_norm
+                                adaptive_alpha = recovery_alpha
+                                logger.debug(f"SparsePLS: Component {k+1} recovered with reduced alpha={recovery_alpha:.6f}")
+                                recovered = True
+                                break
+                    
+                    # Strategy 2: If sparsity reduction fails, try without soft thresholding
+                    if not recovered:
+                        w_no_threshold = X_residual.T @ u / (u.T @ u + 1e-8)
+                        w_no_threshold_norm = np.linalg.norm(w_no_threshold)
+                        
+                        if w_no_threshold_norm > tolerance:
+                            w = w_no_threshold / w_no_threshold_norm
+                            adaptive_alpha = 0.0  # Disable thresholding for this component
+                            logger.debug(f"SparsePLS: Component {k+1} recovered without sparsity constraint")
+                            recovered = True
+                    
+                    # Strategy 3: Final fallback - initialize with random weights
+                    if not recovered and k == 0:  # Only for first component to ensure we get at least one
+                        w = np.random.randn(n_features)
+                        w = w / np.linalg.norm(w)
+                        adaptive_alpha = 0.0  # No sparsity for fallback
+                        logger.debug(f"SparsePLS: Component {k+1} initialized with random weights as final fallback")
+                        recovered = True
+                    
+                    if not recovered:
+                        if k == 0:
+                            logger.warning(f"SparsePLS: Could not fit even the first component, using minimal fallback")
+                            # Create a minimal single component using the first feature
+                            w = np.zeros(n_features)
+                            if n_features > 0:
+                                w[0] = 1.0
+                            actual_components = 1
+                        else:
+                            logger.debug(f"SparsePLS: Component {k+1} weights became zero, stopping at {k} components")
+                            actual_components = k
+                        break
                     
                 # Check convergence
                 if np.linalg.norm(w - w_old) < self.tol:
@@ -1156,12 +1333,41 @@ class SparsePLS:
             component_variance = np.var(t)
             self.component_variances_.append(component_variance)
             
-            # Early stopping if variance becomes too high (indicates overfitting)
-            if component_variance > 50.0:  # Threshold for high variance
-                logger.warning(f"SparsePLS: High variance detected in component {k+1} "
-                              f"(var={component_variance:.2f}), stopping early to prevent overfitting")
-                actual_components = k + 1
-                break
+            # Adaptive early stopping based on data characteristics and variance pattern
+            # Calculate adaptive threshold based on:
+            # 1. Data size (larger datasets can handle higher variance)
+            # 2. Previous component variances (detect rapid increase)
+            # 3. Sample-to-feature ratio (genomic data characteristics)
+            
+            # Base threshold scales with data characteristics
+            base_threshold = max(
+                50.0,  # Minimum threshold for very small datasets
+                min(500.0, n_samples * 2.0),  # Scale with sample size, cap at 500
+                min(200.0, n_features * 0.1)  # Scale with feature count, cap at 200
+            )
+            
+            # Adaptive threshold based on variance pattern
+            if len(self.component_variances_) > 1:
+                # Check for exponential increase (sign of overfitting)
+                prev_var = self.component_variances_[-2]
+                variance_ratio = component_variance / max(prev_var, 1e-8)
+                
+                # If variance increases by more than 5x from previous component, it's likely overfitting
+                if variance_ratio > 5.0 and component_variance > base_threshold:
+                    logger.warning(f"SparsePLS: Exponential variance increase detected in component {k+1} "
+                                  f"(var={component_variance:.2f}, ratio={variance_ratio:.2f}x), stopping early to prevent overfitting")
+                    actual_components = k + 1
+                    break
+            else:
+                # For first component, use a more lenient threshold
+                # Genomic data often has high first-component variance due to dominant patterns
+                lenient_threshold = base_threshold * 2.0
+                
+                if component_variance > lenient_threshold:
+                    logger.warning(f"SparsePLS: Extremely high variance detected in component {k+1} "
+                                  f"(var={component_variance:.2f}, threshold={lenient_threshold:.2f}), stopping early to prevent overfitting")
+                    actual_components = k + 1
+                    break
             
             # Deflate matrices
             X_residual = X_residual - np.outer(t, p)
@@ -1181,8 +1387,14 @@ class SparsePLS:
         if self.component_variances_:
             max_var = max(self.component_variances_)
             mean_var = np.mean(self.component_variances_)
+            
+            # Also log adaptive threshold information for debugging
+            base_threshold = max(50.0, min(500.0, n_samples * 2.0), min(200.0, n_features * 0.1))
+            lenient_threshold = base_threshold * 2.0
+            
             logger.debug(f"SparsePLS fitted with {actual_components} components: "
-                        f"max_variance={max_var:.2f}, mean_variance={mean_var:.2f}")
+                        f"max_variance={max_var:.2f}, mean_variance={mean_var:.2f}, "
+                        f"adaptive_threshold={lenient_threshold:.2f}")
             
         return self
         
@@ -1198,14 +1410,14 @@ class SparsePLS:
         Returns
         -------
         X_transformed : array-like, shape (n_samples, n_components)
-            Transformed data with consistent dimensions
+            Transformed data with consistent dimensions (padded to original n_components if needed)
         """
         X = np.asarray(X, dtype=np.float64)
         
         # Check if model was fitted properly
         if not hasattr(self, 'x_weights_') or self.x_weights_.size == 0:
             logger.warning("SparsePLS: Model not fitted properly, returning zero array")
-            return np.zeros((X.shape[0], 1))  # Minimal fallback, should not happen in normal flow
+            return np.zeros((X.shape[0], self.n_components))
         
         if hasattr(self, 'x_scaler_'):
             X = self.x_scaler_.transform(X)
@@ -1216,30 +1428,20 @@ class SparsePLS:
         result = X @ self.x_weights_
         if result.size == 0:
             logger.warning("SparsePLS: Transform resulted in empty array, returning zero array")
-            return np.zeros((X.shape[0], 1))  # Minimal fallback, should not happen in normal flow
+            return np.zeros((X.shape[0], self.n_components))
         
-        # CRITICAL FIX: Ensure consistent output dimensions across all modalities
-        # Use a GLOBAL fixed target for all modalities to ensure fusion consistency
-        actual_components = result.shape[1] if len(result.shape) > 1 else 1
+        # Ensure consistent output dimensions for fusion compatibility
+        # If fewer components were fitted than requested, pad with zeros
+        n_samples = result.shape[0]
+        n_fitted_components = result.shape[1] if result.ndim > 1 else 1
         
-        # For genomic data with 200-ish samples, use a conservative global target
-        # This must be the same for mirna, exp, and methy to work with fusion
-        n_samples_for_calc = result.shape[0]
-        global_target_components = min(n_samples_for_calc // 5, 2)  # Conservative: max 2 components
-        global_target_components = max(1, global_target_components)
+        if n_fitted_components < self.n_components:
+            # Pad with zero columns to match the original requested number of components
+            padding_cols = self.n_components - n_fitted_components
+            padding = np.zeros((n_samples, padding_cols))
+            result = np.hstack([result, padding])
+            logger.debug(f"SparsePLS: Padded output from {n_fitted_components} to {self.n_components} components for fusion compatibility")
         
-        if actual_components < global_target_components:
-            # Pad with zero columns to match the global target
-            missing_components = global_target_components - actual_components
-            zero_padding = np.zeros((n_samples_for_calc, missing_components))
-            result = np.column_stack([result, zero_padding])
-            
-            logger.debug(f"SparsePLS: Padded output from {actual_components} to {global_target_components} components for fusion consistency")
-        elif actual_components > global_target_components:
-            # Truncate to global target
-            result = result[:, :global_target_components]
-            logger.debug(f"SparsePLS: Truncated output from {actual_components} to {global_target_components} components")
-            
         return result
         
     def fit_transform(self, X, y):
@@ -1431,17 +1633,50 @@ class KernelPCAMedianHeuristic:
         else:
             self.gamma_computed_ = self.gamma
             
-        # Create and fit Kernel PCA with computed gamma
-        self.kernel_pca_ = KernelPCA(
-            n_components=self.n_components,
-            kernel=self.kernel,
-            gamma=self.gamma_computed_,
-            eigen_solver=self.eigen_solver,
-            n_jobs=self.n_jobs,
-            random_state=self.random_state
-        )
-        
-        self.kernel_pca_.fit(X)
+        # Create and fit Kernel PCA with computed gamma and error handling
+        try:
+            self.kernel_pca_ = KernelPCA(
+                n_components=self.n_components,
+                kernel=self.kernel,
+                gamma=self.gamma_computed_,
+                eigen_solver=self.eigen_solver,
+                n_jobs=self.n_jobs,
+                random_state=self.random_state
+            )
+            
+            self.kernel_pca_.fit(X)
+        except Exception as e:
+            # If KPCA fails, try with reduced components and different solver
+            logger.warning(f"KernelPCA failed with {self.n_components} components: {str(e)}")
+            
+            # Try with reduced components
+            safe_components = min(self.n_components // 2, X.shape[0] - 1, 8)
+            safe_components = max(1, safe_components)
+            
+            try:
+                logger.info(f"Retrying KernelPCA with {safe_components} components and 'auto' solver")
+                self.kernel_pca_ = KernelPCA(
+                    n_components=safe_components,
+                    kernel=self.kernel,
+                    gamma=self.gamma_computed_,
+                    eigen_solver='auto',  # Let sklearn choose the best solver
+                    n_jobs=1,  # Single thread to avoid parallelism issues
+                    random_state=self.random_state
+                )
+                
+                self.kernel_pca_.fit(X)
+                self.n_components = safe_components  # Update the effective component count
+            except Exception as e2:
+                # If still failing, fall back to regular PCA
+                logger.warning(f"KernelPCA retry also failed: {str(e2)}, falling back to PCA")
+                from sklearn.decomposition import PCA
+                
+                self.kernel_pca_ = PCA(
+                    n_components=safe_components,
+                    random_state=self.random_state
+                )
+                self.kernel_pca_.fit(X)
+                self.n_components = safe_components
         
         # Store components for compatibility
         if hasattr(self.kernel_pca_, 'eigenvectors_'):
@@ -2180,13 +2415,25 @@ class RobustLinearRegressor(BaseEstimator, RegressorMixin):
                 )
             elif self.method == 'ransac':
                 # Use RANSACRegressor for extreme outlier cases
-                base_model = RANSACRegressor(
-                    base_estimator=LinearRegression(),
-                    max_trials=100,
-                    min_samples=None,  # Auto-determine
-                    residual_threshold=None,  # Auto-determine
-                    random_state=self.random_state
-                )
+                # Handle compatibility between sklearn versions (base_estimator vs estimator)
+                try:
+                    # Try the newer parameter name first (sklearn >= 1.2)
+                    base_model = RANSACRegressor(
+                        estimator=LinearRegression(),
+                        max_trials=100,
+                        min_samples=None,  # Auto-determine
+                        residual_threshold=None,  # Auto-determine
+                        random_state=self.random_state
+                    )
+                except TypeError:
+                    # Fallback to older parameter name (sklearn < 1.2)
+                    base_model = RANSACRegressor(
+                        base_estimator=LinearRegression(),
+                        max_trials=100,
+                        min_samples=None,  # Auto-determine
+                        residual_threshold=None,  # Auto-determine
+                        random_state=self.random_state
+                    )
             else:
                 # Fallback to regular LinearRegression
                 base_model = LinearRegression()
@@ -2662,19 +2909,15 @@ def cached_fit_transform_selector_regression(X, y, selector, n_feats, ds_name=No
                         approach="selector"
                     )
                     
-                    if hyperparams['model_params']:
-                        # Apply model hyperparameters to the selector's base estimator if applicable
-                        if hasattr(selector, 'estimator') and hasattr(selector.estimator, 'set_params'):
-                            selector.estimator.set_params(**hyperparams['model_params'])
-                            logger.info(f"Applied selector model hyperparameters for {ds_name}_{selector_algorithm}_{model_name}: {hyperparams['model_params']}")
-                        elif hasattr(selector, 'set_params'):
-                            # Try applying directly to the selector
-                            selector.set_params(**hyperparams['model_params'])
-                            logger.info(f"Applied selector hyperparameters for {ds_name}_{selector_algorithm}_{model_name}: {hyperparams['model_params']}")
-                            
+                    # Only apply selector-specific parameters to the selector
+                    # model_params should be applied later to the final model, not the selector
                     if hyperparams['selector_params']:
                         selector.set_params(**hyperparams['selector_params'])
                         logger.info(f"Applied selector-specific hyperparameters for {ds_name}_{selector_algorithm}: {hyperparams['selector_params']}")
+                    
+                    # Store model_params for later use by the final model (not applied to selector)
+                    if hyperparams['model_params']:
+                        logger.debug(f"Model params available for final model (not applied to selector): {hyperparams['model_params']}")
                         
             except Exception as e:
                 logger.warning(f"Failed to apply selector hyperparameters for {ds_name}_{selector_algorithm}_{model_name}: {str(e)}")
@@ -2972,7 +3215,8 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         Fitted extractor and transformed data
     """
     # Generate cache key including model name for model-specific hyperparameters
-    extractor_name = extractor.__class__.__name__
+    extractor_class_name = extractor.__class__.__name__
+    extractor_name = _map_extractor_class_to_hyperparameter_name(extractor_class_name)
     cache_name = f"{extractor_name}_{model_name}" if model_name else extractor_name
     key = _generate_cache_key(ds_name, fold_idx, cache_name, "ext_reg", n_components, X.shape if X is not None else None)
     
@@ -3141,7 +3385,8 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
         Fitted extractor and transformed data
     """
     # Generate cache key including model name for model-specific hyperparameters
-    extractor_name = extractor.__class__.__name__
+    extractor_class_name = extractor.__class__.__name__
+    extractor_name = _map_extractor_class_to_hyperparameter_name(extractor_class_name)
     cache_name = f"{extractor_name}_{model_name}" if model_name else extractor_name
     key = _generate_cache_key(ds_name, fold_idx, cache_name, "ext_clf", n_components, X.shape if X is not None else None)
     
@@ -3277,7 +3522,7 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
                 safe_components = max(1, safe_components)  # Ensure at least 1 component
                 
                 fallback_extractor = PCA(n_components=safe_components, random_state=42)
-                fallback_extractor.fit(X_arr, y_arr) if requires_y else fallback_extractor.fit(X_arr)
+                fallback_extractor.fit(X_arr)
                 X_transformed = fallback_extractor.transform(X_arr)
                 
                 logger.info(f"KPCA fallback to PCA successful with {safe_components} components")
@@ -3287,6 +3532,47 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
                 
             except Exception as fallback_error:
                 logger.error(f"KPCA fallback also failed: {fallback_error}")
+        
+        # Special handling for LDA matrix factorization errors
+        elif "positive definite" in error_msg or "factorization" in error_msg and 'LinearDiscriminantAnalysis' in str(extractor.__class__.__name__):
+            logger.warning("LDA encountered matrix factorization issues - trying with alternative settings")
+            try:
+                from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+                
+                # Try with different solver and regularization
+                safe_components = 1  # Start with just 1 component for stability
+                
+                fallback_extractor = LinearDiscriminantAnalysis(
+                    n_components=safe_components,
+                    solver='svd'  # SVD solver supports transform and is stable
+                )
+                fallback_extractor.fit(X_arr, y_arr)
+                X_transformed = fallback_extractor.transform(X_arr)
+                
+                logger.info(f"LDA fallback with SVD solver successful with {safe_components} components")
+                result = (fallback_extractor, X_transformed)
+                _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
+                return result
+                
+            except Exception as fallback_error:
+                logger.warning(f"LDA fallback also failed: {fallback_error}, falling back to PCA")
+                try:
+                    # Final fallback to PCA
+                    from sklearn.decomposition import PCA
+                    safe_components = min(2, X.shape[0] - 1, X.shape[1] // 4)
+                    safe_components = max(1, safe_components)
+                    
+                    final_fallback = PCA(n_components=safe_components, random_state=42)
+                    final_fallback.fit(X_arr)
+                    X_transformed = final_fallback.transform(X_arr)
+                    
+                    logger.info(f"LDA final fallback to PCA successful with {safe_components} components")
+                    result = (final_fallback, X_transformed)
+                    _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
+                    return result
+                    
+                except Exception as final_error:
+                    logger.error(f"All LDA fallbacks failed: {final_error}")
         
         return None, None
 
@@ -3423,19 +3709,15 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
                     approach="selector"
                 )
                 
-                if hyperparams['model_params']:
-                    # Apply model hyperparameters to the selector's base estimator if applicable
-                    if hasattr(selector, 'estimator') and hasattr(selector.estimator, 'set_params'):
-                        selector.estimator.set_params(**hyperparams['model_params'])
-                        logger.info(f"Applied selector model hyperparameters for {ds_name}_{selector_code}_{model_name}: {hyperparams['model_params']}")
-                    elif hasattr(selector, 'set_params'):
-                        # Try applying directly to the selector
-                        selector.set_params(**hyperparams['model_params'])
-                        logger.info(f"Applied selector hyperparameters for {ds_name}_{selector_code}_{model_name}: {hyperparams['model_params']}")
-                        
+                # Only apply selector-specific parameters to the selector
+                # model_params should be applied later to the final model, not the selector
                 if hyperparams['selector_params']:
                     selector.set_params(**hyperparams['selector_params'])
                     logger.info(f"Applied selector-specific hyperparameters for {ds_name}_{selector_code}: {hyperparams['selector_params']}")
+                
+                # Store model_params for later use by the final model (not applied to selector)
+                if hyperparams['model_params']:
+                    logger.debug(f"Model params available for final model (not applied to selector): {hyperparams['model_params']}")
                     
             except Exception as e:
                 logger.warning(f"Failed to apply selector hyperparameters for {ds_name}_{selector_code}_{model_name}: {str(e)}")
@@ -4109,7 +4391,19 @@ def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method,
         is_regression = model in ["LinearRegression", "ElasticNet", "RandomForestRegressor", "SVR"]
         source_dataset = "AML" if is_regression else "Breast"
     
-    # Step 2: Map fusion technique to source fusion based on user specifications
+    # Step 2: Map algorithm name to match hyperparameter file naming
+    # elasticnet_regression → ElasticNetFS
+    # f_regression → f_regressionFS
+    # Add more mappings as needed
+    algorithm_name_mapping = {
+        "elasticnet_regression": "ElasticNetFS",
+        "f_regression": "f_regressionFS",
+        # Add more mappings as needed
+    }
+    
+    source_algorithm = algorithm_name_mapping.get(algorithm, algorithm)
+    
+    # Step 3: Map fusion technique to source fusion based on user specifications
     # attention_weighted/learnable_weighted/standard_concat → use attention_weighted params
     # average/mkl/sum/early_fusion_pca → use average params
     if fusion_method in ["attention_weighted", "learnable_weighted", "standard_concat"]:
@@ -4119,22 +4413,22 @@ def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method,
     else:
         source_fusion = fusion_method  # Use as-is if not in mapping
     
-    # Step 3: Construct filename based on approach
+    # Step 4: Construct filename based on approach
     if approach == "extractor":
         # Format: {dataset}_{extractor}_{model}_{fusion}.json
-        filename = f"{source_dataset}_{algorithm}_{model}_{source_fusion}.json"
+        filename = f"{source_dataset}_{source_algorithm}_{model}_{source_fusion}.json"
     else:  # selector
         # Format: {dataset}_{selector}_{model}_{fusion}_{f_number}.json
         if n_features is None:
             logger.error(f"n_features is required for selector approach but was None")
             return {'extractor_params': {}, 'model_params': {}, 'source': 'error: missing n_features'}
-        filename = f"{source_dataset}_{algorithm}_{model}_{source_fusion}_{n_features}f.json"
+        filename = f"{source_dataset}_{source_algorithm}_{model}_{source_fusion}_{n_features}f.json"
     
     file_path = HP_DIR / filename
     
     logger.debug(f"Looking for hyperparameters: {filename}")
     logger.debug(f"  Original: dataset={dataset}, algorithm={algorithm}, model={model}, fusion={fusion_method}")
-    logger.debug(f"  Mapped: source_dataset={source_dataset}, source_fusion={source_fusion}")
+    logger.debug(f"  Mapped: source_dataset={source_dataset}, source_algorithm={source_algorithm}, source_fusion={source_fusion}")
     
     # Step 4: Try to load the file
     if file_path.exists():
@@ -4191,9 +4485,9 @@ def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method,
     
     # Step 6: Fallback - try without specific mapping (original dataset/fusion)
     if approach == "extractor":
-        fallback_filename = f"{dataset}_{algorithm}_{model}_{fusion_method}.json"
+        fallback_filename = f"{dataset}_{source_algorithm}_{model}_{fusion_method}.json"
     else:
-        fallback_filename = f"{dataset}_{algorithm}_{model}_{fusion_method}_{n_features}f.json"
+        fallback_filename = f"{dataset}_{source_algorithm}_{model}_{fusion_method}_{n_features}f.json"
     
     fallback_path = HP_DIR / fallback_filename
     

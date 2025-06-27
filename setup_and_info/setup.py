@@ -29,6 +29,7 @@ CORE_REQUIREMENTS = [
     "threadpoolctl>=3.0.0",
     "psutil>=5.8.0",
     "boruta>=0.3.0",
+    "imbalanced-learn>=0.8.0",
 ]
 
 # Note: All other required modules are part of Python's standard library:
@@ -50,11 +51,19 @@ DEVELOPMENT_REQUIREMENTS = [
     "mypy>=0.910",
 ]
 
+# Advanced fusion dependencies - experimental methods
+ADVANCED_REQUIREMENTS = [
+    "snfpy>=0.2.2",  # Similarity Network Fusion
+    "mklaren>=1.2",  # Multiple-Kernel Learning
+    "oct2py>=5.0.0",  # Octave bridge for advanced computations
+]
+
 # Optional extras for different installation types
 EXTRAS_REQUIRE = {
     "visualization": VISUALIZATION_REQUIREMENTS,
     "development": DEVELOPMENT_REQUIREMENTS,
-    "all": VISUALIZATION_REQUIREMENTS + DEVELOPMENT_REQUIREMENTS,
+    "advanced": ADVANCED_REQUIREMENTS,
+    "all": VISUALIZATION_REQUIREMENTS + DEVELOPMENT_REQUIREMENTS + ADVANCED_REQUIREMENTS,
 }
 
 setup(

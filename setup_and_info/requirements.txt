@@ -9,6 +9,7 @@ scipy>=1.7.0
 # Machine learning and statistical analysis
 scikit-learn>=1.0.0
 xgboost>=1.6.0
+lightgbm>=3.3.0
 
 # Visualization and plotting
 matplotlib>=3.5.0
@@ -24,10 +25,17 @@ psutil>=5.8.0
 # Feature selection algorithms
 boruta>=0.3.0
 
+# Hyperparameter optimization
+scikit-optimize>=0.9.0
+
+# Class imbalance handling (optional but recommended)
+imbalanced-learn>=0.8.0
+
 # Optional advanced fusion dependencies
 # These are optional but recommended for advanced fusion strategies
 # snfpy>=0.2.2  # For Similarity Network Fusion (import as 'snf')
 # mklaren>=1.2  # For Multiple-Kernel Learning
+# oct2py>=5.0.0  # For Octave bridge in advanced computations
 
 # Additional dependencies found in the codebase
 # Standard library modules are included with Python, but some packages might need explicit installation
