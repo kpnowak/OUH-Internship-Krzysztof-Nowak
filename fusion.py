@@ -814,8 +814,10 @@ def merge_modalities(*arrays: np.ndarray,
         Variable-length list of 2-D arrays (or None/empty)
     strategy : str, default="attention_weighted"
         Merge strategy: 'attention_weighted' | 'learnable_weighted' | 'weighted_concat' | 
-        'late_fusion_stacking' | 'mkl' | 'snf' | 'average' | 'sum' | 'early_fusion_pca'
+        'late_fusion_stacking' | 'mkl' | 'snf' | 'average' | 'sum' | 'early_fusion_pca' | 'standard_concat' | 'max'
         Note: 'attention_weighted' is OPTIMIZED default for 0% missing data; 'weighted_concat' deprecated
+        'standard_concat' only works with 0% missing data and uses attention_weighted hyperparameters
+        'max' works with all missing percentages and uses average hyperparameters
     imputer : Optional[ModalityImputer]
         Optional ModalityImputer instance for handling missing values
     is_train : bool, default=True
@@ -1335,6 +1337,81 @@ def merge_modalities(*arrays: np.ndarray,
                     merged = np.column_stack(processed_arrays)
                     logger.debug(f"Fallback concatenation applied after sum failure")
         
+        elif strategy == "max":
+            # Max Fusion - Element-wise maximum of modalities (works with any missing percentage)
+            if is_train:
+                # For training data: simple max, return with None for consistency
+                try:
+                    # Apply robust scaling to each modality before taking maximum
+                    from sklearn.preprocessing import RobustScaler
+                    scaled_arrays = []
+                    
+                    for i, arr in enumerate(processed_arrays):
+                        scaler = RobustScaler()
+                        try:
+                            arr_scaled = scaler.fit_transform(arr)
+                            # Clip extreme outliers to prevent numerical instability
+                            arr_scaled = np.clip(arr_scaled, -5, 5)
+                            scaled_arrays.append(arr_scaled.astype(np.float32))
+                        except Exception as e:
+                            logger.warning(f"Robust scaling failed for array {i}: {e}, using original")
+                            scaled_arrays.append(arr.astype(np.float32))
+                    
+                    # Calculate element-wise maximum
+                    merged = np.maximum.reduce(scaled_arrays)
+                    logger.debug(f"Max fusion applied to {len(scaled_arrays)} modalities")
+                    
+                    # Apply imputation if an imputer is provided
+                    if imputer is not None:
+                        try:
+                            merged = imputer.fit_transform(merged)
+                        except Exception as e:
+                            logger.warning(f"Imputation failed: {str(e)}, using original data")
+                            np.nan_to_num(merged, nan=0.0, copy=False)
+                    else:
+                        np.nan_to_num(merged, nan=0.0, copy=False)
+                        
+                    # Final cleanup
+                    if not np.isfinite(merged).all():
+                        np.nan_to_num(merged, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+                    
+                    if merged.size == 0 or merged.shape[0] == 0:
+                        logger.warning("Merged array has 0 rows")
+                        merged = np.zeros((1, 1), dtype=np.float32)
+                        
+                    logger.debug(f"Merged array shape: {merged.shape} using strategy: {strategy}")
+                    return merged, None  # Return tuple for consistency
+                except Exception as e:
+                    logger.warning(f"Max fusion failed: {str(e)}, using fallback")
+                    merged = np.column_stack(processed_arrays)
+                    logger.debug(f"Fallback concatenation applied after max failure")
+                    return merged, None  # Return tuple for consistency
+            else:
+                # For validation data: same as training (no fitted object needed)
+                try:
+                    # Apply robust scaling to each modality before taking maximum
+                    from sklearn.preprocessing import RobustScaler
+                    scaled_arrays = []
+                    
+                    for i, arr in enumerate(processed_arrays):
+                        scaler = RobustScaler()
+                        try:
+                            arr_scaled = scaler.fit_transform(arr)
+                            # Clip extreme outliers to prevent numerical instability
+                            arr_scaled = np.clip(arr_scaled, -5, 5)
+                            scaled_arrays.append(arr_scaled.astype(np.float32))
+                        except Exception as e:
+                            logger.warning(f"Robust scaling failed for array {i}: {e}, using original")
+                            scaled_arrays.append(arr.astype(np.float32))
+                    
+                    # Calculate element-wise maximum
+                    merged = np.maximum.reduce(scaled_arrays)
+                    logger.debug(f"Max fusion applied to {len(scaled_arrays)} modalities")
+                except Exception as e:
+                    logger.warning(f"Max fusion failed: {str(e)}, using fallback")
+                    merged = np.column_stack(processed_arrays)
+                    logger.debug(f"Fallback concatenation applied after max failure")
+        
         elif strategy == "weighted_concat":
             # Enhanced weighted concatenation with optional learnable weights
             # RESTRICTION: Only use weighted_concat with 0% missing data
@@ -1455,6 +1532,36 @@ def merge_modalities(*arrays: np.ndarray,
                         logger.warning(f"EarlyFusionPCA transform failed: {str(e)}, using fallback")
                         merged = np.column_stack(processed_arrays)
                         logger.debug(f"Fallback concatenation applied after EarlyFusionPCA transform failure")
+        
+        elif strategy == "standard_concat":
+            # Standard Concatenation - Simple horizontal concatenation without any transformation
+            # RESTRICTION: Only works with 0% missing data (clean data scenarios)
+            if has_missing_values:
+                logger.error(f"standard_concat strategy is only allowed with 0% missing data. "
+                           f"Current missing data: {missing_percentage:.2f}%. "
+                           f"Please use mkl, average, sum, or early_fusion_pca strategies for data with missing values.")
+                # Fallback to simple concatenation for compatibility
+                merged = np.column_stack(processed_arrays)
+                logger.debug(f"Fallback concatenation applied due to missing data restriction")
+            else:
+                # Simple horizontal concatenation preserving all features
+                merged = np.column_stack(processed_arrays)
+                logger.debug(f"Standard concatenation applied to {len(processed_arrays)} modalities, "
+                           f"final shape: {merged.shape}")
+                
+                # Apply imputation if an imputer is provided
+                if imputer is not None:
+                    try:
+                        merged = imputer.fit_transform(merged)
+                    except Exception as e:
+                        logger.warning(f"Imputation failed: {str(e)}, using original data")
+                        np.nan_to_num(merged, nan=0.0, copy=False)
+                else:
+                    np.nan_to_num(merged, nan=0.0, copy=False)
+                    
+                # Final cleanup
+                if not np.isfinite(merged).all():
+                    np.nan_to_num(merged, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
             
         else:
             # Default to weighted concatenation for unknown strategy
@@ -1510,7 +1617,7 @@ def merge_modalities(*arrays: np.ndarray,
         if not (strategy == "early_fusion_pca" and is_train):
             if merged.size == 0 or merged.shape[0] == 0:
                 logger.warning("Merged array has 0 rows")
-                if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca"]:
+                if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca", "standard_concat", "max"]:
                     return np.zeros((1, 1), dtype=np.float32), None
                 else:
                     return np.zeros((1, 1), dtype=np.float32)
@@ -1518,7 +1625,7 @@ def merge_modalities(*arrays: np.ndarray,
             logger.debug(f"Merged array shape: {merged.shape} using strategy: {strategy}")
         
         # Return appropriate format based on strategy and training mode
-        if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca"]:
+        if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca", "standard_concat", "max"]:
             # These strategies should have already returned (merged, fitted_fusion) tuples
             # If we reach here, it means they fell back to simple concatenation
             return merged, None
@@ -1535,12 +1642,12 @@ def merge_modalities(*arrays: np.ndarray,
                 fallback = np.zeros((1, 1), dtype=np.float32)
             
             # Return appropriate format based on strategy and training mode
-            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca"]:
+            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca", "standard_concat", "max"]:
                 return fallback, None
             else:
                 return fallback
         except:
-            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca"]:
+            if is_train and strategy in ["learnable_weighted", "attention_weighted", "late_fusion_stacking", "mkl", "average", "sum", "early_fusion_pca", "standard_concat", "max"]:
                 return np.zeros((1, 1), dtype=np.float32), None
             else:
                 return np.zeros((1, 1), dtype=np.float32)
@@ -1701,6 +1808,11 @@ ENHANCED_FUSION_STRATEGIES = {
     },
     'early_fusion_pca': {
         'description': 'Early fusion with PCA dimensionality reduction',
+        'missing_data_support': True,
+        'requires_targets': False
+    },
+    'max': {
+        'description': 'Element-wise maximum fusion of scaled modalities',
         'missing_data_support': True,
         'requires_targets': False
     }

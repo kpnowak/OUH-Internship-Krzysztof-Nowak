@@ -15,7 +15,8 @@ import pandas as pd
 # Local imports
 from config import (
     REGRESSION_DATASETS, CLASSIFICATION_DATASETS,
-    MAX_COMPONENTS, MAX_FEATURES, N_VALUES_LIST, CV_CONFIG
+    MAX_COMPONENTS, MAX_FEATURES, N_VALUES_LIST, CV_CONFIG,
+    MISSING_MODALITIES_CONFIG  # ADD missing modalities config import
 )
 from data_io import load_dataset, load_and_preprocess_data_enhanced
 from models import (
@@ -506,19 +507,27 @@ def process_regression_datasets(args):
                 # Combine extractors and selectors
                 all_algorithms = {**reg_extractors, **reg_selectors}
                 
-                # Run feature-first pipeline
-                run_feature_first_pipeline(
-                    ds_name=ds_name,
-                    data_modalities=modalities,
-                    common_ids=common_ids,
-                    y=y_aligned,
-                    base_out=base_out,
-                    algorithms=all_algorithms,
-                    n_values=n_shared_list,
-                    models=list(reg_models.keys()),
-                    is_regression=True,
-                    missing_percentage=0.0  # For now, assume clean data
-                )
+                # FIXED: Loop over all configured missing percentages
+                for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
+                    print(f"===> Processing missing percentage: {missing_percentage*100:.0f}%")
+                    logger.info(f"===> Processing missing percentage: {missing_percentage*100:.0f}%")
+                    
+                    # Run feature-first pipeline for this missing percentage
+                    run_feature_first_pipeline(
+                        ds_name=ds_name,
+                        data_modalities=modalities,
+                        common_ids=common_ids,
+                        y=y_aligned,
+                        base_out=base_out,
+                        algorithms=all_algorithms,
+                        n_values=n_shared_list,
+                        models=list(reg_models.keys()),
+                        is_regression=True,
+                        missing_percentage=missing_percentage  # FIXED: Use actual missing percentage
+                    )
+                    
+                    print(f"===> COMPLETED missing percentage {missing_percentage*100:.0f}% for dataset {ds_name}")
+                    logger.info(f"===> COMPLETED missing percentage {missing_percentage*100:.0f}% for dataset {ds_name}")
                 
                 print(f"===> COMPLETED FEATURE-FIRST pipeline for dataset {ds_name}")
                 logger.info(f"===> COMPLETED FEATURE-FIRST pipeline for dataset {ds_name}")
@@ -659,19 +668,27 @@ def process_classification_datasets(args):
                 # Combine extractors and selectors
                 all_algorithms = {**clf_extractors, **clf_selectors}
                 
-                # Run feature-first pipeline
-                run_feature_first_pipeline(
-                    ds_name=ds_name,
-                    data_modalities=modalities,
-                    common_ids=common_ids,
-                    y=y_aligned,
-                    base_out=base_out,
-                    algorithms=all_algorithms,
-                    n_values=n_shared_list,
-                    models=list(clf_models.keys()),
-                    is_regression=False,
-                    missing_percentage=0.0  # For now, assume clean data
-                )
+                # FIXED: Loop over all configured missing percentages
+                for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
+                    print(f"===> Processing missing percentage: {missing_percentage*100:.0f}%")
+                    logger.info(f"===> Processing missing percentage: {missing_percentage*100:.0f}%")
+                    
+                    # Run feature-first pipeline for this missing percentage
+                    run_feature_first_pipeline(
+                        ds_name=ds_name,
+                        data_modalities=modalities,
+                        common_ids=common_ids,
+                        y=y_aligned,
+                        base_out=base_out,
+                        algorithms=all_algorithms,
+                        n_values=n_shared_list,
+                        models=list(clf_models.keys()),
+                        is_regression=False,
+                        missing_percentage=missing_percentage  # FIXED: Use actual missing percentage
+                    )
+                    
+                    print(f"===> COMPLETED missing percentage {missing_percentage*100:.0f}% for dataset {ds_name}")
+                    logger.info(f"===> COMPLETED missing percentage {missing_percentage*100:.0f}% for dataset {ds_name}")
                 
                 print(f"===> COMPLETED FEATURE-FIRST pipeline for dataset {ds_name}")
                 logger.info(f"===> COMPLETED FEATURE-FIRST pipeline for dataset {ds_name}")

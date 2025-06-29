@@ -254,6 +254,16 @@ def _process_single_modality(
         Training, validation, and test data arrays
     """
     try:
+        # CACHE VALIDATION: Validate cache keys include modality names for separation
+        # Only validate on first fold and first modality to avoid spam
+        if fold_idx == 0 and modality_name in ['exp', 'mirna', 'methy']:  # Common modalities
+            from models import validate_cache_keys_include_modality
+            validation_result = validate_cache_keys_include_modality(
+                dataset_name or modality_name, fold_idx, modality_name
+            )
+            if not validation_result:
+                logger.warning(f"Cache key validation failed for modality {modality_name}")
+        
         # Since samples are pre-filtered, all id_train and id_val should be available
         available_sample_ids = set(modality_df.columns)
         
@@ -784,7 +794,7 @@ def _process_cv_fold_impl(
         # Merge raw modalities - apply fusion BEFORE feature processing
         try:
             # Handle strategies that return tuples (fitted fusion objects) specially
-            if integration_technique in ["early_fusion_pca", "learnable_weighted", "mkl", "average", "sum", "attention_weighted", "late_fusion_stacking"]:
+            if integration_technique in ["early_fusion_pca", "learnable_weighted", "mkl", "average", "sum", "attention_weighted", "late_fusion_stacking", "standard_concat", "max"]:
                 # For training data: fit and get the fusion object
                 train_result = merge_modalities(*raw_modality_train, imputer=fold_imputer, is_train=True, strategy=integration_technique, n_components=ncomps, y=final_aligned_y_train, is_regression=is_regression)
                 
@@ -2436,24 +2446,27 @@ def _run_pipeline(
                         # Always test ALL fusion techniques regardless of FUSION_UPGRADES_CONFIG
                         if missing_percentage == 0.0:
                             # For 0% missing data, test ALL fusion techniques that work with clean data
-                            # Updated: [attention_weighted, learnable_weighted, mkl, average, sum, early_fusion_pca]
+                            # Updated: [attention_weighted, learnable_weighted, mkl, average, sum, early_fusion_pca, standard_concat, max]
                             integration_techniques = [
                                 "attention_weighted", 
                                 "learnable_weighted", 
                                 "mkl", 
                                 "average", 
                                 "sum",
-                                "early_fusion_pca"
+                                "early_fusion_pca",
+                                "standard_concat",
+                                "max"
                             ]
                             logger.info(f"Testing {len(integration_techniques)} fusion techniques for 0% missing data: {integration_techniques}")
                         else:
                             # For missing data (>0%), test techniques that handle missing data
-                            # Updated: [mkl, average, sum, early_fusion_pca]
+                            # Updated: [mkl, average, sum, early_fusion_pca, max]
                             integration_techniques = [
                                 "mkl", 
                                 "average", 
                                 "sum",
-                                "early_fusion_pca"
+                                "early_fusion_pca",
+                                "max"
                             ]
                             logger.info(f"Testing {len(integration_techniques)} fusion techniques for {missing_percentage*100}% missing data: {integration_techniques}")
                         
@@ -2843,6 +2856,13 @@ def _run_pipeline(
             logger.info(f"Saved final {len(all_pipeline_results)} results to {metrics_file}")
         except Exception as e:
             logger.error(f"Error saving final metrics batch: {str(e)}")
+    
+    # CACHE PERFORMANCE: Log cache performance summary at the end of pipeline
+    try:
+        from models import log_cache_performance_summary
+        log_cache_performance_summary()
+    except Exception as e:
+        logger.warning(f"Failed to log cache performance summary: {str(e)}")
     
     # Clean up resources
     import gc
@@ -3808,7 +3828,9 @@ def _run_sequential_pipeline(
                         "mkl", 
                         "average", 
                         "sum",
-                        "early_fusion_pca"
+                        "early_fusion_pca",
+                        "standard_concat",
+                        "max"
                     ]
                     print(f"    🔗 Fusion techniques for 0% missing: {len(integration_techniques)} methods")
                 else:
@@ -3817,7 +3839,8 @@ def _run_sequential_pipeline(
                         "mkl", 
                         "average", 
                         "sum",
-                        "early_fusion_pca"
+                        "early_fusion_pca",
+                        "max"
                     ]
                     print(f"    🔗 Fusion techniques for {missing_percentage*100:.0f}% missing: {len(integration_techniques)} methods")
                 

@@ -227,7 +227,7 @@ def demo_individual_phases():
     print("-" * 40)
     try:
         from fusion_aware_preprocessing import determine_optimal_fusion_order, get_fusion_method_category
-        fusion_methods = ["snf", "mkl", "weighted_concat", "early_fusion_pca"]
+        fusion_methods = ["snf", "mkl", "weighted_concat", "early_fusion_pca", "average", "sum", "attention_weighted", "learnable_weighted", "standard_concat", "max"]
         print("Optimal preprocessing orders:")
         for method in fusion_methods:
             order = determine_optimal_fusion_order(method)

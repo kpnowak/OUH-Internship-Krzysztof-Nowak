@@ -17,8 +17,8 @@ CLASSIFICATION ALGORITHMS:
 - Selection techniques: ElasticNetFS, RFImportance, VarianceFTest, LogisticL1, XGBoostFS
 
 FUSION TECHNIQUES:
-- Basic: weighted_concat
-- Advanced: learnable_weighted, attention_weighted, mkl, snf, early_fusion_pca
+- Basic: weighted_concat, average, sum, max
+- Advanced: learnable_weighted, attention_weighted, mkl, snf, early_fusion_pca, standard_concat
 
 DATASETS:
 - Regression (2): AML, Sarcoma

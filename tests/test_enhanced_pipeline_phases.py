@@ -112,7 +112,7 @@ def test_phase_2_fusion_aware():
         # Test order determination for different fusion methods
         logger.info("Test 2.1: Optimal order determination")
         
-        fusion_methods = ['average', 'sum', 'mkl', 'weighted_concat', 'early_fusion_pca']
+        fusion_methods = ['average', 'sum', 'mkl', 'weighted_concat', 'early_fusion_pca', 'attention_weighted', 'learnable_weighted', 'standard_concat', 'max']
         for method in fusion_methods:
             order = determine_optimal_fusion_order(method)
             logger.info(f"  {method}: {order}")

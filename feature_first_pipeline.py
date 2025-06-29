@@ -54,13 +54,13 @@ class FeatureFirstPipeline:
         
         # Select appropriate fusion strategies based on missing data
         if missing_percentage == 0.0:
-            # Clean data: all 6 fusion methods available (matching fusion-first pipeline)
+            # Clean data: all 8 fusion methods available (matching fusion-first pipeline)
             self.available_fusion_methods = [
-                'attention_weighted', 'learnable_weighted', 'mkl', 'average', 'sum', 'early_fusion_pca'
+                'attention_weighted', 'learnable_weighted', 'mkl', 'average', 'sum', 'early_fusion_pca', 'standard_concat', 'max'
             ]
         else:
-            # Missing data: only 4 robust methods (matching fusion-first pipeline)
-            self.available_fusion_methods = ['mkl', 'average', 'sum', 'early_fusion_pca']
+            # Missing data: only 5 robust methods (matching fusion-first pipeline)
+            self.available_fusion_methods = ['mkl', 'average', 'sum', 'early_fusion_pca', 'max']
         
         logger.info(f"FeatureFirstPipeline initialized: {fusion_method}, {task_type}, {missing_percentage:.1%} missing")
         logger.info(f"Available fusion methods: {self.available_fusion_methods}")
@@ -121,6 +121,14 @@ class FeatureFirstPipeline:
         
         logger.info(f"Running feature-first experiment: {algorithm_name} → {self.fusion_method} → {model_name}")
         
+        # CACHE VALIDATION: Validate cache keys include modality names for separation
+        if fold_idx == 0:  # Only validate on first fold to avoid spam
+            from models import validate_cache_keys_include_modality
+            for modality_name in data_modalities.keys():
+                validation_result = validate_cache_keys_include_modality(dataset_name, fold_idx, modality_name)
+                if not validation_result:
+                    logger.warning(f"Cache key validation failed for modality {modality_name}")
+        
         try:
             # Step 1: Apply feature processing to each modality separately
             processed_modalities = self._apply_feature_processing_to_modalities(
@@ -158,6 +166,11 @@ class FeatureFirstPipeline:
                 'fused_features_shape': fused_features.shape
             })
             
+            # CACHE PERFORMANCE: Log cache performance on last fold
+            if fold_idx >= 4:  # Assuming 5-fold CV, log on last fold
+                from models import log_cache_performance_summary
+                log_cache_performance_summary()
+            
             return results
             
         except Exception as e:
@@ -175,26 +188,28 @@ class FeatureFirstPipeline:
                                               fold_idx: int,
                                               model_name: str) -> Dict[str, np.ndarray]:
         """
-        Apply feature extraction or selection to each modality separately.
+        Apply feature processing algorithm to each modality separately.
         
         Parameters
         ----------
         data_modalities : Dict[str, pd.DataFrame]
-            Raw modality data (features x samples)
+            Dictionary mapping modality names to their feature DataFrames
         y : np.ndarray
             Target values
         common_ids : List[str]
-            Common sample IDs
+            List of common sample IDs across modalities
         algorithm_name : str
-            Name of feature processing algorithm
+            Name of the feature processing algorithm
         algorithm_obj : Any
             Feature processing algorithm object
         n_features_or_components : int
-            Number of features/components
+            Number of features/components to extract
         dataset_name : str
             Dataset name
         fold_idx : int
             Fold index
+        model_name : str
+            Model name
             
         Returns
         -------
@@ -267,7 +282,80 @@ class FeatureFirstPipeline:
                 logger.error(f"Error processing {modality_name} with {algorithm_name}: {str(e)}")
                 continue
         
+        # STANDARDIZE COMPONENT COUNTS for element-wise fusion methods
+        if len(processed_modalities) > 1 and self.fusion_method in ["average", "sum", "max"]:
+            processed_modalities = self._standardize_component_counts(
+                processed_modalities, algorithm_name, n_features_or_components
+            )
+        
         return processed_modalities
+    
+    def _standardize_component_counts(self, 
+                                    processed_modalities: Dict[str, np.ndarray],
+                                    algorithm_name: str,
+                                    target_components: int) -> Dict[str, np.ndarray]:
+        """
+        Standardize the number of components across modalities for element-wise fusion methods.
+        
+        Element-wise fusion methods (average, sum, max) require all modalities to have the 
+        same number of features. This method handles cases where algorithms like KPCA 
+        produce different numbers of components due to adaptive error handling.
+        
+        Parameters
+        ----------
+        processed_modalities : Dict[str, np.ndarray]
+            Dictionary of processed modality arrays with potentially different component counts
+        algorithm_name : str
+            Name of the feature processing algorithm
+        target_components : int
+            Target number of components
+            
+        Returns
+        -------
+        Dict[str, np.ndarray]
+            Dictionary with standardized component counts across all modalities
+        """
+        if not processed_modalities:
+            return processed_modalities
+            
+        # Get current component counts
+        component_counts = {name: arr.shape[1] for name, arr in processed_modalities.items()}
+        unique_counts = list(set(component_counts.values()))
+        
+        # If all modalities already have the same number of components, no action needed
+        if len(unique_counts) == 1:
+            logger.debug(f"All modalities have consistent {unique_counts[0]} components")
+            return processed_modalities
+        
+        logger.warning(f"Inconsistent component counts detected for {self.fusion_method} fusion: {component_counts}")
+        
+        # Strategy 1: Use the minimum number of components across all modalities
+        min_components = min(component_counts.values())
+        logger.info(f"Standardizing to {min_components} components (minimum across modalities)")
+        
+        standardized_modalities = {}
+        for name, arr in processed_modalities.items():
+            if arr.shape[1] > min_components:
+                # Truncate to minimum components
+                standardized_arr = arr[:, :min_components]
+                logger.debug(f"Truncated {name}: {arr.shape} → {standardized_arr.shape}")
+            else:
+                # Already at or below minimum
+                standardized_arr = arr
+                logger.debug(f"Kept {name}: {arr.shape}")
+            
+            standardized_modalities[name] = standardized_arr
+        
+        # Verify all modalities now have the same number of components
+        final_counts = {name: arr.shape[1] for name, arr in standardized_modalities.items()}
+        final_unique = list(set(final_counts.values()))
+        
+        if len(final_unique) == 1:
+            logger.info(f"Successfully standardized all modalities to {final_unique[0]} components")
+        else:
+            logger.error(f"Failed to standardize component counts: {final_counts}")
+            
+        return standardized_modalities
     
     def _apply_fusion_to_processed_features(self,
                                           processed_modalities: Dict[str, np.ndarray],
@@ -491,7 +579,7 @@ class FeatureFirstPipeline:
             else:
                 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, matthews_corrcoef
                 
-                # Safe MCC scorer that handles multiclass scenarios robustly
+                # Safe MCC scorer that handles edge cases for imbalanced datasets
                 def safe_mcc_score(y_true, y_pred):
                     """
                     Safe MCC calculation that handles edge cases for imbalanced datasets.
@@ -704,9 +792,9 @@ def run_feature_first_pipeline(ds_name: str,
     task_type = "regression" if is_regression else "classification"
     
     if missing_percentage == 0.0:
-        fusion_methods = ['attention_weighted', 'learnable_weighted', 'mkl', 'average', 'sum', 'early_fusion_pca']
+        fusion_methods = ['attention_weighted', 'learnable_weighted', 'mkl', 'average', 'sum', 'early_fusion_pca', 'standard_concat', 'max']
     else:
-        fusion_methods = ['mkl', 'average', 'sum', 'early_fusion_pca']
+        fusion_methods = ['mkl', 'average', 'sum', 'early_fusion_pca', 'max']
     
     logger.info(f"Available fusion methods for {missing_percentage:.1%} missing: {fusion_methods}")
     

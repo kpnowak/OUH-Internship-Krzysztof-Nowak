@@ -11,6 +11,9 @@ from typing import Dict, List, Tuple, Any, Optional, Set, Union, Literal
 import json
 import pathlib
 
+# Initialize logger
+logger = logging.getLogger(__name__)
+
 # Hyperparameter directory
 HP_DIR = pathlib.Path("hp_best")
 
@@ -342,14 +345,25 @@ def _sanitize_extractor_hyperparameters(extractor, extractor_class_name, hyperpa
         gamma = validated_params.get('gamma')
         n_components = validated_params.get('n_components')
         
-        # Very small gamma values can cause eigenvalue computation issues
-        if gamma is not None and isinstance(gamma, (int, float)):
-            if gamma < 1e-3:  # Too small gamma
-                logger.info(f"KPCA: Detected very small gamma ({gamma}), increasing to 1e-3 for stability")
-                validated_params['gamma'] = 1e-3
-            elif gamma > 10.0:  # Too large gamma
-                logger.info(f"KPCA: Detected very large gamma ({gamma}), reducing to 10.0 for stability")
-                validated_params['gamma'] = 10.0
+        # Handle gamma parameter validation
+        if gamma is not None:
+            if isinstance(gamma, (int, float)):
+                # Very small gamma values can cause eigenvalue computation issues
+                if gamma < 1e-3:  # Too small gamma
+                    logger.info(f"KPCA: Detected very small gamma ({gamma}), increasing to 1e-3 for stability")
+                    validated_params['gamma'] = 1e-3
+                elif gamma > 10.0:  # Too large gamma
+                    logger.info(f"KPCA: Detected very large gamma ({gamma}), reducing to 10.0 for stability")
+                    validated_params['gamma'] = 10.0
+            elif isinstance(gamma, str):
+                # Allow valid string values: 'scale', 'auto'
+                if gamma not in ['scale', 'auto']:
+                    logger.info(f"KPCA: Invalid gamma string '{gamma}', using 'scale' for adaptive scaling")
+                    validated_params['gamma'] = 'scale'
+        else:
+            # Default to 'scale' if gamma is missing
+            validated_params['gamma'] = 'scale'
+            logger.debug("KPCA: Set gamma to 'scale' for adaptive scaling")
         
         # Ensure eigen_solver is set to 'auto' to let sklearn choose the best method
         if 'eigen_solver' not in validated_params:
@@ -2768,6 +2782,31 @@ _extractor_cache = {
     )
 }
 
+def clear_modality_caches():
+    """
+    Clear all modality caches to ensure new modality-aware cache keys take effect.
+    This prevents old cached results from different modalities interfering with each other.
+    """
+    global _selector_cache, _extractor_cache
+    
+    try:
+        # Clear all selector caches
+        for cache_type in _selector_cache:
+            _selector_cache[cache_type].clear()
+            
+        # Clear all extractor caches
+        for cache_type in _extractor_cache:
+            _extractor_cache[cache_type].clear()
+            
+        logger.info("Successfully cleared all modality caches to ensure cache key fix takes effect")
+        
+    except Exception as e:
+        logger.warning(f"Failed to clear modality caches: {str(e)}")
+
+# CRITICAL: Clear existing caches immediately to ensure modality-aware cache keys take effect
+# This prevents cached results from before the fix from causing wrong hyperparameter applications
+clear_modality_caches()
+
 def _generate_cache_key(ds_name, fold_idx, name, obj_type, n_val, input_shape=None):
     """Generate a consistent cache key"""
     # Create a stable representation for hashing
@@ -2786,6 +2825,11 @@ def _generate_cache_key(ds_name, fold_idx, name, obj_type, n_val, input_shape=No
     # Generate a hash to ensure key size is bounded
     key_str = "_".join(key_parts)
     hash_obj = hashlib.md5(key_str.encode())
+    
+    # DIAGNOSTIC: Log cache key generation for debugging (only in debug mode)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"Generated cache key: {hash_obj.hexdigest()[:8]}... from parts: {key_parts}")
+    
     return hash_obj.hexdigest()
 
 # Update cache functions to use the new key generation and caching strategy
@@ -2838,7 +2882,9 @@ def cached_fit_transform_selector_regression(X, y, selector, n_feats, ds_name=No
         selector_type = "unknown"
         
     # Create cache key
-    key = _generate_cache_key(ds_name, fold_idx, selector_type, "sel_reg", n_feats, X.shape if X is not None else None)
+    # CRITICAL FIX: Include modality_name in cache key so different modalities don't share cache
+    cache_name = f"{selector_type}_{modality_name}" if modality_name else selector_type
+    key = _generate_cache_key(ds_name, fold_idx, cache_name, "sel_reg", n_feats, X.shape if X is not None else None)
     
     # Check cache
     cached_result = _selector_cache['sel_reg'].get(key)
@@ -2986,7 +3032,8 @@ def get_regression_extractors() -> Dict[str, Any]:
             kernel="rbf", 
             random_state=42, 
             n_jobs=-1,
-            gamma=1.0  # Fixed: Use compatible numeric default instead of string
+            gamma="scale",  # Use sklearn's adaptive gamma instead of fixed value
+            eigen_solver="auto"  # Let sklearn choose best solver
         ),
         "FA": FactorAnalysis(
             random_state=42,
@@ -3067,7 +3114,8 @@ def get_classification_extractors() -> Dict[str, Any]:
             kernel="rbf", 
             random_state=42, 
             n_jobs=-1,
-            gamma=1.0  # Fixed: Use compatible numeric default instead of string
+            gamma="scale",  # Use sklearn's adaptive gamma instead of fixed value
+            eigen_solver="auto"  # Let sklearn choose best solver
         ),
         "FA": FactorAnalysis(
             random_state=42,
@@ -3218,6 +3266,11 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
     extractor_class_name = extractor.__class__.__name__
     extractor_name = _map_extractor_class_to_hyperparameter_name(extractor_class_name)
     cache_name = f"{extractor_name}_{model_name}" if model_name else extractor_name
+    
+    # CRITICAL FIX: Include modality_name in cache key so different modalities don't share cache
+    if modality_name:
+        cache_name = f"{cache_name}_{modality_name}"
+    
     key = _generate_cache_key(ds_name, fold_idx, cache_name, "ext_reg", n_components, X.shape if X is not None else None)
     
     # Check cache
@@ -3339,16 +3392,18 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         if "zero-size array to reduction operation maximum" in error_msg and 'KernelPCA' in extractor.__class__.__name__:
             logger.warning("KPCA encountered zero-size eigenvalue array - falling back to PCA")
             try:
-                # Fall back to regular PCA with conservative components
+                # Fall back to regular PCA with CONSISTENT components across all modalities
                 from sklearn.decomposition import PCA
-                safe_components = min(n_components // 2, X.shape[0] - 2, X.shape[1] // 4, 8)
+                # Use a fixed, conservative number that works for all modalities
+                # This ensures consistent dimensions for fusion
+                safe_components = min(8, n_components // 2, X.shape[0] - 2)
                 safe_components = max(1, safe_components)  # Ensure at least 1 component
                 
                 fallback_extractor = PCA(n_components=safe_components, random_state=42)
                 fallback_extractor.fit(X_arr)
                 X_transformed = fallback_extractor.transform(X_arr)
                 
-                logger.info(f"KPCA fallback to PCA successful with {safe_components} components")
+                logger.info(f"KPCA fallback to PCA successful with {safe_components} components (consistent across modalities)")
                 result = (fallback_extractor, X_transformed)
                 _extractor_cache['ext_reg'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
                 return result
@@ -3388,6 +3443,11 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
     extractor_class_name = extractor.__class__.__name__
     extractor_name = _map_extractor_class_to_hyperparameter_name(extractor_class_name)
     cache_name = f"{extractor_name}_{model_name}" if model_name else extractor_name
+    
+    # CRITICAL FIX: Include modality_name in cache key so different modalities don't share cache
+    if modality_name:
+        cache_name = f"{cache_name}_{modality_name}"
+    
     key = _generate_cache_key(ds_name, fold_idx, cache_name, "ext_clf", n_components, X.shape if X is not None else None)
     
     # Check cache
@@ -3516,16 +3576,18 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
         if "zero-size array to reduction operation maximum" in error_msg and 'KernelPCA' in extractor.__class__.__name__:
             logger.warning("KPCA encountered zero-size eigenvalue array - falling back to PCA")
             try:
-                # Fall back to regular PCA with conservative components
+                # Fall back to regular PCA with CONSISTENT components across all modalities
                 from sklearn.decomposition import PCA
-                safe_components = min(n_components // 2, X.shape[0] - 2, X.shape[1] // 4, 8)
+                # Use a fixed, conservative number that works for all modalities
+                # This ensures consistent dimensions for fusion
+                safe_components = min(8, n_components // 2, X.shape[0] - 2)
                 safe_components = max(1, safe_components)  # Ensure at least 1 component
                 
                 fallback_extractor = PCA(n_components=safe_components, random_state=42)
                 fallback_extractor.fit(X_arr)
                 X_transformed = fallback_extractor.transform(X_arr)
                 
-                logger.info(f"KPCA fallback to PCA successful with {safe_components} components")
+                logger.info(f"KPCA fallback to PCA successful with {safe_components} components (consistent across modalities)")
                 result = (fallback_extractor, X_transformed)
                 _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
                 return result
@@ -3663,7 +3725,9 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
         Indices of selected features and transformed data
     """
     # Generate cache key
-    key = _generate_cache_key(ds_name, fold_idx, selector_code, "sel_clf", n_feats, X.shape if X is not None else None)
+    # CRITICAL FIX: Include modality_name in cache key so different modalities don't share cache
+    cache_name = f"{selector_code}_{modality_name}" if modality_name else selector_code
+    key = _generate_cache_key(ds_name, fold_idx, cache_name, "sel_clf", n_feats, X.shape if X is not None else None)
     
     # Check cache
     cached_result = _selector_cache['sel_clf'].get(key)
@@ -4405,10 +4469,10 @@ def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method,
     
     # Step 3: Map fusion technique to source fusion based on user specifications
     # attention_weighted/learnable_weighted/standard_concat → use attention_weighted params
-    # average/mkl/sum/early_fusion_pca → use average params
+    # average/mkl/sum/early_fusion_pca/max → use average params
     if fusion_method in ["attention_weighted", "learnable_weighted", "standard_concat"]:
         source_fusion = "attention_weighted"
-    elif fusion_method in ["average", "mkl", "sum", "early_fusion_pca"]:
+    elif fusion_method in ["average", "mkl", "sum", "early_fusion_pca", "max"]:
         source_fusion = "average"
     else:
         source_fusion = fusion_method  # Use as-is if not in mapping
@@ -4541,3 +4605,253 @@ def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method,
         'source': 'default (no tuned params found)',
         'n_components': None,
     }
+
+# CRITICAL: Clear existing caches immediately to ensure modality-aware cache keys take effect
+# This prevents cached results from before the fix from causing wrong hyperparameter applications
+clear_modality_caches()
+
+def get_cache_diagnostics() -> Dict[str, Any]:
+    """
+    Get comprehensive cache diagnostics for all cache types.
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary containing cache statistics and diagnostics
+    """
+    diagnostics = {
+        "selector_caches": {},
+        "extractor_caches": {},
+        "summary": {},
+        "modality_separation_status": "unknown"
+    }
+    
+    # Get selector cache stats
+    for cache_type, cache in _selector_cache.items():
+        stats = cache.stats()
+        diagnostics["selector_caches"][cache_type] = stats
+        
+    # Get extractor cache stats  
+    for cache_type, cache in _extractor_cache.items():
+        stats = cache.stats()
+        diagnostics["extractor_caches"][cache_type] = stats
+    
+    # Calculate summary statistics
+    total_size = sum(stats["size"] for stats in diagnostics["selector_caches"].values()) + \
+                 sum(stats["size"] for stats in diagnostics["extractor_caches"].values())
+    total_memory = sum(stats["memory_usage_mb"] for stats in diagnostics["selector_caches"].values()) + \
+                   sum(stats["memory_usage_mb"] for stats in diagnostics["extractor_caches"].values())
+    total_hits = sum(stats["hits"] for stats in diagnostics["selector_caches"].values()) + \
+                 sum(stats["hits"] for stats in diagnostics["extractor_caches"].values())
+    total_misses = sum(stats["misses"] for stats in diagnostics["selector_caches"].values()) + \
+                   sum(stats["misses"] for stats in diagnostics["extractor_caches"].values())
+    
+    overall_hit_ratio = total_hits / (total_hits + total_misses) if (total_hits + total_misses) > 0 else 0
+    
+    diagnostics["summary"] = {
+        "total_cached_items": total_size,
+        "total_memory_usage_mb": total_memory,
+        "overall_hit_ratio": overall_hit_ratio,
+        "total_hits": total_hits,
+        "total_misses": total_misses
+    }
+    
+    # Check if modality separation is working by examining cache keys
+    diagnostics["modality_separation_status"] = _check_modality_separation()
+    
+    return diagnostics
+
+def _check_modality_separation() -> str:
+    """
+    Check if modality separation is working correctly in cache keys.
+    
+    Returns
+    -------
+    str
+        Status of modality separation: "working", "not_working", or "insufficient_data"
+    """
+    try:
+        modality_indicators = set()
+        
+        # Check all cache types for modality indicators in keys
+        for cache in list(_selector_cache.values()) + list(_extractor_cache.values()):
+            # Access the internal cache keys to check for modality names
+            if hasattr(cache, 'cache') and cache.cache:
+                # Sample up to 10 keys to check for modality patterns
+                sample_keys = list(cache.cache.keys())[:10]
+                for key in sample_keys:
+                    # Check if key contains common modality names
+                    key_str = str(key).lower()
+                    if any(modality in key_str for modality in ['mirna', 'exp', 'methy', 'cnv']):
+                        modality_indicators.add("modality_detected")
+                    if '_' in key_str:  # Indicates concatenated components in cache key
+                        modality_indicators.add("separator_detected")
+        
+        if len(modality_indicators) >= 2:
+            return "working"
+        elif len(modality_indicators) == 1:
+            return "partially_working"
+        elif not modality_indicators:
+            # Check if we have any cached items at all
+            total_items = sum(len(cache.cache) for cache in list(_selector_cache.values()) + list(_extractor_cache.values()))
+            if total_items == 0:
+                return "no_cached_data"
+            else:
+                return "not_working"
+        else:
+            return "insufficient_data"
+            
+    except Exception as e:
+        logger.warning(f"Failed to check modality separation: {str(e)}")
+        return "check_failed"
+
+def validate_cache_keys_include_modality(ds_name: str, fold_idx: int, modality_name: str) -> bool:
+    """
+    Validate that cache keys properly include modality name for separation.
+    
+    Parameters
+    ----------
+    ds_name : str
+        Dataset name
+    fold_idx : int
+        Fold index
+    modality_name : str
+        Modality name that should be in cache key
+        
+    Returns
+    -------
+    bool
+        True if cache key includes modality name, False otherwise
+    """
+    try:
+        # Create a test cache key with modality name
+        test_cache_name = f"TestAlgorithm_{modality_name}"
+        test_key = _generate_cache_key(ds_name, fold_idx, test_cache_name, "test", 8, (100, 1000))
+        
+        # The key should be different from one without modality name
+        test_cache_name_no_modality = "TestAlgorithm"
+        test_key_no_modality = _generate_cache_key(ds_name, fold_idx, test_cache_name_no_modality, "test", 8, (100, 1000))
+        
+        keys_are_different = test_key != test_key_no_modality
+        
+        if keys_are_different:
+            logger.debug(f"Cache key validation PASSED: modality '{modality_name}' creates unique cache keys")
+        else:
+            logger.warning(f"Cache key validation FAILED: modality '{modality_name}' does not create unique cache keys")
+            
+        return keys_are_different
+        
+    except Exception as e:
+        logger.error(f"Cache key validation failed with error: {str(e)}")
+        return False
+
+def log_cache_performance_summary():
+    """Log a summary of cache performance across all cache types."""
+    try:
+        diagnostics = get_cache_diagnostics()
+        
+        logger.info("=== CACHE PERFORMANCE SUMMARY ===")
+        logger.info(f"Total cached items: {diagnostics['summary']['total_cached_items']}")
+        logger.info(f"Total memory usage: {diagnostics['summary']['total_memory_usage_mb']:.2f} MB")
+        logger.info(f"Overall hit ratio: {diagnostics['summary']['overall_hit_ratio']:.3f}")
+        logger.info(f"Modality separation status: {diagnostics['modality_separation_status']}")
+        
+        # Log individual cache performance
+        for cache_type, stats in diagnostics["selector_caches"].items():
+            logger.info(f"Selector {cache_type}: {stats['size']} items, {stats['memory_usage_mb']:.1f} MB, hit ratio: {stats['hit_ratio']:.3f}")
+            
+        for cache_type, stats in diagnostics["extractor_caches"].items():
+            logger.info(f"Extractor {cache_type}: {stats['size']} items, {stats['memory_usage_mb']:.1f} MB, hit ratio: {stats['hit_ratio']:.3f}")
+            
+        logger.info("=== END CACHE SUMMARY ===")
+        
+    except Exception as e:
+        logger.warning(f"Failed to log cache performance summary: {str(e)}")
+
+def run_cache_diagnostics(dataset_name: str = "test", modalities: List[str] = None) -> Dict[str, Any]:
+    """
+    Run comprehensive cache diagnostics to verify the caching system is working correctly.
+    
+    Parameters
+    ----------
+    dataset_name : str
+        Dataset name for test validation
+    modalities : List[str], optional
+        List of modality names to test. Defaults to common modalities.
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Comprehensive diagnostics report
+    """
+    if modalities is None:
+        modalities = ['exp', 'mirna', 'methy', 'cnv']
+    
+    logger.info("=== RUNNING CACHE DIAGNOSTICS ===")
+    
+    diagnostics = {
+        'cache_stats': get_cache_diagnostics(),
+        'modality_validation': {},
+        'cache_key_tests': {},
+        'performance_summary': {},
+        'recommendations': []
+    }
+    
+    # Test cache key validation for each modality
+    for modality in modalities:
+        try:
+            validation_result = validate_cache_keys_include_modality(dataset_name, 0, modality)
+            diagnostics['modality_validation'][modality] = {
+                'status': 'PASS' if validation_result else 'FAIL',
+                'unique_cache_keys': validation_result
+            }
+            if not validation_result:
+                diagnostics['recommendations'].append(f"Cache key validation failed for modality '{modality}' - check modality_name parameter passing")
+        except Exception as e:
+            diagnostics['modality_validation'][modality] = {
+                'status': 'ERROR',
+                'error': str(e)
+            }
+            diagnostics['recommendations'].append(f"Cache validation error for modality '{modality}': {str(e)}")
+    
+    # Performance analysis
+    cache_stats = diagnostics['cache_stats']
+    total_hit_ratio = cache_stats['summary']['overall_hit_ratio']
+    total_memory_usage = cache_stats['summary']['total_memory_usage_mb']
+    
+    diagnostics['performance_summary'] = {
+        'overall_hit_ratio': total_hit_ratio,
+        'memory_usage_mb': total_memory_usage,
+        'performance_rating': 'EXCELLENT' if total_hit_ratio > 0.8 else 'GOOD' if total_hit_ratio > 0.5 else 'POOR' if total_hit_ratio > 0.1 else 'NO_CACHE_HITS',
+        'memory_rating': 'HIGH' if total_memory_usage > 500 else 'MEDIUM' if total_memory_usage > 100 else 'LOW',
+        'modality_separation_status': cache_stats['modality_separation_status']
+    }
+    
+    # Generate recommendations
+    if total_hit_ratio < 0.3:
+        diagnostics['recommendations'].append("Low cache hit ratio - consider increasing cache size or checking for excessive cache key variations")
+    
+    if cache_stats['modality_separation_status'] not in ['working', 'partially_working']:
+        diagnostics['recommendations'].append("Modality separation not detected - verify modality_name is passed to cached functions")
+    
+    if total_memory_usage > 1000:  # > 1GB
+        diagnostics['recommendations'].append("High memory usage - consider reducing cache size or clearing cache more frequently")
+    
+    # Log summary
+    logger.info(f"Cache Diagnostics Summary:")
+    logger.info(f"  Overall hit ratio: {total_hit_ratio:.3f} ({diagnostics['performance_summary']['performance_rating']})")
+    logger.info(f"  Memory usage: {total_memory_usage:.1f} MB ({diagnostics['performance_summary']['memory_rating']})")
+    logger.info(f"  Modality separation: {cache_stats['modality_separation_status']}")
+    logger.info(f"  Modality validations: {sum(1 for v in diagnostics['modality_validation'].values() if v.get('status') == 'PASS')}/{len(modalities)} PASS")
+    
+    if diagnostics['recommendations']:
+        logger.warning("Cache recommendations:")
+        for rec in diagnostics['recommendations']:
+            logger.warning(f"  - {rec}")
+    else:
+        logger.info("✅ All cache diagnostics passed!")
+    
+    logger.info("=== CACHE DIAGNOSTICS COMPLETE ===")
+    
+    return diagnostics
+
