@@ -152,7 +152,7 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
             
             modalities_data, y_aligned, pipeline_metadata = run_enhanced_preprocessing_pipeline(
                 modality_data_dict=modality_data_dict,
-                y=y_raw.values,
+                y=np.asarray(y_raw.values),  # Ensure numpy array
                 fusion_method=fusion_method,
                 task_type=task_type,
                 dataset_name=ds_name,
@@ -225,8 +225,8 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
                     # Create DataFrame (features x samples to match expected format)
                     modalities[modality_name] = pd.DataFrame(
                         processed_array.T,  # Transpose: samples x features -> features x samples
-                        index=feature_names,
-                        columns=sample_ids
+                        index=feature_names,  # type: ignore
+                        columns=sample_ids  # type: ignore
                     )
                 else:
                     # Already in correct format
@@ -236,12 +236,11 @@ def process_dataset(ds_conf: Dict[str, Any], is_regression: bool = True) -> Opti
             return None
         
         # Convert pandas Series to numpy array for compatibility with existing code
-        if hasattr(y_aligned, 'values'):
-            y_aligned = y_aligned.values
+        y_aligned = np.asarray(y_aligned)  # Ensure numpy array
         
         # For regression, ensure y_aligned is numeric
         if is_regression:
-            if not np.issubdtype(y_aligned.dtype, np.number):
+            if not np.issubdtype(y_aligned.dtype, np.number):  # type: ignore
                 logger.error(f"Regression target data is not numeric: dtype={y_aligned.dtype}")
                 logger.error(f"Sample values: {y_aligned[:5] if len(y_aligned) > 0 else 'empty'}")
                 logger.error(f"This indicates a data loading error - regression targets must be numeric")

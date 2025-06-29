@@ -1663,7 +1663,10 @@ class KernelPCAMedianHeuristic:
             # If KPCA fails, try with reduced components and different solver
             logger.warning(f"KernelPCA failed with {self.n_components} components: {str(e)}")
             
-            # Try with reduced components
+            # CRITICAL FIX: Use consistent_hyperparams if available, otherwise use conservative fallback
+            # Check if consistent hyperparameters are available (passed through global state or other means)
+            # For now, preserve the original n_components for consistency
+            original_components = self.n_components
             safe_components = min(self.n_components // 2, X.shape[0] - 1, 8)
             safe_components = max(1, safe_components)
             
@@ -1680,17 +1683,23 @@ class KernelPCAMedianHeuristic:
                 
                 self.kernel_pca_.fit(X)
                 self.n_components = safe_components  # Update the effective component count
+                logger.info(f"KernelPCA retry successful with {safe_components} components (originally {original_components})")
             except Exception as e2:
-                # If still failing, fall back to regular PCA
+                # If still failing, fall back to regular PCA but try to preserve more components
                 logger.warning(f"KernelPCA retry also failed: {str(e2)}, falling back to PCA")
                 from sklearn.decomposition import PCA
                 
+                # Try to preserve more components in PCA fallback if data allows
+                max_pca_components = min(X.shape[0] - 1, X.shape[1], original_components)
+                pca_components = max(1, min(safe_components, max_pca_components))
+                
                 self.kernel_pca_ = PCA(
-                    n_components=safe_components,
+                    n_components=pca_components,
                     random_state=self.random_state
                 )
                 self.kernel_pca_.fit(X)
-                self.n_components = safe_components
+                self.n_components = pca_components
+                logger.info(f"Fallback to PCA with {pca_components} components (originally requested {original_components})")
         
         # Store components for compatibility
         if hasattr(self.kernel_pca_, 'eigenvectors_'):
@@ -2833,7 +2842,7 @@ def _generate_cache_key(ds_name, fold_idx, name, obj_type, n_val, input_shape=No
     return hash_obj.hexdigest()
 
 # Update cache functions to use the new key generation and caching strategy
-def cached_fit_transform_selector_regression(X, y, selector, n_feats, ds_name=None, modality_name=None, fold_idx=0, model_name=None, fusion_method="attention_weighted"):
+def cached_fit_transform_selector_regression(X, y, selector, n_feats, ds_name=None, modality_name=None, fold_idx=0, model_name=None, fusion_method="attention_weighted", consistent_hyperparams=None):
     """
     Cached version of fit_transform for regression selectors.
     
@@ -3236,7 +3245,7 @@ def validate_and_fix_shape_mismatch(X, y, name="data", fold_idx=None, allow_trun
     
     return X, y
 
-def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None, fusion_method="attention_weighted"):
+def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None, fusion_method="attention_weighted", consistent_hyperparams=None):
     """
     Cached version of fit_transform for regression extractors with hyperparameter loading.
     
@@ -3256,6 +3265,12 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         Fold index for caching
     modality_name : str, optional
         Modality name (not used for hyperparameter loading in multi-modal setup)
+    model_name : str, optional
+        Model name for hyperparameter loading
+    fusion_method : str, optional
+        Fusion method name
+    consistent_hyperparams : dict, optional
+        Pre-loaded consistent hyperparameters for element-wise fusion methods
         
     Returns
     -------
@@ -3281,38 +3296,44 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
     try:
         # Load and apply hyperparameters if dataset name is provided
         if ds_name and model_name:
-            # Use the new feature-first hyperparameter loading system
-            hyperparams = load_feature_first_hyperparameters(
-                dataset=ds_name,
-                algorithm=extractor_name,
-                model=model_name,
-                fusion_method=fusion_method,
-                approach="extractor"
-            )
-            
-            if hyperparams['extractor_params']:
-                best_hyperparams = hyperparams
+            # CONSISTENCY FIX: Use consistent hyperparameters if provided (for element-wise fusion methods)
+            if consistent_hyperparams:
+                best_hyperparams = consistent_hyperparams
+                logger.info(f"Using consistent hyperparameters for {ds_name}_{extractor_name} (source: {best_hyperparams['source']})")
             else:
-                # Fallback: try other model combinations if specific one not found
-                model_candidates = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]
-                best_hyperparams = None
+                # Use the new feature-first hyperparameter loading system
+                hyperparams = load_feature_first_hyperparameters(
+                    dataset=ds_name,
+                    algorithm=extractor_name,
+                    model=model_name,
+                    fusion_method=fusion_method,
+                    approach="extractor"
+                )
                 
-                for fallback_model in model_candidates:
-                    if fallback_model == model_name:
-                        continue  # Skip the one we already tried
-                    hyperparams = load_feature_first_hyperparameters(
-                        dataset=ds_name,
-                        algorithm=extractor_name,
-                        model=fallback_model,
-                        fusion_method=fusion_method,
-                        approach="extractor"
-                    )
-                    if hyperparams['extractor_params']:
-                        best_hyperparams = hyperparams
-                        logger.warning(f"Using fallback hyperparameters from {fallback_model} for {model_name}")
-                        break
+                if hyperparams['extractor_params']:
+                    best_hyperparams = hyperparams
+                else:
+                    # Fallback: try other model combinations if specific one not found
+                    model_candidates = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]
+                    best_hyperparams = None
+                    
+                    for fallback_model in model_candidates:
+                        if fallback_model == model_name:
+                            continue  # Skip the one we already tried
+                        hyperparams = load_feature_first_hyperparameters(
+                            dataset=ds_name,
+                            algorithm=extractor_name,
+                            model=fallback_model,
+                            fusion_method=fusion_method,
+                            approach="extractor"
+                        )
+                        if hyperparams['extractor_params']:
+                            best_hyperparams = hyperparams
+                            logger.warning(f"Using fallback hyperparameters from {fallback_model} for {model_name}")
+                            break
             
-            if best_hyperparams and best_hyperparams['extractor_params']:
+            # Apply hyperparameters if found
+            if 'best_hyperparams' in locals() and best_hyperparams and best_hyperparams.get('extractor_params'):
                 try:
                     # Sanitize hyperparameters before applying
                     validated_params = _sanitize_extractor_hyperparameters(
@@ -3353,9 +3374,16 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         
         # Set n_components if the extractor supports it and it's not already set by hyperparameters
         if hasattr(extractor, 'n_components') and not hasattr(extractor, '_hyperparams_applied'):
-            max_components = min(X_arr.shape[0], X_arr.shape[1])
-            effective_components = min(n_components, max_components)
-            extractor.n_components = effective_components
+            # CRITICAL FIX: For consistent hyperparameters (element-wise fusion), always use the consistent value
+            # to ensure all modalities have the same n_components
+            if consistent_hyperparams and 'n_components' in consistent_hyperparams.get('extractor_params', {}):
+                target_components = consistent_hyperparams['extractor_params']['n_components']
+                logger.info(f"Using CONSISTENT n_components={target_components} from hyperparameters for {modality_name or 'unknown'} modality")
+                extractor.n_components = target_components
+            else:
+                max_components = min(X_arr.shape[0], X_arr.shape[1])
+                effective_components = min(n_components, max_components)
+                extractor.n_components = effective_components
         
         # Fit and transform
         # Check if extractor requires y parameter using signature inspection
@@ -3380,6 +3408,40 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
             fitted_extractor.fit(X_arr)
             X_transformed = fitted_extractor.transform(X_arr)
         
+        # CRITICAL FIX: For KPCA, check if we got fewer components than expected due to gamma issues
+        if (hasattr(fitted_extractor, '__class__') and 'KernelPCA' in fitted_extractor.__class__.__name__ and
+            hasattr(fitted_extractor, 'n_components') and X_transformed is not None):
+            
+            expected_components = fitted_extractor.n_components
+            actual_components = X_transformed.shape[1]
+            
+            if actual_components < expected_components:
+                logger.warning(f"KPCA produced {actual_components} components instead of {expected_components} for {modality_name or 'unknown'} modality")
+                logger.info(f"Attempting to fix KPCA gamma parameter for consistent component count")
+                
+                # Try with smaller gamma values
+                for gamma_candidate in [0.1, 0.01, 0.001]:
+                    try:
+                        logger.debug(f"Trying KPCA with gamma={gamma_candidate}")
+                        retry_extractor = copy.deepcopy(extractor)
+                        retry_extractor.gamma = gamma_candidate
+                        retry_extractor.fit(X_arr)
+                        X_retry = retry_extractor.transform(X_arr)
+                        
+                        if X_retry.shape[1] >= expected_components:
+                            logger.info(f"KPCA gamma fix successful: gamma={gamma_candidate} produces {X_retry.shape[1]} components")
+                            fitted_extractor = retry_extractor
+                            X_transformed = X_retry
+                            break
+                    except Exception as retry_error:
+                        logger.debug(f"KPCA retry with gamma={gamma_candidate} failed: {retry_error}")
+                        continue
+                
+                # If still not enough components, log a warning
+                if X_transformed.shape[1] < expected_components:
+                    logger.warning(f"Could not achieve {expected_components} components for {modality_name or 'unknown'} modality even with gamma adjustment")
+                    logger.warning(f"Final component count: {X_transformed.shape[1]} (this may cause fusion inconsistencies)")
+        
         result = (fitted_extractor, X_transformed)
         _extractor_cache['ext_reg'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
         return result
@@ -3394,16 +3456,28 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
             try:
                 # Fall back to regular PCA with CONSISTENT components across all modalities
                 from sklearn.decomposition import PCA
-                # Use a fixed, conservative number that works for all modalities
-                # This ensures consistent dimensions for fusion
-                safe_components = min(8, n_components // 2, X.shape[0] - 2)
+                
+                # CONSISTENCY FIX: Use consistent hyperparameters if provided (for element-wise fusion methods)
+                if consistent_hyperparams and consistent_hyperparams.get('n_components'):
+                    # Use the consistent n_components from hyperparameters
+                    target_components = consistent_hyperparams['n_components']
+                    logger.info(f"Using consistent n_components={target_components} from hyperparameters for KPCA fallback")
+                else:
+                    # Use a fixed, conservative number that works for all modalities
+                    # This ensures consistent dimensions for fusion
+                    target_components = min(8, n_components // 2, X.shape[0] - 2)
+                
+                safe_components = min(target_components, X_arr.shape[0] - 1, X_arr.shape[1])
                 safe_components = max(1, safe_components)  # Ensure at least 1 component
                 
                 fallback_extractor = PCA(n_components=safe_components, random_state=42)
                 fallback_extractor.fit(X_arr)
                 X_transformed = fallback_extractor.transform(X_arr)
                 
-                logger.info(f"KPCA fallback to PCA successful with {safe_components} components (consistent across modalities)")
+                if consistent_hyperparams:
+                    logger.info(f"KPCA fallback to PCA with CONSISTENT {safe_components} components (from hyperparams: {target_components})")
+                else:
+                    logger.info(f"KPCA fallback to PCA successful with {safe_components} components (consistent across modalities)")
                 result = (fallback_extractor, X_transformed)
                 _extractor_cache['ext_reg'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
                 return result
@@ -3413,7 +3487,7 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         
         return None, None
 
-def cached_fit_transform_extractor_classification(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None, fusion_method="attention_weighted"):
+def cached_fit_transform_extractor_classification(X, y, extractor, n_components, ds_name=None, fold_idx=0, modality_name=None, model_name=None, fusion_method="attention_weighted", consistent_hyperparams=None):
     """
     Cached version of fit_transform for classification extractors with hyperparameter loading.
     
@@ -3458,36 +3532,41 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
     try:
         # Load and apply hyperparameters if dataset name is provided
         if ds_name and model_name:
-            # Use the new feature-first hyperparameter loading system
-            hyperparams = load_feature_first_hyperparameters(
-                dataset=ds_name,
-                algorithm=extractor_name,
-                model=model_name,
-                fusion_method=fusion_method,
-                approach="extractor"
-            )
-            
-            if hyperparams['extractor_params']:
-                best_hyperparams = hyperparams
+            # CONSISTENCY FIX: Use consistent hyperparameters if provided (for element-wise fusion methods)
+            if consistent_hyperparams:
+                best_hyperparams = consistent_hyperparams
+                logger.info(f"Using consistent hyperparameters for {ds_name}_{extractor_name} (source: {best_hyperparams['source']})")
             else:
-                # Fallback: try other model combinations if specific one not found
-                model_candidates = ["LogisticRegression", "RandomForestClassifier", "SVC"]
-                best_hyperparams = None
+                # Use the new feature-first hyperparameter loading system
+                hyperparams = load_feature_first_hyperparameters(
+                    dataset=ds_name,
+                    algorithm=extractor_name,
+                    model=model_name,
+                    fusion_method=fusion_method,
+                    approach="extractor"
+                )
                 
-                for fallback_model in model_candidates:
-                    if fallback_model == model_name:
-                        continue  # Skip the one we already tried
-                    hyperparams = load_feature_first_hyperparameters(
-                        dataset=ds_name,
-                        algorithm=extractor_name,
-                        model=fallback_model,
-                        fusion_method=fusion_method,
-                        approach="extractor"
-                    )
-                    if hyperparams['extractor_params']:
-                        best_hyperparams = hyperparams
-                        logger.warning(f"Using fallback hyperparameters from {fallback_model} for {model_name}")
-                        break
+                if hyperparams['extractor_params']:
+                    best_hyperparams = hyperparams
+                else:
+                    # Fallback: try other model combinations if specific one not found
+                    model_candidates = ["LogisticRegression", "RandomForestClassifier", "SVC"]
+                    best_hyperparams = None
+                    
+                    for fallback_model in model_candidates:
+                        if fallback_model == model_name:
+                            continue  # Skip the one we already tried
+                        hyperparams = load_feature_first_hyperparameters(
+                            dataset=ds_name,
+                            algorithm=extractor_name,
+                            model=fallback_model,
+                            fusion_method=fusion_method,
+                            approach="extractor"
+                        )
+                        if hyperparams['extractor_params']:
+                            best_hyperparams = hyperparams
+                            logger.warning(f"Using fallback hyperparameters from {fallback_model} for {model_name}")
+                            break
             
             if best_hyperparams and best_hyperparams['extractor_params']:
                 try:
@@ -3530,16 +3609,23 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
         
         # Set n_components if the extractor supports it and it's not already set by hyperparameters
         if hasattr(extractor, 'n_components') and not hasattr(extractor, '_hyperparams_applied'):
-            max_components = min(X_arr.shape[0], X_arr.shape[1])
-            
-            # Special handling for LDA: max components is min(n_features, n_classes - 1)
-            if extractor.__class__.__name__ == 'LinearDiscriminantAnalysis' and y_arr is not None:
-                n_classes = len(np.unique(y_arr))
-                max_components = min(max_components, n_classes - 1)
-            
-            effective_components = min(n_components, max_components)
-            if effective_components > 0:
-                extractor.n_components = effective_components
+            # CRITICAL FIX: For consistent hyperparameters (element-wise fusion), always use the consistent value
+            # to ensure all modalities have the same n_components
+            if consistent_hyperparams and 'n_components' in consistent_hyperparams.get('extractor_params', {}):
+                target_components = consistent_hyperparams['extractor_params']['n_components']
+                logger.info(f"Using CONSISTENT n_components={target_components} from hyperparameters for {modality_name or 'unknown'} modality")
+                extractor.n_components = target_components
+            else:
+                max_components = min(X_arr.shape[0], X_arr.shape[1])
+                
+                # Special handling for LDA: max components is min(n_features, n_classes - 1)
+                if extractor.__class__.__name__ == 'LinearDiscriminantAnalysis' and y_arr is not None:
+                    n_classes = len(np.unique(y_arr))
+                    max_components = min(max_components, n_classes - 1)
+                
+                effective_components = min(n_components, max_components)
+                if effective_components > 0:
+                    extractor.n_components = effective_components
         
         # Fit and transform
         # Check if extractor requires y parameter using signature inspection
@@ -3564,6 +3650,43 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
             fitted_extractor.fit(X_arr)
             X_transformed = fitted_extractor.transform(X_arr)
         
+        # CRITICAL FIX: For KPCA, check if we got fewer components than expected due to gamma issues
+        if (hasattr(fitted_extractor, '__class__') and 'KernelPCA' in fitted_extractor.__class__.__name__ and
+            hasattr(fitted_extractor, 'n_components') and X_transformed is not None):
+            
+            expected_components = fitted_extractor.n_components
+            actual_components = X_transformed.shape[1]
+            
+            if actual_components < expected_components:
+                logger.warning(f"KPCA produced {actual_components} components instead of {expected_components} for {modality_name or 'unknown'} modality")
+                logger.info(f"Attempting to fix KPCA gamma parameter for consistent component count")
+                
+                # Try with smaller gamma values
+                for gamma_candidate in [0.1, 0.01, 0.001]:
+                    try:
+                        logger.debug(f"Trying KPCA with gamma={gamma_candidate}")
+                        retry_extractor = copy.deepcopy(extractor)
+                        retry_extractor.gamma = gamma_candidate
+                        if requires_y:
+                            retry_extractor.fit(X_arr, y_arr)
+                        else:
+                            retry_extractor.fit(X_arr)
+                        X_retry = retry_extractor.transform(X_arr)
+                        
+                        if X_retry.shape[1] >= expected_components:
+                            logger.info(f"KPCA gamma fix successful: gamma={gamma_candidate} produces {X_retry.shape[1]} components")
+                            fitted_extractor = retry_extractor
+                            X_transformed = X_retry
+                            break
+                    except Exception as retry_error:
+                        logger.debug(f"KPCA retry with gamma={gamma_candidate} failed: {retry_error}")
+                        continue
+                
+                # If still not enough components, log a warning
+                if X_transformed.shape[1] < expected_components:
+                    logger.warning(f"Could not achieve {expected_components} components for {modality_name or 'unknown'} modality even with gamma adjustment")
+                    logger.warning(f"Final component count: {X_transformed.shape[1]} (this may cause fusion inconsistencies)")
+        
         result = (fitted_extractor, X_transformed)
         _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
         return result
@@ -3578,16 +3701,28 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
             try:
                 # Fall back to regular PCA with CONSISTENT components across all modalities
                 from sklearn.decomposition import PCA
-                # Use a fixed, conservative number that works for all modalities
-                # This ensures consistent dimensions for fusion
-                safe_components = min(8, n_components // 2, X.shape[0] - 2)
+                
+                # CONSISTENCY FIX: Use consistent hyperparameters if provided (for element-wise fusion methods)
+                if consistent_hyperparams and consistent_hyperparams.get('n_components'):
+                    # Use the consistent n_components from hyperparameters
+                    target_components = consistent_hyperparams['n_components']
+                    logger.info(f"Using consistent n_components={target_components} from hyperparameters for KPCA fallback")
+                else:
+                    # Use a fixed, conservative number that works for all modalities
+                    # This ensures consistent dimensions for fusion
+                    target_components = min(8, n_components // 2, X.shape[0] - 2)
+                
+                safe_components = min(target_components, X_arr.shape[0] - 1, X_arr.shape[1])
                 safe_components = max(1, safe_components)  # Ensure at least 1 component
                 
                 fallback_extractor = PCA(n_components=safe_components, random_state=42)
                 fallback_extractor.fit(X_arr)
                 X_transformed = fallback_extractor.transform(X_arr)
                 
-                logger.info(f"KPCA fallback to PCA successful with {safe_components} components (consistent across modalities)")
+                if consistent_hyperparams:
+                    logger.info(f"KPCA fallback to PCA with CONSISTENT {safe_components} components (from hyperparams: {target_components})")
+                else:
+                    logger.info(f"KPCA fallback to PCA successful with {safe_components} components (consistent across modalities)")
                 result = (fallback_extractor, X_transformed)
                 _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
                 return result
@@ -3621,14 +3756,26 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
                 try:
                     # Final fallback to PCA
                     from sklearn.decomposition import PCA
-                    safe_components = min(2, X.shape[0] - 1, X.shape[1] // 4)
+                    
+                    # CONSISTENCY FIX: Use consistent hyperparameters if provided (for element-wise fusion methods)
+                    if consistent_hyperparams and consistent_hyperparams.get('n_components'):
+                        # Use the consistent n_components from hyperparameters
+                        target_components = consistent_hyperparams['n_components']
+                        logger.info(f"Using consistent n_components={target_components} from hyperparameters for LDA final fallback")
+                    else:
+                        target_components = min(2, X.shape[0] - 1, X.shape[1] // 4)
+                    
+                    safe_components = min(target_components, X_arr.shape[0] - 1, X_arr.shape[1])
                     safe_components = max(1, safe_components)
                     
                     final_fallback = PCA(n_components=safe_components, random_state=42)
                     final_fallback.fit(X_arr)
                     X_transformed = final_fallback.transform(X_arr)
                     
-                    logger.info(f"LDA final fallback to PCA successful with {safe_components} components")
+                    if consistent_hyperparams:
+                        logger.info(f"LDA final fallback to PCA with CONSISTENT {safe_components} components (from hyperparams: {target_components})")
+                    else:
+                        logger.info(f"LDA final fallback to PCA successful with {safe_components} components")
                     result = (final_fallback, X_transformed)
                     _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
                     return result
@@ -3694,7 +3841,7 @@ def transform_extractor_classification(X, fitted_extractor):
         logger.warning(f"Transform extractor classification failed: {str(e)}")
         return None
 
-def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, ds_name=None, modality_name=None, fold_idx=0, model_name=None, fusion_method="attention_weighted"):
+def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, ds_name=None, modality_name=None, fold_idx=0, model_name=None, fusion_method="attention_weighted", consistent_hyperparams=None):
     """
     Cached version of fit_transform for classification selectors.
     
@@ -3772,6 +3919,7 @@ def cached_fit_transform_selector_classification(X, y, selector_code, n_feats, d
                     n_features=n_feats,
                     approach="selector"
                 )
+                
                 
                 # Only apply selector-specific parameters to the selector
                 # model_params should be applied later to the final model, not the selector
@@ -4406,6 +4554,82 @@ def get_extraction_n_components_list(dataset, extractors, task):
     
     return extraction_n_components
 
+def load_consistent_hyperparameters_for_fusion(dataset, algorithm, model, fusion_method, approach="extractor"):
+    """
+    Load hyperparameters that will be applied consistently across all modalities for fusion.
+    
+    This function ensures that for element-wise fusion methods (average, sum, max), all modalities
+    use the same hyperparameter source and thus get consistent n_components values.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name
+    algorithm : str
+        Algorithm name (extractor or selector)
+    model : str
+        Model name
+    fusion_method : str
+        Fusion method name
+    approach : str
+        Either "extractor" or "selector"
+        
+    Returns
+    -------
+    dict
+        Hyperparameters with consistent source, or None if no suitable hyperparameters found
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Element-wise fusion methods that require consistent component counts
+    element_wise_fusion_methods = ['average', 'sum', 'max']
+    
+    # First try the specific model
+    hyperparams = load_feature_first_hyperparameters(
+        dataset=dataset,
+        algorithm=algorithm,
+        model=model,
+        fusion_method=fusion_method,
+        approach=approach
+    )
+    
+    if hyperparams['algorithm_params'] or hyperparams['extractor_params']:
+        logger.info(f"Found consistent hyperparameters for {dataset}_{algorithm}_{model} (source: {hyperparams['source']})")
+        return hyperparams
+    
+    # If element-wise fusion method and no specific hyperparameters found,
+    # try fallback models in a deterministic order to ensure consistency
+    if fusion_method in element_wise_fusion_methods:
+        # Determine task type
+        is_regression = model in ["LinearRegression", "ElasticNet", "RandomForestRegressor", "SVR"]
+        
+        if is_regression:
+            fallback_models = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]
+        else:
+            fallback_models = ["LogisticRegression", "RandomForestClassifier", "SVC"]
+        
+        # Try fallback models in order
+        for fallback_model in fallback_models:
+            if fallback_model == model:
+                continue  # Skip the one we already tried
+                
+            hyperparams = load_feature_first_hyperparameters(
+                dataset=dataset,
+                algorithm=algorithm,
+                model=fallback_model,
+                fusion_method=fusion_method,
+                approach=approach
+            )
+            
+            if hyperparams['algorithm_params'] or hyperparams['extractor_params']:
+                logger.warning(f"Using consistent fallback hyperparameters from {fallback_model} for {model} "
+                             f"(required for {fusion_method} fusion consistency)")
+                return hyperparams
+    
+    # No suitable hyperparameters found
+    logger.debug(f"No consistent hyperparameters found for {dataset}_{algorithm}_{model}")
+    return None
+
 def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method, n_features=None, approach="extractor"):
     """
     Load best hyperparameters for feature-first pipeline with correct file naming convention.
@@ -4854,4 +5078,78 @@ def run_cache_diagnostics(dataset_name: str = "test", modalities: List[str] = No
     logger.info("=== CACHE DIAGNOSTICS COMPLETE ===")
     
     return diagnostics
+    """
+    Load hyperparameters that will be applied consistently across all modalities for fusion.
+    
+    This function ensures that for element-wise fusion methods (average, sum, max), all modalities
+    use the same hyperparameter source and thus get consistent n_components values.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name
+    algorithm : str
+        Algorithm name (extractor or selector)
+    model : str
+        Model name
+    fusion_method : str
+        Fusion method name
+    approach : str
+        Either "extractor" or "selector"
+        
+    Returns
+    -------
+    dict
+        Hyperparameters with consistent source, or None if no suitable hyperparameters found
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Element-wise fusion methods that require consistent component counts
+    element_wise_fusion_methods = ['average', 'sum', 'max']
+    
+    # First try the specific model
+    hyperparams = load_feature_first_hyperparameters(
+        dataset=dataset,
+        algorithm=algorithm,
+        model=model,
+        fusion_method=fusion_method,
+        approach=approach
+    )
+    
+    if hyperparams['algorithm_params'] or hyperparams['extractor_params']:
+        logger.info(f"Found consistent hyperparameters for {dataset}_{algorithm}_{model} (source: {hyperparams['source']})")
+        return hyperparams
+    
+    # If element-wise fusion method and no specific hyperparameters found,
+    # try fallback models in a deterministic order to ensure consistency
+    if fusion_method in element_wise_fusion_methods:
+        # Determine task type
+        is_regression = model in ["LinearRegression", "ElasticNet", "RandomForestRegressor", "SVR"]
+        
+        if is_regression:
+            fallback_models = ["LinearRegression", "ElasticNet", "RandomForestRegressor"]
+        else:
+            fallback_models = ["LogisticRegression", "RandomForestClassifier", "SVC"]
+        
+        # Try fallback models in order
+        for fallback_model in fallback_models:
+            if fallback_model == model:
+                continue  # Skip the one we already tried
+                
+            hyperparams = load_feature_first_hyperparameters(
+                dataset=dataset,
+                algorithm=algorithm,
+                model=fallback_model,
+                fusion_method=fusion_method,
+                approach=approach
+            )
+            
+            if hyperparams['algorithm_params'] or hyperparams['extractor_params']:
+                logger.warning(f"Using consistent fallback hyperparameters from {fallback_model} for {model} "
+                             f"(required for {fusion_method} fusion consistency)")
+                return hyperparams
+    
+    # No suitable hyperparameters found
+    logger.debug(f"No consistent hyperparameters found for {dataset}_{algorithm}_{model}")
+    return None
 

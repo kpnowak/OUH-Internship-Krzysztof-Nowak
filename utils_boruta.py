@@ -80,7 +80,7 @@ def boruta_selector(X: np.ndarray, y: np.ndarray, n_feats: int, task: str = 'reg
         # Make Boruta more robust by adjusting parameters
         boruta = BorutaPy(
             model,
-            n_estimators='auto',
+            n_estimators=100,
             verbose=0,
             random_state=random_state,
             max_iter=30,  # Reduced from 50 for faster execution

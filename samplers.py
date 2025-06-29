@@ -259,7 +259,7 @@ def dynamic_cv(y, max_splits=5, is_regression=False):
         max_splits_by_total = n_samples // 5  # At least 5 total samples per fold
         
         # Take the minimum of both constraints
-        n_splits = min(max_splits, max_splits_by_class, max_splits_by_total)
+        n_splits = min(max_splits, int(max_splits_by_class), int(max_splits_by_total))
         
         # Handle edge cases
         if n_splits < 2:
@@ -384,13 +384,4 @@ def recommend_sampling_strategy(y, verbose=True):
         if recommendations['use_undersampling']:
             print(f"  Use undersampling: Yes")
     
-    return recommendations 
-
-def safe_sampler(y):
-    _, counts = np.unique(y, return_counts=True)
-    m = counts.min()
-    if m >= 6:
-        return SMOTE(k_neighbors=min(5, m-1))
-    if m >= 3:
-        return RandomOverSampler()
-    return None
+    return recommendations

@@ -158,7 +158,10 @@ def setup_environment():
         os.environ["DEBUG_RESOURCES"] = "1"
         
         # Set Octave executable path for oct2py
-        octave_path = r"C:\Users\krzys\AppData\Local\Programs\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+        # laptop 1 - my
+        #os.environ["OCTAVE_EXECUTABLE"] = r"C:\Users\krzys\AppData\Local\Programs\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+        # Laptop 2 - Tata
+        octave_path = r"C:\Program Files\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
         if os.path.exists(octave_path):
             os.environ["OCTAVE_EXECUTABLE"] = octave_path
             logger.info(f"Octave executable configured: {octave_path}")
@@ -262,7 +265,7 @@ if __name__ == "__main__":
         # Run the main pipeline with memory monitoring
         try:
             if memory_monitor:
-                with memory_monitor("main_pipeline"):
+                with memory_monitor("main_pipeline"):  # type: ignore
                     cli_main()  # Call the validated CLI main function
             else:
                 logger.info("Running without memory monitoring")

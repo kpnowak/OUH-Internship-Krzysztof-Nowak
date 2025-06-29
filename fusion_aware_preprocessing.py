@@ -304,7 +304,7 @@ class FusionAwarePreprocessor:
         
         if len(modality_arrays) > 1 and self.fusion_object_ is not None:
             try:
-                fused_data = self.fusion_object_.transform(modality_arrays)
+                fused_data = self.fusion_object_.transform(modality_arrays)  # type: ignore
             except Exception as e:
                 logger.warning(f"Fusion transform failed: {str(e)}, using concatenation")
                 fused_data = np.column_stack(modality_arrays)
@@ -353,7 +353,7 @@ class FusionAwarePreprocessor:
         
         if len(modality_arrays) > 1 and self.fusion_object_ is not None:
             try:
-                final_data = self.fusion_object_.transform(modality_arrays)
+                final_data = self.fusion_object_.transform(modality_arrays)  # type: ignore
             except Exception as e:
                 logger.warning(f"Fusion transform failed: {str(e)}, using concatenation")
                 final_data = np.column_stack(modality_arrays)

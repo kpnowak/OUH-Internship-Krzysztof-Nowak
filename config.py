@@ -10,7 +10,11 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Union
 
 # Set Octave executable path for oct2py
-os.environ["OCTAVE_EXECUTABLE"] = r"C:\Users\krzys\AppData\Local\Programs\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+# laptop 1 - my
+#os.environ["OCTAVE_EXECUTABLE"] = r"C:\Users\krzys\AppData\Local\Programs\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+# Laptop 2 - Tata
+os.environ["OCTAVE_EXECUTABLE"] = r"C:\Program Files\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+
 
 # Suppress convergence warnings for cleaner output
 try:
@@ -901,7 +905,7 @@ class DatasetConfig:
 # Users should modify these with their actual datasets
 
 # Regression datasets
-REGRESSION_DATASETS = [
+REGRESSION_DATASETS = [    
     DatasetConfig(
         name="AML",
         base_path="data/aml",

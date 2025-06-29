@@ -27,6 +27,7 @@ import logging
 import sys
 from collections import Counter
 from datetime import datetime
+from typing import cast, Any
 
 def load_dataset_configs():
     """Load dataset configurations from the main pipeline's config.py"""
@@ -68,13 +69,13 @@ def setup_logging():
 
 def calculate_missing_percentage(df, exclude_first_col=True):
     """Calculate missing data percentage - includes both NaN and 0 values"""
-    if df is None or df.empty:
+    if df is None or df.empty:  # type: ignore
         return 0.0
     
     # Exclude first column (usually ID) from missing calculation
     data_cols = df.iloc[:, 1:] if exclude_first_col and df.shape[1] > 1 else df
     
-    if data_cols.empty:
+    if data_cols.empty:  # type: ignore
         return 0.0
     
     # Calculate missing percentage - count both NaN and 0 values as missing
@@ -114,19 +115,19 @@ def calculate_variance_statistics(array):
 
 def analyze_data_imbalance(clinical_df, outcome_column, dataset_type, dataset_name=None):
     """Analyze data imbalance for regression or classification (same as original)"""
-    if clinical_df is None or outcome_column not in clinical_df.columns:
+    if clinical_df is None or outcome_column not in clinical_df.columns:  # type: ignore
         return "No outcome data available"
     
-    outcome_data = clinical_df[outcome_column].dropna()
+    outcome_data = clinical_df[outcome_column].dropna()  # type: ignore
     
-    if outcome_data.empty:
+    if outcome_data.empty:  # type: ignore
         return "No valid outcome values"
     
     if dataset_type == 'regression':
         # For regression, create bins and show ranges with counts
         try:
-            outcome_numeric = pd.to_numeric(outcome_data, errors='coerce').dropna()
-            if outcome_numeric.empty:
+            outcome_numeric = pd.to_numeric(outcome_data, errors='coerce').dropna()  # type: ignore
+            if outcome_numeric.empty:  # type: ignore
                 return "No numeric outcome values"
             
             # Define custom bin boundaries for specific datasets
@@ -137,26 +138,26 @@ def analyze_data_imbalance(clinical_df, outcome_column, dataset_type, dataset_na
             else:
                 # Default: Create 5 equal-width bins
                 bins = pd.cut(outcome_numeric, bins=5, include_lowest=True)
-                bin_counts = bins.value_counts().sort_index()
+                bin_counts = bins.value_counts().sort_index()  # type: ignore
                 
                 # Format as "range: count"
                 ranges = []
                 for interval, count in bin_counts.items():
-                    left = round(interval.left, 2)
-                    right = round(interval.right, 2)
+                    left = round(interval.left, 2)  # type: ignore
+                    right = round(interval.right, 2)  # type: ignore
                     ranges.append(f"[{left}-{right}]: {count}")
                 
                 return "; ".join(ranges)
             
             # Use custom bin edges for AML and Sarcoma
             bins = pd.cut(outcome_numeric, bins=bin_edges, include_lowest=True, right=False)
-            bin_counts = bins.value_counts().sort_index()
+            bin_counts = bins.value_counts().sort_index()  # type: ignore
             
             # Format as "range: count"
             ranges = []
             for interval, count in bin_counts.items():
-                left = int(interval.left)
-                right = int(interval.right)
+                left = int(interval.left)  # type: ignore
+                right = int(interval.right)  # type: ignore
                 ranges.append(f"[{left}-{right}]: {count}")
             
             return "; ".join(ranges)
@@ -171,19 +172,19 @@ def analyze_data_imbalance(clinical_df, outcome_column, dataset_type, dataset_na
 
 def analyze_data_imbalance_from_series(y_series, dataset_type, dataset_name=None):
     """Analyze data imbalance directly from a pandas Series (for regression or classification)"""
-    if y_series is None or y_series.empty:
+    if y_series is None or y_series.empty:  # type: ignore
         return "No outcome data available"
     
-    outcome_data = y_series.dropna()
+    outcome_data = y_series.dropna()  # type: ignore
     
-    if outcome_data.empty:
+    if outcome_data.empty:  # type: ignore
         return "No valid outcome values"
     
     if dataset_type == 'regression':
         # For regression, create bins and show ranges with counts
         try:
-            outcome_numeric = pd.to_numeric(outcome_data, errors='coerce').dropna()
-            if outcome_numeric.empty:
+            outcome_numeric = pd.to_numeric(outcome_data, errors='coerce').dropna()  # type: ignore
+            if outcome_numeric.empty:  # type: ignore
                 return "No numeric outcome values"
             
             # Define custom bin boundaries for specific datasets
@@ -194,26 +195,26 @@ def analyze_data_imbalance_from_series(y_series, dataset_type, dataset_name=None
             else:
                 # Default: Create 5 equal-width bins
                 bins = pd.cut(outcome_numeric, bins=5, include_lowest=True)
-                bin_counts = bins.value_counts().sort_index()
+                bin_counts = bins.value_counts().sort_index()  # type: ignore
                 
                 # Format as "range: count"
                 ranges = []
                 for interval, count in bin_counts.items():
-                    left = round(interval.left, 2)
-                    right = round(interval.right, 2)
+                    left = round(interval.left, 2)  # type: ignore
+                    right = round(interval.right, 2)  # type: ignore
                     ranges.append(f"[{left}-{right}]: {count}")
                 
                 return "; ".join(ranges)
             
             # Use custom bin edges for AML and Sarcoma
             bins = pd.cut(outcome_numeric, bins=bin_edges, include_lowest=True, right=False)
-            bin_counts = bins.value_counts().sort_index()
+            bin_counts = bins.value_counts().sort_index()  # type: ignore
             
             # Format as "range: count"
             ranges = []
             for interval, count in bin_counts.items():
-                left = int(interval.left)
-                right = int(interval.right)
+                left = int(interval.left)  # type: ignore
+                right = int(interval.right)  # type: ignore
                 ranges.append(f"[{left}-{right}]: {count}")
             
             return "; ".join(ranges)
@@ -226,65 +227,84 @@ def analyze_data_imbalance_from_series(y_series, dataset_type, dataset_name=None
         class_info = [f"{cls}: {count}" for cls, count in class_counts.items()]
         return "; ".join(class_info)
 
-def load_raw_dataset(dataset_name, config, logger):
-    """Load raw dataset using the EXACT same approach as the main pipeline"""
+def detect_separator_and_load(file_path):
+    """Detect separator and load CSV file properly (copied from original raw data script)"""
+    if not os.path.exists(file_path):
+        return None
+    
     try:
-        from data_io import load_dataset
-        from config import DatasetConfig
+        # First, try to read the first line to understand the format
+        with open(file_path, 'r', encoding='utf-8') as f:
+            first_line = f.readline().strip()
         
-        logger.info(f"Loading raw dataset: {dataset_name}")
+        # Check if it's space-separated with quotes (like our gene expression files)
+        if first_line.count('"') > 10:  # Many quoted values suggest space separation
+            # Use pandas with space separator and handle quotes
+            df = pd.read_csv(file_path, sep=' ', quoting=csv.QUOTE_ALL)
+            return df
         
-        # Get configuration for the dataset (same as main pipeline)
-        dataset_config = DatasetConfig.get_config(dataset_name.lower())
-        if not dataset_config:
-            logger.error(f"No configuration found for dataset: {dataset_name}")
-            return None, None, None, None
+        # Try different separators
+        separators = [',', '\t', ';', '|']
+        for sep in separators:
+            if sep in first_line:
+                df = pd.read_csv(file_path, sep=sep)
+                return df
         
-        # Map modality names to short names (EXACT same logic as main pipeline)
-        modality_mapping = {
-            "Gene Expression": "exp",
-            "miRNA": "mirna", 
-            "Methylation": "methy"
-        }
+        # Default to comma if no separator detected
+        df = pd.read_csv(file_path)
+        return df
         
-        modality_short_names = []
-        for full_name in dataset_config['modalities'].keys():
-            short_name = modality_mapping.get(full_name, full_name.lower())
-            modality_short_names.append(short_name)
+    except Exception as e:
+        return None
+
+def calculate_array_missing_percentage_processed_only(array):
+    """Calculate missing data percentage for processed numpy array - ONLY counts NaN values, not zeros"""
+    if array is None or array.size == 0:
+        return 0.0
+    
+    total_values = array.size
+    nan_values = np.isnan(array).sum()
+    # DO NOT count zero values as missing for processed data
+    missing_values = nan_values
+    
+    return (missing_values / total_values) * 100 if total_values > 0 else 0.0
+
+def load_raw_dataset_direct(dataset_name, config, logger):
+    """Load raw dataset directly from files (like the original raw data analysis)"""
+    try:
+        logger.info(f"Loading raw dataset directly from files: {dataset_name}")
         
-        # Determine task type (same logic as main pipeline)
-        outcome_col = dataset_config.get('outcome_col', '')
-        if 'blast' in outcome_col.lower() or 'length' in outcome_col.lower():
-            task_type = 'regression'
-        else:
-            task_type = 'classification'
+        # File paths (same as original script)
+        base_path = f"data/{dataset_name}"
+        clinical_path = f"data/clinical/{dataset_name}.csv"
+        exp_path = f"{base_path}/exp.csv"
+        mirna_path = f"{base_path}/mirna.csv"
+        methy_path = f"{base_path}/methy.csv"
         
-        logger.info(f"Task type: {task_type}, Outcome column: {outcome_col}")
-        logger.info(f"Modalities to load: {modality_short_names}")
+        # Load clinical data
+        clinical_df = detect_separator_and_load(clinical_path)
         
-        # Load dataset using the main pipeline's approach
-        # This function already handles clinical data loading with multiple parsing strategies
-        modalities_data, y_series, common_ids, is_regression = load_dataset(
-            ds_name=dataset_name.lower(),
-            modalities=modality_short_names,
-            outcome_col=dataset_config['outcome_col'],
-            task_type=task_type,
-            parallel=True,
-            use_cache=True
-        )
+        # Load modality data
+        exp_df = detect_separator_and_load(exp_path)
+        mirna_df = detect_separator_and_load(mirna_path)
+        methy_df = detect_separator_and_load(methy_path)
         
-        if not modalities_data or y_series is None:
-            logger.error(f"Failed to load dataset: {dataset_name}")
-            return None, None, None, None
-            
-        logger.info(f"Successfully loaded {dataset_name} with {len(common_ids)} common samples")
-        logger.info(f"Raw data loaded: {len(modalities_data)} modalities")
+        # Map to modality names used in the pipeline
+        raw_modalities = {}
+        if exp_df is not None:
+            raw_modalities['exp'] = exp_df
+        if mirna_df is not None:
+            raw_modalities['mirna'] = mirna_df
+        if methy_df is not None:
+            raw_modalities['methy'] = methy_df
         
-        return modalities_data, y_series, common_ids, is_regression
+        logger.info(f"Loaded raw data: {len(raw_modalities)} modalities, clinical: {'Yes' if clinical_df is not None else 'No'}")
+        
+        return raw_modalities, clinical_df
         
     except Exception as e:
         logger.error(f"Error loading raw dataset {dataset_name}: {e}")
-        return None, None, None, None
+        return None, None
 
 def apply_preprocessing_pipeline(modalities_data, y_series, common_ids, dataset_name, task_type, logger):
     """Apply the 4-phase enhanced preprocessing pipeline"""
@@ -349,10 +369,10 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
         'Outcome_Column': config['outcome_column']
     }
     
-    # Step 1: Load raw dataset
-    modalities_data, y_series, common_ids, is_regression = load_raw_dataset(dataset_name, config, logger)
+    # Step 1: Load raw dataset directly from files (like original raw data analysis)
+    raw_modalities_direct, clinical_df = load_raw_dataset_direct(dataset_name, config, logger)
     
-    if not modalities_data or y_series is None:
+    if not raw_modalities_direct or clinical_df is None:
         logger.error(f"Failed to load raw data for {dataset_name}")
         # Return empty result with error indicators
         result.update({
@@ -377,11 +397,48 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
         return result
     
     # Step 2: Get clinical data sample count from loaded data
-    # The y_series already contains the clinical data with proper sample intersection
-    result['Clinical_Samples'] = len(y_series)
-    logger.info(f"Clinical samples (with valid outcomes): {len(y_series)}")
+    result['Clinical_Samples'] = len(clinical_df)
+    logger.info(f"Clinical samples: {len(clinical_df)}")
     
-    # Step 3: Analyze raw modalities
+    # Step 2b: Load dataset using pipeline approach for preprocessing
+    try:
+        from data_io import load_dataset
+        from config import DatasetConfig
+        
+        # Get configuration for the dataset (same as main pipeline)
+        dataset_config = DatasetConfig.get_config(dataset_name.lower())
+        
+        # Map modality names to short names (EXACT same logic as main pipeline)
+        modality_mapping = {
+            "Gene Expression": "exp",
+            "miRNA": "mirna", 
+            "Methylation": "methy"
+        }
+        
+        modality_short_names = []
+        for full_name in dataset_config['modalities'].keys():
+            short_name = modality_mapping.get(full_name, full_name.lower())
+            modality_short_names.append(short_name)
+        
+        # Load dataset using the main pipeline's approach (for preprocessing only)
+        modalities_data, y_series, common_ids, is_regression = load_dataset(
+            ds_name=dataset_name.lower(),
+            modalities=modality_short_names,
+            outcome_col=dataset_config['outcome_col'],
+            task_type=config['type'],
+            parallel=True,
+            use_cache=True
+        )
+        
+        logger.info(f"Pipeline data loaded: {len(modalities_data)} modalities, {len(common_ids)} common samples")
+        
+    except Exception as e:
+        logger.error(f"Failed to load pipeline data for preprocessing: {e}")
+        modalities_data = None
+        y_series = None
+        common_ids = None
+    
+    # Step 3: Analyze raw modalities (using directly loaded data)
     logger.info("Analyzing raw modalities...")
     
     # Map modality short names to display names
@@ -392,12 +449,16 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
     }
     
     raw_modality_stats = {}
-    for modality_short_name, modality_df in modalities_data.items():
+    all_raw_values = []
+    
+    for modality_short_name, modality_df in raw_modalities_direct.items():
         modality_display_name = modality_name_mapping.get(modality_short_name, modality_short_name.capitalize())
         
-        # Raw statistics
-        raw_samples = modality_df.shape[1] - 1 if modality_df.shape[1] > 1 else 0  # Columns are samples (excluding ID)
-        raw_features = modality_df.shape[0]  # Rows are features
+        # Raw statistics (same as original raw data script)
+        # Samples = number of columns (excluding first column which is usually gene/feature ID)
+        raw_samples = modality_df.shape[1] - 1 if modality_df.shape[1] > 1 else 0
+        # Features = number of rows (genes/miRNAs/CpG sites)
+        raw_features = modality_df.shape[0]
         raw_missing_pct = calculate_missing_percentage(modality_df, exclude_first_col=True)
         
         # Calculate original variance (transpose to get samples x features)
@@ -420,14 +481,13 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
         }
         
         logger.info(f"  Raw {modality_display_name}: {raw_samples} samples, {raw_features} features, {raw_missing_pct:.2f}% missing, variance: {raw_variance:.4f}")
-    
-    # Calculate combined raw missing percentage
-    all_raw_values = []
-    for modality_df in modalities_data.values():
+        
+        # Collect data for combined missing calculation (excluding first column)
         data_portion = modality_df.iloc[:, 1:] if modality_df.shape[1] > 1 else modality_df
-        if not data_portion.empty:
+        if not data_portion.empty:  # type: ignore
             all_raw_values.extend(data_portion.values.flatten())
     
+    # Calculate combined raw missing percentage (same as original script)
     if all_raw_values:
         total_values = len(all_raw_values)
         nan_count = sum(1 for x in all_raw_values if pd.isna(x))
@@ -441,9 +501,15 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
     # Step 4: Apply preprocessing pipeline
     logger.info("Applying preprocessing pipeline...")
     
-    processed_modalities, y_aligned, pipeline_metadata = apply_preprocessing_pipeline(
-        modalities_data, y_series, common_ids, dataset_name, config['type'], logger
-    )
+    if modalities_data is not None and y_series is not None:
+        processed_modalities, y_aligned, pipeline_metadata = apply_preprocessing_pipeline(
+            modalities_data, y_series, common_ids, dataset_name, config['type'], logger
+        )
+    else:
+        logger.error("Cannot apply preprocessing - pipeline data not loaded")
+        processed_modalities = None
+        y_aligned = None
+        pipeline_metadata = None
     
     if not processed_modalities or y_aligned is None:
         logger.error(f"Failed to apply preprocessing for {dataset_name}")
@@ -473,7 +539,7 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
             # Processed statistics
             processed_samples = modality_array.shape[0]
             processed_features = modality_array.shape[1]
-            processed_missing_pct = calculate_array_missing_percentage(modality_array)
+            processed_missing_pct = calculate_array_missing_percentage_processed_only(modality_array)
             
             # Calculate scaled variance
             scaled_variance, _ = calculate_variance_statistics(modality_array)
@@ -491,7 +557,7 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
             
             logger.info(f"  Processed {modality_display_name}: {processed_samples} samples, {processed_features} features, {processed_missing_pct:.2f}% missing, variance: {scaled_variance:.4f}")
         
-        # Calculate combined processed missing percentage
+        # Calculate combined processed missing percentage (ONLY NaN values, not zeros)
         all_processed_values = []
         for modality_array in processed_modalities.values():
             all_processed_values.extend(modality_array.flatten())
@@ -499,8 +565,8 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
         if all_processed_values:
             total_values = len(all_processed_values)
             nan_count = sum(1 for x in all_processed_values if np.isnan(x))
-            zero_count = sum(1 for x in all_processed_values if not np.isnan(x) and x == 0)
-            missing_count = nan_count + zero_count
+            # DO NOT count zero values as missing for processed data
+            missing_count = nan_count
             combined_processed_missing = (missing_count / total_values) * 100
             result['Combined_Missing_Pct_Processed'] = round(combined_processed_missing, 2)
         else:
@@ -509,14 +575,14 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
         # Step 6: Calculate retention percentages
         logger.info("Calculating retention percentages...")
         
-        # Sample retention (based on the first modality or y_aligned)
-        original_samples = len(common_ids) if common_ids else 0
+        # Sample retention (based on original clinical samples vs processed samples)
+        original_samples = len(clinical_df)
         processed_samples = len(y_aligned) if y_aligned is not None else 0
         sample_retention = (processed_samples / original_samples * 100) if original_samples > 0 else 0.0
         result['Sample_Retention_Pct'] = round(sample_retention, 2)
         
         # Feature retention for each modality
-        for modality_short_name in modalities_data.keys():
+        for modality_short_name in raw_modality_stats.keys():
             modality_display_name = modality_name_mapping.get(modality_short_name, modality_short_name.capitalize())
             
             raw_features = raw_modality_stats[modality_short_name]['features']
@@ -533,9 +599,9 @@ def analyze_dataset_with_preprocessing(dataset_name, config, logger):
         logger.info(f"Sample retention: {sample_retention:.2f}% ({original_samples} -> {processed_samples})")
         logger.info(f"Quality score: {quality_score:.4f}")
     
-    # Step 7: Analyze data imbalance (using the loaded y_series data)
-    if y_series is not None and len(y_series) > 0:
-        imbalance = analyze_data_imbalance_from_series(y_series, config['type'], dataset_name)
+    # Step 7: Analyze data imbalance (using the clinical data)
+    if clinical_df is not None and len(clinical_df) > 0:
+        imbalance = analyze_data_imbalance(clinical_df, config['outcome_column'], config['type'], dataset_name)
         result['Data_Imbalance'] = imbalance
     else:
         result['Data_Imbalance'] = "No outcome data available"
@@ -666,7 +732,7 @@ def main():
         # Feature retention by modality
         for modality in ['GeneExp', 'miRNA', 'Methylation']:
             col = f'{modality}_Feature_Retention_Pct'
-            if col in successful.columns:
+            if col in successful.columns:  # type: ignore
                 avg_retention = successful[col].mean()
                 logger.info(f"Average {modality} feature retention: {avg_retention:.2f}%")
         
@@ -679,14 +745,14 @@ def main():
         for modality in ['GeneExp', 'miRNA', 'Methylation']:
             orig_col = f'{modality}_Original_Variance'
             scaled_col = f'{modality}_Scaled_Variance'
-            if orig_col in successful.columns and scaled_col in successful.columns:
+            if orig_col in successful.columns and scaled_col in successful.columns:  # type: ignore
                 avg_orig = successful[orig_col].mean()
                 avg_scaled = successful[scaled_col].mean()
                 logger.info(f"{modality}: Original variance: {avg_orig:.4f}, Scaled variance: {avg_scaled:.4f}")
     
     # Display the results preview
     logger.info(f"\nPreview of results:")
-    print("\n" + df_results.to_string(index=False, max_rows=10, max_cols=15))
+    print("\n" + str(df_results.head(10)))
     
     if len(df_results) > 10:
         logger.info(f"\n... showing first 10 rows of {len(df_results)} total datasets")

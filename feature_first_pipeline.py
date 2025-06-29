@@ -129,11 +129,26 @@ class FeatureFirstPipeline:
                 if not validation_result:
                     logger.warning(f"Cache key validation failed for modality {modality_name}")
         
+        # CONSISTENCY FIX: Pre-load consistent hyperparameters for element-wise fusion methods
+        consistent_hyperparams = None
+        element_wise_fusion_methods = ['average', 'sum', 'max']
+        if self.fusion_method in element_wise_fusion_methods:
+            from models import load_consistent_hyperparameters_for_fusion
+            consistent_hyperparams = load_consistent_hyperparameters_for_fusion(
+                dataset=dataset_name,
+                algorithm=algorithm_name,
+                model=model_name,
+                fusion_method=self.fusion_method,
+                approach="extractor"
+            )
+            if consistent_hyperparams:
+                logger.info(f"Preloaded consistent hyperparameters for {self.fusion_method} fusion: {consistent_hyperparams['source']}")
+        
         try:
             # Step 1: Apply feature processing to each modality separately
             processed_modalities = self._apply_feature_processing_to_modalities(
                 data_modalities, y, common_ids, algorithm_name, algorithm_obj, 
-                n_features_or_components, dataset_name, fold_idx, model_name
+                n_features_or_components, dataset_name, fold_idx, model_name, consistent_hyperparams
             )
             
             if not processed_modalities:
@@ -186,7 +201,8 @@ class FeatureFirstPipeline:
                                               n_features_or_components: int,
                                               dataset_name: str,
                                               fold_idx: int,
-                                              model_name: str) -> Dict[str, np.ndarray]:
+                                              model_name: str,
+                                              consistent_hyperparams: Dict[str, Any] = None) -> Dict[str, np.ndarray]:
         """
         Apply feature processing algorithm to each modality separately.
         
@@ -210,6 +226,8 @@ class FeatureFirstPipeline:
             Fold index
         model_name : str
             Model name
+        consistent_hyperparams : Dict[str, Any], optional
+            Consistent hyperparameters for element-wise fusion methods
             
         Returns
         -------
@@ -247,14 +265,16 @@ class FeatureFirstPipeline:
                         selector, X_processed = cached_fit_transform_selector_regression(
                             X_aligned, y_aligned, algorithm_obj, n_features_or_components,
                             ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx,
-                            model_name=model_name, fusion_method=self.fusion_method
+                            model_name=model_name, fusion_method=self.fusion_method,
+                            consistent_hyperparams=consistent_hyperparams
                         )
                     else:
                         # Extraction algorithm
                         extractor, X_processed = cached_fit_transform_extractor_regression(
                             X_aligned, y_aligned, algorithm_obj, n_features_or_components,
                             ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx,
-                            model_name=model_name, fusion_method=self.fusion_method
+                            model_name=model_name, fusion_method=self.fusion_method,
+                            consistent_hyperparams=consistent_hyperparams
                         )
                 else:
                     if "selection" in algorithm_name.lower() or algorithm_name in ['ElasticNetFS', 'RFImportance', 'VarianceFTest', 'LASSO', 'LogisticL1']:
@@ -262,14 +282,16 @@ class FeatureFirstPipeline:
                         selector, X_processed = cached_fit_transform_selector_classification(
                             X_aligned, y_aligned, algorithm_obj, n_features_or_components,
                             ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx,
-                            model_name=model_name, fusion_method=self.fusion_method
+                            model_name=model_name, fusion_method=self.fusion_method,
+                            consistent_hyperparams=consistent_hyperparams
                         )
                     else:
                         # Extraction algorithm
                         extractor, X_processed = cached_fit_transform_extractor_classification(
                             X_aligned, y_aligned, algorithm_obj, n_features_or_components,
                             ds_name=dataset_name, modality_name=modality_name, fold_idx=fold_idx,
-                            model_name=model_name, fusion_method=self.fusion_method
+                            model_name=model_name, fusion_method=self.fusion_method,
+                            consistent_hyperparams=consistent_hyperparams
                         )
                 
                 if X_processed is not None and X_processed.size > 0:

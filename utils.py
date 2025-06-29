@@ -127,7 +127,7 @@ class ComprehensiveLogger:
         self.logger.debug(f"[PERFORMANCE] {operation}: {metrics_str}")
     
     def log_shape_mismatch(self, operation: str, X_shape: tuple, y_shape: tuple, 
-                          action: str, result_shape: tuple = None):
+                          action: str, result_shape: Optional[tuple] = None):
         """
         Log shape mismatch fixes.
         
@@ -150,7 +150,7 @@ class ComprehensiveLogger:
         self.logger.info(msg)
     
     def log_cache_operation(self, cache_type: str, operation: str, key: str, 
-                           hit: bool = None, size_mb: float = None):
+                           hit: Optional[bool] = None, size_mb: Optional[float] = None):
         """
         Log cache operations.
         
@@ -176,7 +176,7 @@ class ComprehensiveLogger:
     
     def log_feature_selection(self, modality: str, method: str, 
                              original_features: int, selected_features: int,
-                             fold_idx: int = None):
+                             fold_idx: Optional[int] = None):
         """
         Log feature selection details.
         
@@ -202,7 +202,7 @@ class ComprehensiveLogger:
     
     def log_extractor_operation(self, modality: str, extractor_type: str,
                                input_shape: tuple, output_shape: tuple,
-                               fold_idx: int = None):
+                               fold_idx: Optional[int] = None):
         """
         Log extractor operations.
         
@@ -226,8 +226,8 @@ class ComprehensiveLogger:
     
     def log_model_training(self, model_name: str, dataset: str, 
                           train_samples: int, val_samples: int,
-                          early_stopping_epoch: int = None,
-                          best_score: float = None, fold_idx: int = None):
+                          early_stopping_epoch: Optional[int] = None,
+                          best_score: Optional[float] = None, fold_idx: Optional[int] = None):
         """
         Log model training details.
         
@@ -315,7 +315,7 @@ class ComprehensiveLogger:
 # Global logger instance
 comprehensive_logger = ComprehensiveLogger()
 
-def performance_monitor(operation_name: str = None):
+def performance_monitor(operation_name: Optional[str] = None):
     """
     Decorator to monitor performance of functions.
     
@@ -452,7 +452,7 @@ def log_dataset_info(dataset_name: str, modalities: Dict[str, Any],
         else:
             comprehensive_logger.logger.info(f"{mod_name}: {type(mod_data)}")
 
-def log_cv_fold_info(fold_idx: int, train_size: int, val_size: int, test_size: int = None):
+def log_cv_fold_info(fold_idx: int, train_size: int, val_size: int, test_size: Optional[int] = None):
     """
     Log cross-validation fold information.
     
@@ -644,15 +644,15 @@ def safe_cross_val_score(estimator, X, y, cv=None, scoring=None, n_jobs=None,
             scores = cross_val_score(
                 estimator, X, y, cv=cv, scoring=safe_scoring, n_jobs=n_jobs,
                 verbose=verbose, params=fit_params, pre_dispatch=pre_dispatch,
-                error_score='raise'
+                error_score=np.nan
             )
         else:
-            # For older sklearn versions, use 'fit_params'
-            scores = cross_val_score(
-                estimator, X, y, cv=cv, scoring=safe_scoring, n_jobs=n_jobs,
-                verbose=verbose, fit_params=fit_params, pre_dispatch=pre_dispatch,
-                error_score='raise'
-            )
+            # For older sklearn versions
+            kwargs = {'cv': cv, 'scoring': safe_scoring, 'n_jobs': n_jobs,
+                     'verbose': verbose, 'pre_dispatch': pre_dispatch, 'error_score': np.nan}
+            if fit_params is not None:
+                kwargs['fit_params'] = fit_params
+            scores = cross_val_score(estimator, X, y, **kwargs)
         
         # Replace any non-finite scores with fallback values
         if not np.all(np.isfinite(scores)):
@@ -667,7 +667,7 @@ def safe_cross_val_score(estimator, X, y, cv=None, scoring=None, n_jobs=None,
         warnings.warn(f"Cross-validation failed: {str(e)}. Returning fallback scores.")
         
         # Determine number of CV folds
-        if hasattr(cv, 'get_n_splits'):
+        if cv is not None and hasattr(cv, 'get_n_splits'):
             n_splits = cv.get_n_splits(X, y)
         elif isinstance(cv, int):
             n_splits = cv

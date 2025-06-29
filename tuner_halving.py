@@ -3349,11 +3349,14 @@ class SafeExtractorWrapper(BaseEstimator, TransformerMixin):
                 # For KPCA failures, fall back to regular PCA
                 if 'KernelPCA' in type(self.extractor).__name__ or 'KPCA' in type(self.extractor).__name__:
                     from sklearn.decomposition import PCA
-                    # Use very conservative components for KPCA failures
-                    safe_components = min(n_components // 2, max_safe_components, 3)
+                    # CRITICAL FIX: Try to preserve original n_components for consistency
+                    # Use conservative components only if original is too large for data
+                    original_components = n_components
+                    max_possible = min(n_samples - 1, n_features)
+                    safe_components = min(original_components, max_possible, max_safe_components)
                     safe_components = max(1, safe_components)  # Ensure at least 1 component
                     self.fallback_extractor = PCA(n_components=safe_components, random_state=42)
-                    current_logger.info(f"Using conservative PCA fallback with {safe_components} components for KPCA failure")
+                    current_logger.info(f"Using PCA fallback with {safe_components} components for KPCA failure (originally {original_components})")
                 
                 # For other component-based extractors, try PCA with safe components
                 else:

@@ -31,9 +31,9 @@ def align_samples_to_modalities(
     Tuple[List[str], List[str]]
         Lists of valid training and validation IDs present in all modalities
     """
-    # Convert to lists if numpy arrays
-    id_train_list = list(id_train)
-    id_val_list = list(id_val)
+    # Convert to lists if numpy arrays, ensuring string elements
+    id_train_list = [str(x) for x in id_train] if isinstance(id_train, np.ndarray) else list(id_train)
+    id_val_list = [str(x) for x in id_val] if isinstance(id_val, np.ndarray) else list(id_val)
     
     # Start with all IDs
     valid_train_ids = set(id_train_list) 
@@ -69,7 +69,7 @@ def align_samples_to_modalities(
     
     return valid_train_ids, valid_val_ids
 
-def verify_data_alignment(X: np.ndarray, y: np.ndarray, name: str = "unnamed", fold_idx: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+def verify_data_alignment(X: np.ndarray, y: np.ndarray, name: str = "unnamed", fold_idx: Optional[int] = None) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     """
     Verify and fix data alignment between features (X) and labels (y)
     
@@ -86,7 +86,7 @@ def verify_data_alignment(X: np.ndarray, y: np.ndarray, name: str = "unnamed", f
         
     Returns
     -------
-    Tuple[np.ndarray, np.ndarray]
+    Tuple[Optional[np.ndarray], Optional[np.ndarray]]
         Aligned X and y arrays
     """
     fold_str = f" in fold {fold_idx}" if fold_idx is not None else ""

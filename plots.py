@@ -62,9 +62,9 @@ def enhanced_roc_auc_score(y_true: np.ndarray, y_score: np.ndarray,
         if n_classes == 2:
             # Binary classification
             if y_score.ndim > 1 and y_score.shape[1] >= 2:
-                return roc_auc_score(y_true, y_score[:, 1])
+                return float(roc_auc_score(y_true, y_score[:, 1]))
             else:
-                return roc_auc_score(y_true, y_score)
+                return float(roc_auc_score(y_true, y_score))
         else:
             # Multi-class classification with proper 'ovr' strategy
             
@@ -117,6 +117,10 @@ def enhanced_roc_auc_score(y_true: np.ndarray, y_score: np.ndarray,
                 # Handle case where label_binarize returns 1D array for 2 classes
                 if y_true_bin.ndim == 1:
                     y_true_bin = y_true_bin.reshape(-1, 1)
+                
+                # Convert sparse matrix to dense if needed
+                if hasattr(y_true_bin, 'toarray'):
+                    y_true_bin = y_true_bin.toarray()  # type: ignore
                     
             except Exception as e:
                 logger.warning(f"Failed to binarize labels: {str(e)}")
@@ -129,7 +133,7 @@ def enhanced_roc_auc_score(y_true: np.ndarray, y_score: np.ndarray,
             for i in range(n_classes):
                 try:
                     # Skip if no positive samples for this class
-                    if i >= y_true_bin.shape[1] or np.sum(y_true_bin[:, i]) == 0:
+                    if i >= y_true_bin.shape[1] or np.sum(y_true_bin[:, i]) == 0:  # type: ignore
                         logger.debug(f"No positive samples for class {unique_classes[i]}, skipping AUC calculation")
                         continue
                         
@@ -158,19 +162,19 @@ def enhanced_roc_auc_score(y_true: np.ndarray, y_score: np.ndarray,
                 class_weights = np.array(class_weights)
                 class_weights = class_weights / class_weights.sum()
                 # Calculate weighted average
-                return np.average(auc_scores, weights=class_weights)
+                return float(np.average(auc_scores, weights=class_weights))
             elif average == 'macro':
-                return np.mean(auc_scores)
+                return float(np.mean(auc_scores))
             elif average == 'micro':
                 # Micro-averaging combines all classes into one
                 try:
-                    return roc_auc_score(y_true_bin.ravel(), y_score.ravel())
+                    return float(roc_auc_score(y_true_bin.ravel(), y_score.ravel()))  # type: ignore
                 except Exception as e:
                     logger.warning(f"Micro-averaging failed: {str(e)}, using macro instead")
-                    return np.mean(auc_scores)
+                    return float(np.mean(auc_scores))
             else:
                 logger.warning(f"Invalid averaging strategy: {average}, using macro")
-                return np.mean(auc_scores)
+                return float(np.mean(auc_scores))
             
     except Exception as e:
         logger.warning(f"Enhanced AUC calculation failed: {str(e)}")
@@ -652,7 +656,9 @@ def plot_roc_curve_multiclass(model: Any, X_test: np.ndarray, y_test: np.ndarray
         # Compute micro-average ROC curve and ROC area
         if len(roc_auc) > 1:
             try:
-                fpr["micro"], tpr["micro"], _ = roc_curve(y_test_bin.ravel(), y_proba.ravel())
+                # Convert sparse matrix to dense if needed
+                y_test_bin_flat = y_test_bin.ravel() if not hasattr(y_test_bin, 'toarray') else y_test_bin.toarray().ravel()  # type: ignore
+                fpr["micro"], tpr["micro"], _ = roc_curve(y_test_bin_flat, y_proba.ravel())
                 roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
                 plt.plot(fpr["micro"], tpr["micro"],
                         label=f'Micro-avg (AUC = {roc_auc["micro"]:.2f})',

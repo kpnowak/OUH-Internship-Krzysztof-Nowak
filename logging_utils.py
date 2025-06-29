@@ -7,6 +7,7 @@ This module contains logging functions to avoid circular imports between cli.py 
 import logging
 import os
 import time
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ def setup_logging_levels(args):
             console_handler.setLevel(logging.WARNING)
 
 
-def log_pipeline_stage(stage_name: str, dataset: str = None, details: str = None):
+def log_pipeline_stage(stage_name: str, dataset: Optional[str] = None, details: Optional[str] = None):
     """
     Log pipeline stage information with consistent formatting.
     
@@ -127,7 +128,7 @@ def log_dataset_preparation(dataset_name: str, modalities: dict, common_ids: lis
         logger.error(f"[DATASET_PREP] {dataset_name} preparation failed")
 
 
-def log_model_training_info(model_name: str, dataset: str, fold_idx: int, train_samples: int, val_samples: int, success: bool = True, fallback: bool = False, error_msg: str = None):
+def log_model_training_info(model_name: str, dataset: str, fold_idx: int, train_samples: int, val_samples: int, success: bool = True, fallback: bool = False, error_msg: Optional[str] = None):
     """
     Log model training information.
     
@@ -164,7 +165,7 @@ def log_model_training_info(model_name: str, dataset: str, fold_idx: int, train_
             logger.error(f"[MODEL_TRAINING] {dataset} - {model_name} ({fold_str}) - Error: {error_msg}")
 
 
-def log_data_save_info(dataset: str, file_type: str, file_path: str, success: bool = True, error_msg: str = None):
+def log_data_save_info(dataset: str, file_type: str, file_path: str, success: bool = True, error_msg: Optional[str] = None):
     """
     Log data saving information.
     
@@ -190,7 +191,7 @@ def log_data_save_info(dataset: str, file_type: str, file_path: str, success: bo
             logger.error(f"[DATA_SAVE] {dataset} - {file_type} save error: {error_msg}")
 
 
-def log_plot_save_info(dataset: str, plot_type: str, plot_path: str, success: bool = True, error_msg: str = None):
+def log_plot_save_info(dataset: str, plot_type: str, plot_path: str, success: bool = True, error_msg: Optional[str] = None):
     """
     Log plot saving information.
     
