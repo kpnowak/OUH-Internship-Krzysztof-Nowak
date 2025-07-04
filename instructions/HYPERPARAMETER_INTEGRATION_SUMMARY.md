@@ -52,7 +52,7 @@ Successfully integrated `tuner_halving.py` with the main pipeline for automatic 
 
 ### Comprehensive Integration Test:  PASSED (5/5 tests)
 1. **Hyperparameter Loading**:  Successfully loads existing parameters
-2. **Fallback Mechanism**:  Correctly applies Breast→others (clf), AML→others (reg)
+2. **Fallback Mechanism**:  Correctly applies Breastothers (clf), AMLothers (reg)
 3. **Parameter Filtering**:  Properly separates and applies model/extractor parameters
 4. **Training Integration**:  Parameters are correctly applied during model training
 5. **End-to-End**:  Complete workflow from tuning to application works

@@ -4,7 +4,7 @@ Feature-First Pipeline Module.
 Implements the new architecture where feature processing is applied to each modality separately
 before fusion, rather than applying fusion first and then feature processing.
 
-NEW ORDER: Raw Data → Feature Processing → Fusion → Model Training
+NEW ORDER: Raw Data  Feature Processing  Fusion  Model Training
 """
 
 import numpy as np
@@ -119,7 +119,7 @@ class FeatureFirstPipeline:
             Experiment results
         """
         
-        logger.info(f"Running feature-first experiment: {algorithm_name} → {self.fusion_method} → {model_name}")
+        logger.info(f"Running feature-first experiment: {algorithm_name}  {self.fusion_method}  {model_name}")
         
         # CACHE VALIDATION: Validate cache keys include modality names for separation
         if fold_idx == 0:  # Only validate on first fold to avoid spam
@@ -296,7 +296,7 @@ class FeatureFirstPipeline:
                 
                 if X_processed is not None and X_processed.size > 0:
                     processed_modalities[modality_name] = X_processed
-                    logger.info(f"Processed {modality_name}: {X_aligned.shape} → {X_processed.shape}")
+                    logger.info(f"Processed {modality_name}: {X_aligned.shape}  {X_processed.shape}")
                 else:
                     logger.warning(f"Feature processing failed for {modality_name}")
                 
@@ -360,7 +360,7 @@ class FeatureFirstPipeline:
             if arr.shape[1] > min_components:
                 # Truncate to minimum components
                 standardized_arr = arr[:, :min_components]
-                logger.debug(f"Truncated {name}: {arr.shape} → {standardized_arr.shape}")
+                logger.debug(f"Truncated {name}: {arr.shape}  {standardized_arr.shape}")
             else:
                 # Already at or below minimum
                 standardized_arr = arr
@@ -846,7 +846,7 @@ def run_feature_first_pipeline(ds_name: str,
     
     all_results = []
     
-    # NEW EXPERIMENTAL LOOP: Algorithm → Features → Fusion → Model
+    # NEW EXPERIMENTAL LOOP: Algorithm  Features  Fusion  Model
     for algorithm_name, algorithm_obj in algorithms.items():
         logger.info(f"Processing algorithm: {algorithm_name}")
         
@@ -965,9 +965,11 @@ def run_feature_first_pipeline(ds_name: str,
     import os
     os.makedirs(base_out, exist_ok=True)
     
-    results_file = os.path.join(base_out, f"{ds_name}_feature_first_results.json")
+    # Include missing percentage in filename to avoid overwriting
+    missing_pct_str = f"{missing_percentage*100:.0f}pct_missing"
+    results_file = os.path.join(base_out, f"{ds_name}_feature_first_results_{missing_pct_str}.json")
     import json
     with open(results_file, 'w') as f:
         json.dump(all_results, f, indent=2, default=str)
     
-    logger.info(f"Feature-first pipeline completed for {ds_name}, results saved to {results_file}") 
+    logger.info(f"Feature-first pipeline completed for {ds_name} ({missing_pct_str}), results saved to {results_file}") 

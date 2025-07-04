@@ -91,21 +91,21 @@ warnings.filterwarnings('ignore',
 ### After Fixes  
 - **No warnings**: Clean execution for all combinations
 - **Adaptive behavior**: 
-  - Small parameter spaces → GridSearchCV
-  - Large parameter spaces + small datasets → GridSearchCV  
-  - Large parameter spaces + adequate datasets → Conservative HalvingRandomSearchCV
+  - Small parameter spaces  GridSearchCV
+  - Large parameter spaces + small datasets  GridSearchCV  
+  - Large parameter spaces + adequate datasets  Conservative HalvingRandomSearchCV
 - **Guaranteed minimum fold sizes**: 5+ samples per fold
 - **Successful optimization**: Both test cases completed successfully
 
 ## Example Configurations
 
 ### Small Parameter Space (PCA + LinearRegression)
-- **12 combinations** → GridSearchCV (exhaustive)
-- **3-fold CV** with 170 samples → ~56 samples per fold
+- **12 combinations**  GridSearchCV (exhaustive)
+- **3-fold CV** with 170 samples  ~56 samples per fold
 - **Result**: Clean execution, no warnings
 
 ### Large Parameter Space (KPCA + ElasticNet)  
-- **864 combinations** → HalvingRandomSearchCV (conservative)
+- **864 combinations**  HalvingRandomSearchCV (conservative)
 - **Min resources**: 15 (5 samples × 3 folds)
 - **Max resources**: 85 (50% of dataset)
 - **Factor**: 2 (conservative halving)  

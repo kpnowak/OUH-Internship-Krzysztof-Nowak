@@ -22,12 +22,12 @@ This document summarizes the comprehensive end-to-end verification of the entire
 
 ### **Duplicate Function Resolution**:
 1. **Data Loading Functions**:
-   - `load_and_preprocess_data` (DEPRECATED) → redirects to enhanced version
+   - `load_and_preprocess_data` (DEPRECATED)  redirects to enhanced version
    - `load_and_preprocess_data_enhanced` (ACTIVE) - single source of truth
 
 2. **Preprocessing Pipeline Functions**:
-   - `biomedical_preprocessing_pipeline` (DEPRECATED) → redirects to robust version
-   - `enhanced_biomedical_preprocessing_pipeline` (DEPRECATED) → redirects to robust version
+   - `biomedical_preprocessing_pipeline` (DEPRECATED)  redirects to robust version
+   - `enhanced_biomedical_preprocessing_pipeline` (DEPRECATED)  redirects to robust version
    - `robust_biomedical_preprocessing_pipeline` (ACTIVE) - single source of truth
 
 ### **Unnecessary Function Cleanup**:

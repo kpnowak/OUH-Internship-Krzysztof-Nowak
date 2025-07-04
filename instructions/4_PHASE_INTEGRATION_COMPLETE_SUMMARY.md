@@ -188,7 +188,7 @@ graph TD
 6. ** Rich metadata and logging**
 
 ### ** Integration Points:**
-- **Main Entry**: `cli.py` → `run_enhanced_preprocessing_pipeline()`
+- **Main Entry**: `cli.py`  `run_enhanced_preprocessing_pipeline()`
 - **Phase Coordination**: `enhanced_pipeline_integration.py`
 - **Individual Phases**: `data_quality.py`, `fusion_aware_preprocessing.py`, `missing_data_handler.py`, `validation_coordinator.py`
 

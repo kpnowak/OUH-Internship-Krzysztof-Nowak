@@ -252,16 +252,16 @@ except Exception as e:
 
 ### **Hyperparameter Tuning Success**
 ```
-✅ KPCA + LinearRegression: Previously FAILED → Now SUCCESS
+✅ KPCA + LinearRegression: Previously FAILED  Now SUCCESS
 ✅ All 18 combinations: 100% success rate
-✅ JSON files: All saved correctly with PowerTransformer() → "PowerTransformer()"
+✅ JSON files: All saved correctly with PowerTransformer()  "PowerTransformer()"
 ✅ No warnings: Clean execution logs
 ✅ Performance: 33-45s per combination (reasonable)
 ```
 
 ### **Main Pipeline Integration**
 ```
-✅ Hyperparameter loading: PowerTransformer strings → objects
+✅ Hyperparameter loading: PowerTransformer strings  objects
 ✅ Safe scoring: R² and MCC protected
 ✅ Warning suppression: Applied at startup
 ✅ Cross-validation: Adaptive and robust

@@ -43,10 +43,10 @@ All duplicate functions have been **completely eliminated** and the main pipelin
 ##  **Verification Results**
 
 ### **Deprecated Functions Test:  PASSED**
-- `biomedical_preprocessing_pipeline()` → Shows deprecation warning 
-- `enhanced_biomedical_preprocessing_pipeline()` → Shows deprecation warning   
-- `enhanced_comprehensive_preprocessing_pipeline()` → Shows deprecation warning 
-- `load_and_preprocess_data()` → Shows deprecation warning 
+- `biomedical_preprocessing_pipeline()`  Shows deprecation warning 
+- `enhanced_biomedical_preprocessing_pipeline()`  Shows deprecation warning   
+- `enhanced_comprehensive_preprocessing_pipeline()`  Shows deprecation warning 
+- `load_and_preprocess_data()`  Shows deprecation warning 
 
 ### **4-Phase Integration Test:  PASSED**
 - All phase modules exist and are importable 
@@ -104,10 +104,10 @@ All duplicate functions have been **completely eliminated** and the main pipelin
 ## 📋 **Migration Summary**
 
 ### **Functions Deprecated**
-1. `biomedical_preprocessing_pipeline()` → Use `robust_biomedical_preprocessing_pipeline()`
-2. `enhanced_biomedical_preprocessing_pipeline()` → Use `robust_biomedical_preprocessing_pipeline()`
-3. `enhanced_comprehensive_preprocessing_pipeline()` → Use `run_enhanced_preprocessing_pipeline()`
-4. `load_and_preprocess_data()` → Use `load_and_preprocess_data_enhanced()`
+1. `biomedical_preprocessing_pipeline()`  Use `robust_biomedical_preprocessing_pipeline()`
+2. `enhanced_biomedical_preprocessing_pipeline()`  Use `robust_biomedical_preprocessing_pipeline()`
+3. `enhanced_comprehensive_preprocessing_pipeline()`  Use `run_enhanced_preprocessing_pipeline()`
+4. `load_and_preprocess_data()`  Use `load_and_preprocess_data_enhanced()`
 
 ### **New Integration Points**
 - **Main Entry**: `run_enhanced_preprocessing_pipeline()` from `enhanced_pipeline_integration.py`

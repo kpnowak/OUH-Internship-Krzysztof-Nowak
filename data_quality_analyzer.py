@@ -112,20 +112,20 @@ REGRESSION_DATASETS_FOR_ANALYSIS = [
         "outcome_type": "continuous",
         "fix_tcga_ids": True
     },
-    #{
-    #    "name": "Sarcoma",
-    #    "base_path": "data/sarcoma",
-    #    "modalities": {
-    #        "Gene Expression": "exp.csv",
-    #        "miRNA": "mirna.csv",
-    #        "Methylation": "methy.csv"
-    #    },
-    #    "outcome_file": "data/clinical/sarcoma.csv",
-    #    "outcome_col": "pathologic_tumor_length",
-    #    "id_col": "metsampleID",
-    #    "outcome_type": "continuous",
-    #    "fix_tcga_ids": True
-    #}
+    {
+        "name": "Sarcoma",
+        "base_path": "data/sarcoma",
+        "modalities": {
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        "outcome_file": "data/clinical/sarcoma.csv",
+        "outcome_col": "pathologic_tumor_length",
+        "id_col": "metsampleID",
+        "outcome_type": "continuous",
+        "fix_tcga_ids": True
+    }
 ]
 
 CLASSIFICATION_DATASETS_FOR_ANALYSIS = [
@@ -157,83 +157,83 @@ CLASSIFICATION_DATASETS_FOR_ANALYSIS = [
         "outcome_type": "class",
         "fix_tcga_ids": True
     },
-    #{
-    #    "name": "Kidney",
-    #    "base_path": "data/kidney",
-    #    "modalities": {
-    #        "Gene Expression": "exp.csv",
-    #        "miRNA": "mirna.csv",
-    #        "Methylation": "methy.csv"
-    #    },
-    #    "outcome_file": "data/clinical/kidney.csv",
-    #    "outcome_col": "pathologic_T",
-    #    "id_col": "submitter_id.samples",
-    #    "outcome_type": "class",
-    #    "fix_tcga_ids": True
-    #},
-    #{
-    #    "name": "Liver",
-    #    "base_path": "data/liver",
-    #    "modalities": {
-    #        "Gene Expression": "exp.csv",
-    #        "miRNA": "mirna.csv",
-    #        "Methylation": "methy.csv"
-    #    },
-    #    "outcome_file": "data/clinical/liver.csv",
-    #    "outcome_col": "pathologic_T",
-    #    "id_col": "sampleID",
-    #    "outcome_type": "class",
-    #    "fix_tcga_ids": True
-    #},
-    #{
-    #    "name": "Lung",
-    #    "base_path": "data/lung",
-    #    "modalities": {
-    #        "Gene Expression": "exp.csv",
-    #        "miRNA": "mirna.csv",
-    #        "Methylation": "methy.csv"
-    #    },
-    #    "outcome_file": "data/clinical/lung.csv",
-    #    "outcome_col": "pathologic_T",
-    #    "id_col": "sampleID",
-    #    "outcome_type": "class",
-    #    "fix_tcga_ids": True
-    #},
-    #{
-    #    "name": "Melanoma",
-    #    "base_path": "data/melanoma",
-    #    "modalities": {
-    #        "Gene Expression": "exp.csv",
-    #        "miRNA": "mirna.csv",
-    #        "Methylation": "methy.csv"
-    #    },
-    #    "outcome_file": "data/clinical/melanoma.csv",
-    #    "outcome_col": "pathologic_T",
-    #    "id_col": "sampleID",
-    #    "outcome_type": "class",
-    #    "fix_tcga_ids": True
-    #},
-    #{
-    #    "name": "Ovarian",
-    #    "base_path": "data/ovarian",
-    #    "modalities": {
-    #        "Gene Expression": "exp.csv",
-    #        "miRNA": "mirna.csv",
-    #        "Methylation": "methy.csv"
-    #    },
-    #    "outcome_file": "data/clinical/ovarian.csv",
-    #    "outcome_col": "clinical_stage",
-    #    "id_col": "sampleID",
-    #    "outcome_type": "class",
-    #    "fix_tcga_ids": True
-    #}
+    {
+        "name": "Kidney",
+        "base_path": "data/kidney",
+        "modalities": {
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        "outcome_file": "data/clinical/kidney.csv",
+        "outcome_col": "pathologic_T",
+        "id_col": "submitter_id.samples",
+        "outcome_type": "class",
+        "fix_tcga_ids": True
+    },
+    {
+        "name": "Liver",
+        "base_path": "data/liver",
+        "modalities": {
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        "outcome_file": "data/clinical/liver.csv",
+        "outcome_col": "pathologic_T",
+        "id_col": "sampleID",
+        "outcome_type": "class",
+        "fix_tcga_ids": True
+    },
+    {
+        "name": "Lung",
+        "base_path": "data/lung",
+        "modalities": {
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        "outcome_file": "data/clinical/lung.csv",
+        "outcome_col": "pathologic_T",
+        "id_col": "sampleID",
+        "outcome_type": "class",
+        "fix_tcga_ids": True
+    },
+    {
+        "name": "Melanoma",
+        "base_path": "data/melanoma",
+        "modalities": {
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        "outcome_file": "data/clinical/melanoma.csv",
+        "outcome_col": "pathologic_T",
+        "id_col": "sampleID",
+        "outcome_type": "class",
+        "fix_tcga_ids": True
+    },
+    {
+        "name": "Ovarian",
+        "base_path": "data/ovarian",
+        "modalities": {
+            "Gene Expression": "exp.csv",
+            "miRNA": "mirna.csv",
+            "Methylation": "methy.csv"
+        },
+        "outcome_file": "data/clinical/ovarian.csv",
+        "outcome_col": "clinical_stage",
+        "id_col": "sampleID",
+        "outcome_type": "class",
+        "fix_tcga_ids": True
+    }
 ]
 
 
 class DataQualityAnalyzer:
     """Analyzes data quality at various stages of the preprocessing pipeline."""
     
-    def __init__(self, output_dir: str = "data_quality_analysis"):
+    def __init__(self, output_dir: str = "data_quality_analysis", debug_data_quality: bool = False):
         """
         Initialize the data quality analyzer.
         
@@ -241,6 +241,8 @@ class DataQualityAnalyzer:
         ----------
         output_dir : str
             Directory to save analysis results
+        debug_data_quality : bool
+            Whether to enable detailed debug output for data quality analysis
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
@@ -252,14 +254,18 @@ class DataQualityAnalyzer:
         (self.output_dir / "summary").mkdir(exist_ok=True)
         
         self.results = {}
+        self.debug_data_quality = debug_data_quality
         
         # Enable feature engineering for comprehensive analysis
         FEATURE_ENGINEERING_CONFIG["enabled"] = True
         logger.info("Feature engineering enabled for comprehensive analysis")
         
+        if debug_data_quality:
+            logger.info("Debug data quality analysis enabled - detailed output will be generated")
+        
     def calculate_data_metrics(self, X: np.ndarray, name: str = "unknown") -> Dict[str, Any]:
         """
-        Calculate comprehensive data quality metrics using safe statistical computation.
+        Calculate comprehensive data quality metrics with explicit NaN and zero detection.
         
         Parameters
         ----------
@@ -274,17 +280,11 @@ class DataQualityAnalyzer:
             Dictionary containing all calculated metrics with numerical stability
         """
         try:
-            # Use safe statistical computation to avoid NaN issues
-            safe_stats = safe_statistical_computation(X)
-            
-            # Extract global statistics for backward compatibility
-            global_stats = safe_stats.get('global_stats', {})
-            
             # Basic shape information
             metrics = {
-                'n_samples': safe_stats['n_samples'],
-                'n_features': safe_stats['n_features'],
-                'total_elements': global_stats.get('total_elements', X.size)
+                'n_samples': X.shape[0] if X.ndim > 0 else 0,
+                'n_features': X.shape[1] if X.ndim > 1 else (1 if X.size > 0 else 0),
+                'total_elements': X.size
             }
             
             # Handle empty arrays
@@ -309,32 +309,134 @@ class DataQualityAnalyzer:
                 })
                 return metrics
             
-            # Extract safe global statistics
+            # EXPLICIT CALCULATION OF MISSING AND ZERO PERCENTAGES
+            # This is crucial for proper data quality analysis
+            
+            # Calculate missing percentage (NaN, inf, -inf)
+            missing_mask = np.isnan(X) | np.isinf(X)
+            missing_count = np.sum(missing_mask)
+            missing_percentage = (missing_count / X.size) * 100.0
+            
+            # Calculate zero percentage (exact zeros)
+            zero_mask = (X == 0.0)
+            zero_count = np.sum(zero_mask)
+            zero_percentage = (zero_count / X.size) * 100.0
+            
+            # Calculate near-zero percentage (very small values that might be imputed)
+            # Use a more realistic threshold for preprocessed biomedical data
+            near_zero_threshold = 1e-3  # Adjusted to capture small values in robust-scaled data
+            near_zero_mask = np.abs(X) < near_zero_threshold
+            near_zero_count = np.sum(near_zero_mask)
+            near_zero_percentage = (near_zero_count / X.size) * 100.0
+            
+            # Update metrics with explicit calculations
             metrics.update({
-                'missing_percentage': global_stats.get('missing_percentage', 0.0),
-                'zero_percentage': global_stats.get('zero_percentage', 0.0),
-                'mean': global_stats.get('mean', np.nan),
-                'std': global_stats.get('std', np.nan),
-                'min': global_stats.get('min', np.nan),
-                'max': global_stats.get('max', np.nan),
-                'median': global_stats.get('median', np.nan)
+                'missing_percentage': float(missing_percentage),
+                'zero_percentage': float(zero_percentage),
+                'near_zero_percentage': float(near_zero_percentage),
+                'missing_count': int(missing_count),
+                'zero_count': int(zero_count),
+                'near_zero_count': int(near_zero_count)
             })
             
-            # Calculate derived metrics safely
-            if not np.isnan(metrics['std']):
-                metrics['variance'] = metrics['std'] ** 2
-            else:
-                metrics['variance'] = np.nan
+            # Log detailed information for debugging
+            logger.debug(f"Data quality metrics for {name}:")
+            logger.debug(f"  Shape: {X.shape}")
+            logger.debug(f"  Missing values: {missing_count}/{X.size} ({missing_percentage:.2f}%)")
+            logger.debug(f"  Zero values: {zero_count}/{X.size} ({zero_percentage:.2f}%)")
+            logger.debug(f"  Near-zero values: {near_zero_count}/{X.size} ({near_zero_percentage:.2f}%) [threshold: {near_zero_threshold}]")
+            
+            # Use safe statistical computation for other statistics, but only on finite values
+            try:
+                # Get finite values for statistical calculations
+                finite_mask = np.isfinite(X)
+                finite_values = X[finite_mask]
                 
-            if not (np.isnan(metrics['max']) or np.isnan(metrics['min'])):
+                if len(finite_values) > 0:
+                    # Calculate basic statistics on finite values
+                    metrics.update({
+                        'mean': float(np.mean(finite_values)),
+                        'std': float(np.std(finite_values)),
+                        'min': float(np.min(finite_values)),
+                        'max': float(np.max(finite_values)),
+                        'median': float(np.median(finite_values))
+                    })
+                    
+                    # Calculate variance
+                    if not np.isnan(metrics['std']):
+                        metrics['variance'] = metrics['std'] ** 2
+                    else:
+                        metrics['variance'] = np.nan
+                else:
+                    # All values are non-finite
+                    metrics.update({
+                        'mean': np.nan,
+                        'std': np.nan,
+                        'min': np.nan,
+                        'max': np.nan,
+                        'median': np.nan,
+                        'variance': np.nan
+                    })
+                    
+            except Exception as e:
+                logger.warning(f"Error calculating basic statistics for {name}: {e}")
+                metrics.update({
+                    'mean': np.nan,
+                    'std': np.nan,
+                    'min': np.nan,
+                    'max': np.nan,
+                    'median': np.nan,
+                    'variance': np.nan
+                })
+                
+            # Try to use safe statistical computation as backup/validation
+            try:
+                safe_stats = safe_statistical_computation(X)
+                global_stats = safe_stats.get('global_stats', {})
+                
+                # Use safe stats as validation but prefer our explicit calculations
+                safe_missing_pct = global_stats.get('missing_percentage', 0.0)
+                safe_zero_pct = global_stats.get('zero_percentage', 0.0)
+                
+                # Log discrepancies for debugging
+                if abs(missing_percentage - safe_missing_pct) > 0.01:
+                    logger.debug(f"Missing percentage discrepancy for {name}: "
+                               f"explicit={missing_percentage:.2f}%, safe_stats={safe_missing_pct:.2f}%")
+                
+                if abs(zero_percentage - safe_zero_pct) > 0.01:
+                    logger.debug(f"Zero percentage discrepancy for {name}: "
+                               f"explicit={zero_percentage:.2f}%, safe_stats={safe_zero_pct:.2f}%")
+                
+                # Store safe stats for comparison
+                metrics['safe_stats_comparison'] = {
+                    'safe_missing_percentage': safe_missing_pct,
+                    'safe_zero_percentage': safe_zero_pct,
+                    'missing_discrepancy': abs(missing_percentage - safe_missing_pct),
+                    'zero_discrepancy': abs(zero_percentage - safe_zero_pct)
+                }
+                
+            except Exception as e:
+                logger.debug(f"Safe statistical computation failed for {name}: {e}")
+                metrics['safe_stats_comparison'] = {'error': str(e)}
+            
+                        # Calculate derived metrics safely
+            if not np.isnan(metrics.get('std', np.nan)):
+                if 'variance' not in metrics:  # Only calculate if not already set
+                    metrics['variance'] = metrics['std'] ** 2
+            else:
+                if 'variance' not in metrics:
+                    metrics['variance'] = np.nan
+                
+            if not (np.isnan(metrics.get('max', np.nan)) or np.isnan(metrics.get('min', np.nan))):
                 metrics['range'] = metrics['max'] - metrics['min']
             else:
                 metrics['range'] = np.nan
             
-            # Calculate percentiles and IQR safely
+            # Calculate percentiles and IQR safely using finite values
             try:
-                X_flat = X.astype(np.float64).flatten()
-                finite_values = X_flat[~(np.isnan(X_flat) | np.isinf(X_flat))]
+                # Get finite values for statistical calculations
+                finite_mask = np.isfinite(X)
+                finite_values = X[finite_mask].flatten()
                 
                 if len(finite_values) > 0:
                     metrics['q25'] = float(np.percentile(finite_values, 25))
@@ -342,7 +444,7 @@ class DataQualityAnalyzer:
                     metrics['iqr'] = metrics['q75'] - metrics['q25']
                     
                     # Safe skewness and kurtosis calculation
-                    if len(finite_values) > 3 and metrics['std'] > 1e-10:
+                    if len(finite_values) > 3 and metrics.get('std', 0) > 1e-10:
                         try:
                             metrics['skewness'] = float(stats.skew(finite_values))
                             if np.isnan(metrics['skewness']) or np.isinf(metrics['skewness']):
@@ -420,12 +522,39 @@ class DataQualityAnalyzer:
             metrics = {
                 'n_samples': 0, 'n_features': 0, 'total_elements': 0,
                 'zero_percentage': np.nan, 'missing_percentage': np.nan,
-                'mean': np.nan, 'std': np.nan, 'min': np.nan, 'max': np.nan,
+                'near_zero_percentage': np.nan, 'missing_count': 0, 'zero_count': 0,
+                'near_zero_count': 0, 'mean': np.nan, 'std': np.nan, 'min': np.nan, 'max': np.nan,
                 'variance': np.nan, 'skewness': np.nan, 'kurtosis': np.nan,
                 'outlier_percentage': np.nan, 'range': np.nan, 'median': np.nan,
                 'q25': np.nan, 'q75': np.nan, 'iqr': np.nan,
-                'numerical_stability': {'error': str(e)}
+                'numerical_stability': {'error': str(e)},
+                'safe_stats_comparison': {'error': str(e)}
             }
+        
+        # Final validation of the metrics
+        try:
+            # Log summary information for validation
+            if not np.isnan(metrics.get('missing_percentage', np.nan)):
+                logger.info(f"Data quality summary for {name}: "
+                           f"shape={metrics.get('n_samples', 0)}x{metrics.get('n_features', 0)}, "
+                           f"missing={metrics.get('missing_percentage', 0):.2f}%, "
+                           f"zeros={metrics.get('zero_percentage', 0):.2f}%, "
+                           f"near_zeros={metrics.get('near_zero_percentage', 0):.2f}%")
+            
+            # Add a data quality flag
+            missing_pct = metrics.get('missing_percentage', 0)
+            zero_pct = metrics.get('zero_percentage', 0)
+            
+            if missing_pct > 50 or zero_pct > 80:
+                metrics['data_quality_flag'] = 'poor'
+            elif missing_pct > 20 or zero_pct > 50:
+                metrics['data_quality_flag'] = 'moderate'
+            else:
+                metrics['data_quality_flag'] = 'good'
+                
+        except Exception as e:
+            logger.debug(f"Error in final validation for {name}: {e}")
+            metrics['data_quality_flag'] = 'unknown'
         
         return metrics
     
@@ -652,7 +781,7 @@ class DataQualityAnalyzer:
             outcome_col = dataset_config["outcome_col"]
             
             # Load raw data using the main pipeline approach
-            raw_modalities, y_raw, common_ids = load_dataset(
+            raw_modalities, y_raw, common_ids, is_regression_detected = load_dataset(
                 dataset_name.lower(), 
                 modality_short_names, 
                 outcome_col, 
@@ -670,6 +799,10 @@ class DataQualityAnalyzer:
             # Stage 3: Raw modality data analysis
             analysis_results['stages']['1_raw_modalities'] = {}
             for mod_name, mod_data in raw_modalities.items():
+                # Debug raw data quality (if enabled)
+                if self.debug_data_quality:
+                    self.debug_data_quality_results(mod_data.values, f"{dataset_name}_{mod_name}_raw")
+                
                 metrics = self.calculate_data_metrics(mod_data.values, f"{dataset_name}_{mod_name}_raw")
                 analysis_results['stages']['1_raw_modalities'][mod_name] = metrics
                 logger.info(f"Raw {mod_name}: {metrics['n_samples']}x{metrics['n_features']}, "
@@ -704,6 +837,10 @@ class DataQualityAnalyzer:
                 
                 # Analyze processed data from 4-phase pipeline
                 for mod_name, processed_data in processed_modalities.items():
+                    # Debug processed data quality (if enabled)
+                    if self.debug_data_quality:
+                        self.debug_data_quality_results(processed_data, f"{dataset_name}_{mod_name}_enhanced")
+                    
                     enhanced_metrics = self.calculate_data_metrics(processed_data, f"{dataset_name}_{mod_name}_enhanced")
                     
                     analysis_results['stages']['2_enhanced_4phase_preprocessing'][mod_name] = {
@@ -715,13 +852,19 @@ class DataQualityAnalyzer:
                                 analysis_results['stages']['1_raw_modalities'][mod_name]['zero_percentage'] - 
                                 enhanced_metrics['zero_percentage']
                             ),
+                            'missing_data_reduction': (
+                                analysis_results['stages']['1_raw_modalities'][mod_name]['missing_percentage'] - 
+                                enhanced_metrics['missing_percentage']
+                            ),
                             'quality_score': pipeline_metadata.get('quality_score', 0.0)
                         }
                     }
                     
                     logger.info(f"Enhanced {mod_name}: {enhanced_metrics['n_samples']}x{enhanced_metrics['n_features']}, "
                                f"zeros: {enhanced_metrics['zero_percentage']:.2f}% "
-                               f"(reduced by {analysis_results['stages']['2_enhanced_4phase_preprocessing'][mod_name]['improvement_summary']['sparsity_reduction']:.2f}%)")
+                               f"(reduced by {analysis_results['stages']['2_enhanced_4phase_preprocessing'][mod_name]['improvement_summary']['sparsity_reduction']:.2f}%), "
+                               f"missing: {enhanced_metrics['missing_percentage']:.2f}% "
+                               f"(reduced by {analysis_results['stages']['2_enhanced_4phase_preprocessing'][mod_name]['improvement_summary']['missing_data_reduction']:.2f}%)")
                 
                 logger.info(f" 4-Phase Enhanced Preprocessing completed successfully")
                 logger.info(f" Overall Quality Score: {pipeline_metadata.get('quality_score', 'N/A')}")
@@ -883,6 +1026,11 @@ class DataQualityAnalyzer:
                                     'n_features': technique_data.get('n_features', 0),
                                     'missing_percentage': technique_data.get('missing_percentage', 0.0),
                                     'zero_percentage': technique_data.get('zero_percentage', 0.0),
+                                    'near_zero_percentage': technique_data.get('near_zero_percentage', 0.0),
+                                    'missing_count': technique_data.get('missing_count', 0),
+                                    'zero_count': technique_data.get('zero_count', 0),
+                                    'near_zero_count': technique_data.get('near_zero_count', 0),
+                                    'data_quality_flag': technique_data.get('data_quality_flag', 'unknown'),
                                     'mean': float(technique_data.get('mean', '0.0')) if isinstance(technique_data.get('mean'), str) else technique_data.get('mean', 0.0),
                                     'std': float(technique_data.get('std', '0.0')) if isinstance(technique_data.get('std'), str) else technique_data.get('std', 0.0),
                                     'outlier_percentage': technique_data.get('outlier_percentage', 0.0),
@@ -1022,7 +1170,8 @@ class DataQualityAnalyzer:
             overall_df.to_csv(overall_path, index=False)
             
             # Generate summary statistics (including robust scaling metrics)
-            numeric_cols = ['zero_percentage', 'missing_percentage', 'mean', 'std', 
+            numeric_cols = ['zero_percentage', 'missing_percentage', 'near_zero_percentage', 
+                           'missing_count', 'zero_count', 'near_zero_count', 'mean', 'std', 
                            'n_features', 'n_samples', 'outlier_percentage']
             
             # Add robust scaling metrics if available
@@ -1032,12 +1181,27 @@ class DataQualityAnalyzer:
             # Check which columns actually exist in the data
             available_cols = [col for col in numeric_cols + scaling_cols if col in overall_df.columns]
             
-            stats_summary = overall_df.groupby(['task_type', 'technique', 'process_type', 'method'])[available_cols].agg([
-                'mean', 'std', 'min', 'max', 'median'
-            ]).round(4)
-            
-            stats_path = self.output_dir / "summary" / "summary_statistics.csv"
-            stats_summary.to_csv(stats_path)
+            # Only generate statistics if we have both grouping columns and numeric columns
+            required_grouping_cols = ['task_type', 'technique', 'process_type', 'method']
+            if all(col in overall_df.columns for col in required_grouping_cols) and available_cols:
+                try:
+                    stats_summary = overall_df.groupby(required_grouping_cols)[available_cols].agg([
+                        'mean', 'std', 'min', 'max', 'median'
+                    ]).round(4)
+                    
+                    stats_path = self.output_dir / "summary" / "summary_statistics.csv"
+                    stats_summary.to_csv(stats_path)
+                    logger.info(f"Generated summary statistics with {len(stats_summary)} groups")
+                except Exception as e:
+                    logger.warning(f"Could not generate summary statistics: {e}")
+                    # Create a basic summary instead
+                    basic_stats = overall_df[available_cols].describe() if available_cols else pd.DataFrame()
+                    if not basic_stats.empty:
+                        stats_path = self.output_dir / "summary" / "basic_statistics.csv"
+                        basic_stats.to_csv(stats_path)
+                        logger.info(f"Generated basic statistics instead")
+            else:
+                logger.warning(f"Missing required columns for statistics. Available: {list(overall_df.columns)}")
             
             logger.info(f"Generated overall summary with {len(overall_df)} records")
             
@@ -1047,6 +1211,82 @@ class DataQualityAnalyzer:
         else:
             logger.warning("No data found for summary generation")
     
+    def debug_data_quality_results(self, X: np.ndarray, name: str = "unknown") -> None:
+        """
+        Debug method to validate data quality calculations.
+        
+        This method performs additional checks to ensure the data quality metrics
+        are calculated correctly, especially for missing values and zeros.
+        
+        Parameters
+        ----------
+        X : np.ndarray
+            Input data matrix
+        name : str
+            Name/identifier for the data
+        """
+        try:
+            logger.info(f"=== DEBUG DATA QUALITY ANALYSIS FOR {name} ===")
+            
+            # Basic information
+            logger.info(f"Data shape: {X.shape}")
+            logger.info(f"Data type: {X.dtype}")
+            logger.info(f"Total elements: {X.size}")
+            
+            # Check for different types of missing/problematic values
+            nan_count = np.sum(np.isnan(X))
+            inf_count = np.sum(np.isinf(X))
+            zero_count = np.sum(X == 0.0)
+            near_zero_count = np.sum(np.abs(X) < 1e-3)  # Use same threshold as main method
+            
+            logger.info(f"NaN values: {nan_count} ({nan_count/X.size*100:.2f}%)")
+            logger.info(f"Inf values: {inf_count} ({inf_count/X.size*100:.2f}%)")
+            logger.info(f"Zero values: {zero_count} ({zero_count/X.size*100:.2f}%)")
+            logger.info(f"Near-zero values: {near_zero_count} ({near_zero_count/X.size*100:.2f}%)")
+            
+            # Check value ranges
+            finite_mask = np.isfinite(X)
+            finite_count = np.sum(finite_mask)
+            
+            if finite_count > 0:
+                finite_values = X[finite_mask]
+                logger.info(f"Finite values: {finite_count} ({finite_count/X.size*100:.2f}%)")
+                logger.info(f"Finite value range: [{np.min(finite_values):.6f}, {np.max(finite_values):.6f}]")
+                logger.info(f"Finite value mean: {np.mean(finite_values):.6f}")
+                logger.info(f"Finite value std: {np.std(finite_values):.6f}")
+                
+                # Check for suspicious patterns
+                if np.all(finite_values == finite_values[0]):
+                    logger.warning(f"All finite values are identical: {finite_values[0]}")
+                
+                if np.max(finite_values) - np.min(finite_values) < 1e-10:
+                    logger.warning(f"Finite values have extremely small range")
+                    
+            else:
+                logger.warning(f"No finite values found in the data!")
+            
+            # Check for preprocessing artifacts
+            if zero_count == X.size:
+                logger.warning(f"All values are zero - possible preprocessing issue")
+            elif nan_count == X.size:
+                logger.warning(f"All values are NaN - possible preprocessing failure")
+            elif finite_count == 0:
+                logger.warning(f"No finite values - data may be corrupted")
+                
+            # Sample some values for manual inspection
+            if X.size > 0:
+                sample_size = min(10, X.size)
+                flat_X = X.flatten()
+                sample_indices = np.random.choice(X.size, sample_size, replace=False)
+                sample_values = flat_X[sample_indices]
+                
+                logger.info(f"Sample values ({sample_size} random): {sample_values}")
+                
+            logger.info(f"=== END DEBUG FOR {name} ===\n")
+                
+        except Exception as e:
+            logger.error(f"Error in debug analysis for {name}: {e}")
+
     def generate_robust_scaling_report(self, overall_df: pd.DataFrame) -> None:
         """
         Generate a specific report on robust scaling effectiveness.
@@ -1657,7 +1897,7 @@ class DataQualityAnalyzer:
             outcome_col = dataset_config["outcome_col"]
             
             # Load raw data using the main pipeline approach
-            raw_modalities, y_raw, common_ids = load_dataset(
+            raw_modalities, y_raw, common_ids, is_regression_detected = load_dataset(
                 dataset_name.lower(), 
                 modality_short_names, 
                 outcome_col, 
@@ -1837,7 +2077,7 @@ class DataQualityAnalyzer:
                 }
             
             # Step 4: Performance Analysis
-            logger.info(f"📈 Step 4: Performance Analysis")
+            logger.info(f"Step 4: Performance Analysis")
             
             successful_phases = sum(1 for phase_result in test_results['pipeline_phases'].values() 
                                   if phase_result.get('success', False))
@@ -2014,7 +2254,7 @@ class DataQualityAnalyzer:
             if quality_scores:
                 avg_quality = pipeline_summary['pipeline_effectiveness']['average_quality_score']
                 if avg_quality >= 0.8:
-                    pipeline_summary['recommendations'].append("🏆 Excellent data quality scores achieved")
+                    pipeline_summary['recommendations'].append("EXCELLENT: Excellent data quality scores achieved")
                 elif avg_quality >= 0.6:
                     pipeline_summary['recommendations'].append(" Moderate data quality - consider optimizations")
                 else:
@@ -2028,7 +2268,7 @@ class DataQualityAnalyzer:
             logger.info(f"4-Phase Pipeline Summary saved to {summary_path}")
             
             # Log key findings
-            logger.info("📋 4-Phase Pipeline Summary Results:")
+            logger.info("4-Phase Pipeline Summary Results:")
             logger.info(f"   • Datasets tested: {pipeline_summary['pipeline_tests_analyzed']}")
             logger.info(f"   • Enhanced pipeline success rate: {overall_success_rate:.1%}")
             logger.info(f"   • Average phase success rate: {avg_phase_success:.1%}")
@@ -2101,8 +2341,8 @@ def main():
     logger.info("  Phase 4: Coordinated Validation Framework")
     logger.info("=" * 80)
     
-    # Initialize analyzer
-    analyzer = DataQualityAnalyzer()
+    # Initialize analyzer with debug mode enabled for comprehensive testing
+    analyzer = DataQualityAnalyzer(debug_data_quality=True)
     
     # Log pipeline configuration
     logger.info(" PIPELINE CONFIGURATION")
@@ -2153,7 +2393,7 @@ def main():
     
     # Test datasets configuration
     total_datasets = len(REGRESSION_DATASETS_FOR_ANALYSIS) + len(CLASSIFICATION_DATASETS_FOR_ANALYSIS)
-    logger.info(f"📁 DATASETS TO ANALYZE: {total_datasets}")
+    logger.info(f"DATASETS TO ANALYZE: {total_datasets}")
     logger.info(f"   Regression: {len(REGRESSION_DATASETS_FOR_ANALYSIS)} datasets")
     logger.info(f"   Classification: {len(CLASSIFICATION_DATASETS_FOR_ANALYSIS)} datasets")
     
@@ -2169,7 +2409,7 @@ def main():
     
     # Analyze regression datasets
     logger.info("")
-    logger.info("🔬 ANALYZING REGRESSION DATASETS")
+    logger.info("ANALYZING REGRESSION DATASETS")
     logger.info("=" * 50)
     
     for i, dataset_config in enumerate(REGRESSION_DATASETS_FOR_ANALYSIS, 1):
@@ -2186,8 +2426,8 @@ def main():
                 quality_score = pipeline_test.get('integration_test', {}).get('enhanced_pipeline', {}).get('quality_score', 'N/A')
                 
                 logger.info(f"    4-Phase Pipeline: {' Success' if enhanced_success else ' Failed'}")
-                logger.info(f"   📈 Individual Phases: {phase_success_rate:.1%} success rate")
-                logger.info(f"   🏆 Quality Score: {quality_score}")
+                logger.info(f"   Individual Phases: {phase_success_rate:.1%} success rate")
+                logger.info(f"   Quality Score: {quality_score}")
                 
                 for rec in pipeline_test.get('recommendations', [])[:3]:  # Show top 3 recommendations
                     logger.info(f"    {rec}")
@@ -2197,7 +2437,7 @@ def main():
     
     # Analyze classification datasets
     logger.info("")
-    logger.info("🔬 ANALYZING CLASSIFICATION DATASETS")
+    logger.info("ANALYZING CLASSIFICATION DATASETS")
     logger.info("=" * 50)
     
     for i, dataset_config in enumerate(CLASSIFICATION_DATASETS_FOR_ANALYSIS, 1):
@@ -2214,8 +2454,8 @@ def main():
                 quality_score = pipeline_test.get('integration_test', {}).get('enhanced_pipeline', {}).get('quality_score', 'N/A')
                 
                 logger.info(f"    4-Phase Pipeline: {' Success' if enhanced_success else ' Failed'}")
-                logger.info(f"   📈 Individual Phases: {phase_success_rate:.1%} success rate")
-                logger.info(f"   🏆 Quality Score: {quality_score}")
+                logger.info(f"   Individual Phases: {phase_success_rate:.1%} success rate")
+                logger.info(f"   Quality Score: {quality_score}")
                 
                 for rec in pipeline_test.get('recommendations', [])[:3]:  # Show top 3 recommendations
                     logger.info(f"    {rec}")
@@ -2225,7 +2465,7 @@ def main():
     
     # Generate comprehensive summary
     logger.info("")
-    logger.info("📋 GENERATING COMPREHENSIVE SUMMARY")
+    logger.info("GENERATING COMPREHENSIVE SUMMARY")
     logger.info("=" * 50)
     analyzer.generate_overall_summary()
     
@@ -2238,11 +2478,11 @@ def main():
     
     # Final summary
     logger.info("")
-    logger.info("🎉 4-PHASE ENHANCED PIPELINE DATA QUALITY ANALYSIS COMPLETE!")
+    logger.info("4-PHASE ENHANCED PIPELINE DATA QUALITY ANALYSIS COMPLETE!")
     logger.info("=" * 80)
-    logger.info("📁 Results saved to:")
+    logger.info("Results saved to:")
     logger.info(f"    Overall Summary: {analyzer.output_dir}/summary/overall_data_quality_summary.csv")
-    logger.info(f"   📈 Statistics: {analyzer.output_dir}/summary/summary_statistics.csv")
+    logger.info(f"    Statistics: {analyzer.output_dir}/summary/summary_statistics.csv")
     logger.info(f"    Robust Scaling Report: {analyzer.output_dir}/summary/robust_scaling_effectiveness_report.json")
     logger.info(f"    4-Phase Pipeline Report: {analyzer.output_dir}/summary/4phase_pipeline_summary.json")
     logger.info(f"    Regression Details: {analyzer.output_dir}/regression/")
@@ -2263,6 +2503,16 @@ def main():
     logger.info("    Monitor data quality across datasets")
     logger.info("    Optimize pipeline performance")
     logger.info("    Ensure production readiness")
+    logger.info("")
+    logger.info("DATA QUALITY ANALYSIS IMPROVEMENTS:")
+    logger.info("   • Explicit NaN and zero detection (not relying on safe_statistical_computation)")
+    logger.info("   • Added near-zero percentage calculation (values < 1e-10)")
+    logger.info("   • Added counts for missing, zero, and near-zero values")
+    logger.info("   • Added data quality flags (good/moderate/poor)")
+    logger.info("   • Debug mode for detailed data validation")
+    logger.info("   • Improved logging with data quality summaries")
+    logger.info("   • Enhanced CSV output with all new metrics")
+    logger.info("   • Validation against safe_statistical_computation for accuracy")
 
 
 if __name__ == "__main__":

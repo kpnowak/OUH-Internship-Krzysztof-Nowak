@@ -27,8 +27,8 @@ class FusionAwarePreprocessor:
     Fusion-aware preprocessing pipeline that optimizes the order of operations
     based on the fusion method being used.
     
-    For SNF, MKL, and Attention-based methods: Scale → Fuse → Select Features
-    For simple methods: Select Features → Scale → Fuse (traditional order)
+    For SNF, MKL, and Attention-based methods: Scale  Fuse  Select Features
+    For simple methods: Select Features  Scale  Fuse (traditional order)
     """
     
     # Fusion methods that benefit from having more features during fusion
@@ -111,9 +111,9 @@ class FusionAwarePreprocessor:
                           y: np.ndarray,
                           fusion_params: Dict) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        Optimal order for feature-rich fusion methods: Scale → Fuse → Select Features.
+        Optimal order for feature-rich fusion methods: Scale  Fuse  Select Features.
         """
-        logger.info("Applying Scale → Fuse → Select order for feature-rich fusion")
+        logger.info("Applying Scale  Fuse  Select order for feature-rich fusion")
         
         # Step 1: Scale each modality individually
         scaled_modalities = {}
@@ -169,7 +169,7 @@ class FusionAwarePreprocessor:
                     fused_data, y, "fused_data", self.task_type
                 )
                 self.feature_selectors_["fused"] = feature_selector
-                logger.info(f"Feature selection: {fused_data.shape[1]} → {final_data.shape[1]} features")
+                logger.info(f"Feature selection: {fused_data.shape[1]}  {final_data.shape[1]} features")
             except Exception as e:
                 logger.warning(f"Feature selection failed: {str(e)}, using original data")
                 final_data = fused_data
@@ -191,9 +191,9 @@ class FusionAwarePreprocessor:
                           y: np.ndarray,
                           fusion_params: Dict) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        Traditional order for simple fusion methods: Select Features → Scale → Fuse.
+        Traditional order for simple fusion methods: Select Features  Scale  Fuse.
         """
-        logger.info("Applying Select Features → Scale → Fuse order for simple fusion")
+        logger.info("Applying Select Features  Scale  Fuse order for simple fusion")
         
         # Step 1: Apply feature selection to each modality
         selected_modalities = {}
@@ -206,7 +206,7 @@ class FusionAwarePreprocessor:
                         X, y, modality_name, self.task_type
                     )
                     self.feature_selectors_[modality_name] = feature_selector
-                    logger.debug(f"Feature selection for {modality_name}: {X.shape[1]} → {X_selected.shape[1]} features")
+                    logger.debug(f"Feature selection for {modality_name}: {X.shape[1]}  {X_selected.shape[1]} features")
                 except Exception as e:
                     logger.warning(f"Feature selection failed for {modality_name}: {str(e)}")
                     X_selected = X
@@ -288,7 +288,7 @@ class FusionAwarePreprocessor:
             return self._transform_select_scale_fuse(modality_data_dict)
     
     def _transform_scale_fuse_select(self, modality_data_dict: Dict[str, Tuple[np.ndarray, List[str]]]) -> np.ndarray:
-        """Transform using scale → fuse → select order."""
+        """Transform using scale  fuse  select order."""
         # Step 1: Scale using fitted scalers
         scaled_modalities = {}
         for modality_name, (X, sample_ids) in modality_data_dict.items():
@@ -324,7 +324,7 @@ class FusionAwarePreprocessor:
         return final_data
     
     def _transform_select_scale_fuse(self, modality_data_dict: Dict[str, Tuple[np.ndarray, List[str]]]) -> np.ndarray:
-        """Transform using select → scale → fuse order."""
+        """Transform using select  scale  fuse order."""
         # Step 1: Apply feature selection using fitted selectors
         selected_modalities = {}
         for modality_name, (X, sample_ids) in modality_data_dict.items():

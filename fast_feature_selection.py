@@ -610,7 +610,7 @@ class GenomicFeatureSelector:
             if is_regression:
                 # Use very light regularization for speed
                 model = ElasticNet(
-                    alpha=0.2,        # OPTIMIZED: Stricter regularization (0.001 → 0.2, range 0.1-0.5)
+                    alpha=0.2,        # OPTIMIZED: Stricter regularization (0.001  0.2, range 0.1-0.5)
                     l1_ratio=0.5,     # Balanced L1/L2 regularization for feature selection
                     max_iter=500,     # Reduced iterations for speed
                     random_state=self.random_state,

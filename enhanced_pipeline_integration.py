@@ -85,11 +85,21 @@ class EnhancedPipelineCoordinator:
             # Phase 2: Feature-First Processing
             if self.enable_feature_first_order:
                 logger.info("Phase 2: Applying feature-first processing")
-                final_data, y_aligned = self._apply_feature_first_preprocessing(processed_modalities, y)
+                try:
+                    final_data, y_aligned = self._apply_feature_first_preprocessing(processed_modalities, y)
+                except Exception as e:
+                    logger.warning(f"Feature-first processing failed: {e}, using fallback")
+                    final_data, y_aligned, fallback_metadata = self._simple_preprocessing_fallback(processed_modalities, y)
+                    # Add fallback metadata
+                    self.pipeline_metadata_['fallback_used'] = True
+                    self.pipeline_metadata_['fallback_reason'] = str(e)
             else:
                 # Fallback to simple concatenation
                 logger.info("Using simple concatenation fallback")
                 final_data, y_aligned = self._simple_concatenation_fallback(processed_modalities, y)
+                # Add fallback metadata
+                self.pipeline_metadata_['fallback_used'] = True
+                self.pipeline_metadata_['fallback_reason'] = 'feature_first_disabled'
             
             # Phase 4: Final validation
             if self.enable_coordinated_validation:
@@ -153,7 +163,7 @@ class EnhancedPipelineCoordinator:
     def _apply_feature_first_preprocessing(self, modality_data_dict, y):
         """Run Phase 2: Feature-First Processing (NEW ARCHITECTURE)."""
         try:
-            logger.info("Applying correct feature-first architecture: Preprocessing → Return Separate Modalities")
+            logger.info("Applying correct feature-first architecture: Preprocessing  Return Separate Modalities")
             logger.info("Note: Feature extraction/selection will be applied to each modality separately later")
             
             # Step 1: Apply preprocessing to each modality separately
@@ -176,7 +186,8 @@ class EnhancedPipelineCoordinator:
             
         except Exception as e:
             logger.warning(f"Feature-first preprocessing failed: {e}, using fallback")
-            return self._simple_preprocessing_fallback(modality_data_dict, y)
+            # Re-raise to let the main process_pipeline method handle the fallback
+            raise
     
     def _apply_modality_specific_preprocessing(self, X, modality_name):
         """Apply feature processing to a single modality."""
@@ -297,11 +308,24 @@ class EnhancedPipelineCoordinator:
             n_samples = list(processed_dict.values())[0].shape[0]
             y_aligned = y[:n_samples] if len(y) >= n_samples else y
             
-            return processed_dict, y_aligned
+            # Return with metadata as expected by the function signature
+            fallback_metadata = {
+                'method': 'simple_preprocessing_fallback',
+                'n_samples': n_samples,
+                'n_modalities': len(processed_dict),
+                'status': 'success'
+            }
+            return processed_dict, y_aligned, fallback_metadata
             
         except Exception as e:
             logger.warning(f"Robust preprocessing failed: {e}, using concatenation")
-            return self._simple_concatenation_fallback(modality_data_dict, y)
+            concatenated_data, y_aligned = self._simple_concatenation_fallback(modality_data_dict, y)
+            fallback_metadata = {
+                'method': 'simple_concatenation_fallback',
+                'error': str(e),
+                'status': 'fallback_used'
+            }
+            return concatenated_data, y_aligned, fallback_metadata
     
     def _simple_concatenation_fallback(self, modality_data_dict, y):
         """Ultimate fallback: simple concatenation."""

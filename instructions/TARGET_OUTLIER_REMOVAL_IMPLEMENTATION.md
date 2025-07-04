@@ -41,7 +41,7 @@ if is_regression:
             
             logger.info(f"Fold {fold_idx}: Removed {n_outliers} extreme outliers (>{outlier_threshold:.2f}) "
                        f"from training set ({outlier_percentage:.1f}% of training data)")
-            logger.info(f"Training set size: {original_train_size} → {len(final_aligned_y_train)}")
+            logger.info(f"Training set size: {original_train_size}  {len(final_aligned_y_train)}")
             
             # Ensure we still have enough training samples
             if len(final_aligned_y_train) < MIN_SAMPLES_PER_FOLD:
@@ -97,7 +97,7 @@ if task == "reg":
             
             logger.info(f"Removed {n_outliers} extreme outliers (>{outlier_threshold:.2f}) "
                        f"from dataset ({outlier_percentage:.1f}% of data)")
-            logger.info(f"Dataset size: {original_size} → {len(y)}")
+            logger.info(f"Dataset size: {original_size}  {len(y)}")
             
             # Recompute baseline MAE after outlier removal
             baseline_mae = compute_baseline_mae(y)
@@ -125,7 +125,7 @@ if task == "reg":
 
 ### AML Dataset Test (Tuner)
 - **Outliers Removed**: 5 extreme outliers (>93.33)
-- **Dataset Impact**: 2.9% of data (170 → 165 samples)
+- **Dataset Impact**: 2.9% of data (170  165 samples)
 - **Baseline MAE Update**: 28.0000
 - **Status**: ✅ Successfully implemented and working
 

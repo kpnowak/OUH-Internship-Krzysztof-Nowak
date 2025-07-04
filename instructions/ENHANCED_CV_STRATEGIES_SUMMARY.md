@@ -23,7 +23,7 @@ Stratified regression: 4 quartile bins with counts [42 42 42 44]
 **Purpose**: Prevent overfitting to patient-specific signals when multiple samples share patient IDs (common in TCGA data).
 
 **Implementation**:
-- Extracts patient IDs from TCGA sample format: `TCGA-XX-XXXX-XXX` → `TCGA-XX-XXXX`
+- Extracts patient IDs from TCGA sample format: `TCGA-XX-XXXX-XXX`  `TCGA-XX-XXXX`
 - Uses `GroupKFold` or `StratifiedGroupKFold` to ensure all samples from same patient stay in same fold
 - Automatically detects when patient replicates exist
 

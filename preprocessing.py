@@ -1266,7 +1266,7 @@ def consolidated_rare_class_handler(y: pd.Series, dataset: str, min_class_size: 
         logger.warning(f"CRITICAL: Still have classes with <{min_class_size} samples after consolidation!")
         logger.warning(f"This may cause CV issues. Consider increasing min_class_size or removing this dataset.")
     else:
-        logger.info(f"SUCCESS: All classes have ≥{min_class_size} samples")
+        logger.info(f"SUCCESS: All classes have >={min_class_size} samples")
     
     return y
 
@@ -1668,7 +1668,7 @@ def advanced_feature_filtering(df: pd.DataFrame,
         df = df[missing_ratio <= missing_threshold]
     
     # 2. Remove low-MAD features (more robust than variance)
-    mad_threshold = config.get("mad_threshold", 0.05)  # OPTIMIZED: More aggressive (0.01 → 0.05)
+    mad_threshold = config.get("mad_threshold", 0.05)  # OPTIMIZED: More aggressive (0.01  0.05)
     if mad_threshold > 0:
         # Calculate MAD for each feature (row)
         mad_values = []
@@ -1689,7 +1689,7 @@ def advanced_feature_filtering(df: pd.DataFrame,
     
     # 3. Remove highly correlated features (RE-ENABLED with optimizations)
     if config.get("remove_highly_correlated", False):
-        correlation_threshold = config.get("correlation_threshold", 0.90)  # OPTIMIZED: More aggressive (0.95 → 0.90)
+        correlation_threshold = config.get("correlation_threshold", 0.90)  # OPTIMIZED: More aggressive (0.95  0.90)
         if df.shape[0] > 1:  # Only if we have more than 1 feature
             try:
                 # OPTIMIZATION: Use sample of features if too many for correlation analysis
@@ -4707,7 +4707,7 @@ def create_missing_data_indicators(X: np.ndarray,
     eligible_features = missing_percentages >= missing_threshold
     n_eligible = np.sum(eligible_features)
     
-    logging.info(f"Found {n_eligible} features with ≥{missing_threshold:.1%} missing values")
+    logging.info(f"Found {n_eligible} features with >={missing_threshold:.1%} missing values")
     
     if n_eligible == 0:
         # No features meet threshold - return empty indicators

@@ -64,8 +64,8 @@ except DataOrientationValidationError as e:
 
 ### 1. **Improved Pipeline Flow**
 ```
-Before: File Loading → Basic Orientation → Preprocessing → Validation → Orientation Validation (redundant)
-After:  File Loading → Comprehensive Orientation Validation → Preprocessing → Feature Selection
+Before: File Loading  Basic Orientation  Preprocessing  Validation  Orientation Validation (redundant)
+After:  File Loading  Comprehensive Orientation Validation  Preprocessing  Feature Selection
 ```
 
 ### 2. **Better Error Context**

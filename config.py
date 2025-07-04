@@ -11,9 +11,9 @@ from typing import Dict, List, Optional, Any, Union
 
 # Set Octave executable path for oct2py
 # laptop 1 - my
-#os.environ["OCTAVE_EXECUTABLE"] = r"C:\Users\krzys\AppData\Local\Programs\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+os.environ["OCTAVE_EXECUTABLE"] = r"C:\Users\krzys\AppData\Local\Programs\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
 # Laptop 2 - Tata
-os.environ["OCTAVE_EXECUTABLE"] = r"C:\Program Files\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+#os.environ["OCTAVE_EXECUTABLE"] = r"C:\Program Files\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
 
 
 # Suppress convergence warnings for cleaner output
@@ -193,7 +193,7 @@ ENHANCED_PREPROCESSING_CONFIGS = {
         "handle_outliers": True,
         "outlier_threshold": 5.0,
         # Numerical stability for gene expression
-        "mad_threshold": 0.01,         # OPTIMIZED: More aggressive MAD threshold (1e-7 → 0.01)
+        "mad_threshold": 0.01,         # OPTIMIZED: More aggressive MAD threshold (1e-7  0.01)
         "adaptive_mad_threshold": True,
         "target_feature_removal_rate": 0.05, # Remove 5% of most problematic features
         "numerical_stability_checks": True,
@@ -609,7 +609,7 @@ FUSION_UPGRADES_CONFIG = {
     "attention_weighted": {
         "enabled": True,
         "hidden_dim": 32,        # Hidden dimension for attention MLP
-        "dropout_rate": 0.3,     # OPTIMIZED: Increased dropout for better regularization (0.1 → 0.3)
+        "dropout_rate": 0.3,     # OPTIMIZED: Increased dropout for better regularization (0.1  0.3)
         "learning_rate": 0.001,  # Learning rate for optimization
         "max_epochs": 100,       # Maximum training epochs
         "patience": 10,          # Early stopping patience
@@ -775,7 +775,7 @@ RANDOM_FOREST_CONFIG = {
 
 # ElasticNet - Stricter regularization for better generalization
 ELASTIC_NET_CONFIG = {
-    'alpha': 0.3,  # OPTIMIZED: Stricter regularization (0.001 → 0.3, range 0.1-0.5)
+    'alpha': 0.3,  # OPTIMIZED: Stricter regularization (0.001  0.3, range 0.1-0.5)
     'l1_ratio': 0.5,  # Balanced L1/L2 regularization for feature selection
     'max_iter': 5000,  # More iterations for convergence
     'random_state': 42,
@@ -810,7 +810,7 @@ LOGISTIC_REGRESSION_CONFIG = {
 # Neural network architecture for genomic data
 NN_ARCHITECTURE_CONFIG = {
     'hidden_layers': [512, 256, 128],  # Larger networks
-    'dropout_rate': 0.3,  # OPTIMIZED: Increased dropout for better regularization (0.1 → 0.3)
+    'dropout_rate': 0.3,  # OPTIMIZED: Increased dropout for better regularization (0.1  0.3)
     'activation': 'relu',
     'batch_size': 32,
     'epochs': 200,  # More epochs

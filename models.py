@@ -310,7 +310,7 @@ def _sanitize_extractor_hyperparameters(extractor, extractor_class_name, hyperpa
             
             # Use the actual parameter name (without prefix) for setting
             validated_params[actual_param_name] = param_value
-            logger.debug(f"Mapped hyperparameter {param_name} → {actual_param_name} = {param_value} for {extractor_class_name}")
+            logger.debug(f"Mapped hyperparameter {param_name}  {actual_param_name} = {param_value} for {extractor_class_name}")
         else:
             logger.debug(f"Skipping unknown parameter {param_name} (mapped to {actual_param_name}) for {extractor_class_name}")
     
@@ -340,10 +340,11 @@ def _sanitize_extractor_hyperparameters(extractor, extractor_class_name, hyperpa
             logger.info("LDA: Setting shrinkage='auto' for eigen solver to prevent matrix factorization issues")
             validated_params['shrinkage'] = 'auto'
     
-    # Special post-processing for KPCA to prevent zero-size eigenvalue array errors
+    # Special post-processing for KPCA to prevent zero-size eigenvalue array errors and ARPACK issues
     elif extractor_class_name in ['KernelPCA', 'KernelPCAMedianHeuristic']:
         gamma = validated_params.get('gamma')
         n_components = validated_params.get('n_components')
+        eigen_solver = validated_params.get('eigen_solver')
         
         # Handle gamma parameter validation
         if gamma is not None:
@@ -356,19 +357,37 @@ def _sanitize_extractor_hyperparameters(extractor, extractor_class_name, hyperpa
                     logger.info(f"KPCA: Detected very large gamma ({gamma}), reducing to 10.0 for stability")
                     validated_params['gamma'] = 10.0
             elif isinstance(gamma, str):
-                # Allow valid string values: 'scale', 'auto'
-                if gamma not in ['scale', 'auto']:
-                    logger.info(f"KPCA: Invalid gamma string '{gamma}', using 'scale' for adaptive scaling")
-                    validated_params['gamma'] = 'scale'
+                # Convert string gamma to numerical value for compatibility
+                if gamma in ['scale', 'auto']:
+                    # Use default gamma (1.0/n_features) - will be computed at runtime
+                    validated_params['gamma'] = None
+                    logger.info(f"KPCA: Converting gamma '{gamma}' to None for compatibility")
+                else:
+                    logger.info(f"KPCA: Invalid gamma string '{gamma}', using None (default)")
+                    validated_params['gamma'] = None
         else:
-            # Default to 'scale' if gamma is missing
-            validated_params['gamma'] = 'scale'
-            logger.debug("KPCA: Set gamma to 'scale' for adaptive scaling")
+            # Keep None as default
+            validated_params['gamma'] = None
+            logger.debug("KPCA: Using default gamma (None)")
         
-        # Ensure eigen_solver is set to 'auto' to let sklearn choose the best method
-        if 'eigen_solver' not in validated_params:
-            validated_params['eigen_solver'] = 'auto'
-            logger.debug("KPCA: Set eigen_solver to 'auto' for improved stability")
+        # Enhanced eigen_solver configuration to prevent ARPACK errors
+        if eigen_solver == 'arpack' or eigen_solver == 'auto':
+            # Replace ARPACK solver with more stable alternatives for problematic datasets
+            validated_params['eigen_solver'] = 'dense'
+            logger.info("KPCA: Using 'dense' solver instead of ARPACK for improved stability")
+        elif 'eigen_solver' not in validated_params:
+            validated_params['eigen_solver'] = 'dense'
+            logger.debug("KPCA: Set eigen_solver to 'dense' for improved stability")
+            
+        # Ensure tolerance is set for numerical stability
+        if 'tol' not in validated_params:
+            validated_params['tol'] = 1e-4
+            logger.debug("KPCA: Set tolerance to 1e-4 for numerical stability")
+            
+        # Force single-threaded execution to avoid parallelism issues
+        if 'n_jobs' not in validated_params or validated_params.get('n_jobs', 1) != 1:
+            validated_params['n_jobs'] = 1
+            logger.debug("KPCA: Set n_jobs=1 to avoid parallelism issues")
     
     # Special post-processing for SparsePLS to prevent zero weights
     elif extractor_class_name == 'SparsePLS':
@@ -1653,8 +1672,9 @@ class KernelPCAMedianHeuristic:
                 n_components=self.n_components,
                 kernel=self.kernel,
                 gamma=self.gamma_computed_,
-                eigen_solver=self.eigen_solver,
-                n_jobs=self.n_jobs,
+                eigen_solver='dense' if self.eigen_solver == 'auto' else self.eigen_solver,  # Use dense for stability
+                n_jobs=1,  # Force single thread for stability
+                tol=1e-4,  # Add tolerance for numerical stability
                 random_state=self.random_state
             )
             
@@ -1674,10 +1694,11 @@ class KernelPCAMedianHeuristic:
                 logger.info(f"Retrying KernelPCA with {safe_components} components and 'auto' solver")
                 self.kernel_pca_ = KernelPCA(
                     n_components=safe_components,
-                    kernel=self.kernel,
-                    gamma=self.gamma_computed_,
-                    eigen_solver='auto',  # Let sklearn choose the best solver
+                    kernel='linear' if self.kernel == 'rbf' else self.kernel,  # Switch to linear kernel for stability
+                    gamma=self.gamma_computed_ if self.kernel != 'linear' else None,
+                    eigen_solver='dense',  # Use most stable solver
                     n_jobs=1,  # Single thread to avoid parallelism issues
+                    tol=1e-3,  # More relaxed tolerance
                     random_state=self.random_state
                 )
                 
@@ -3040,9 +3061,11 @@ def get_regression_extractors() -> Dict[str, Any]:
         "KPCA": KernelPCA(
             kernel="rbf", 
             random_state=42, 
-            n_jobs=-1,
-            gamma="scale",  # Use sklearn's adaptive gamma instead of fixed value
-            eigen_solver="auto"  # Let sklearn choose best solver
+            n_jobs=1,  # Use single thread to avoid parallelism issues
+            gamma=None,  # Use default gamma (1.0/n_features)
+            eigen_solver="dense",  # Use dense solver by default for better stability
+            tol=1e-4,  # Relaxed tolerance for eigenvalue computation
+            max_iter=None  # Let sklearn use default max_iter
         ),
         "FA": FactorAnalysis(
             random_state=42,
@@ -3122,9 +3145,11 @@ def get_classification_extractors() -> Dict[str, Any]:
         "KPCA": KernelPCA(
             kernel="rbf", 
             random_state=42, 
-            n_jobs=-1,
-            gamma="scale",  # Use sklearn's adaptive gamma instead of fixed value
-            eigen_solver="auto"  # Let sklearn choose best solver
+            n_jobs=1,  # Use single thread to avoid parallelism issues
+            gamma=None,  # Use default gamma (1.0/n_features)
+            eigen_solver="dense",  # Use dense solver by default for better stability
+            tol=1e-4,  # Relaxed tolerance for eigenvalue computation
+            max_iter=None  # Let sklearn use default max_iter
         ),
         "FA": FactorAnalysis(
             random_state=42,
@@ -3450,8 +3475,65 @@ def cached_fit_transform_extractor_regression(X, y, extractor, n_components, ds_
         error_msg = str(e)
         logger.warning(f"Extractor regression failed for {ds_name}: {error_msg}")
         
+        # Special handling for KPCA ARPACK errors
+        if ("ARPACK error" in error_msg or "No shifts could be applied" in error_msg) and 'KernelPCA' in extractor.__class__.__name__:
+            logger.warning(f"KPCA encountered ARPACK eigenvalue solver error for {ds_name} - trying recovery strategies")
+            try:
+                from sklearn.decomposition import KernelPCA
+                
+                # Strategy 1: Try with 'dense' eigen_solver and reduced components
+                safe_components = min(n_components // 2, X_arr.shape[0] - 1, 4)  # More conservative reduction
+                safe_components = max(1, safe_components)
+                
+                logger.info(f"ARPACK recovery attempt 1: Using 'dense' solver with {safe_components} components")
+                recovery_extractor = KernelPCA(
+                    n_components=safe_components,
+                    kernel=extractor.kernel,
+                    gamma=None,  # Use default gamma for compatibility
+                    eigen_solver='dense',  # Dense solver is more stable than ARPACK
+                    n_jobs=1,  # Single thread to avoid parallelism issues
+                    random_state=42
+                )
+                
+                recovery_extractor.fit(X_arr)
+                X_transformed = recovery_extractor.transform(X_arr)
+                
+                logger.info(f"ARPACK recovery successful with 'dense' solver and {safe_components} components")
+                result = (recovery_extractor, X_transformed)
+                _extractor_cache['ext_reg'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
+                return result
+                
+            except Exception as recovery_error1:
+                logger.warning(f"ARPACK recovery attempt 1 failed: {recovery_error1}")
+                try:
+                    # Strategy 2: Try with randomized solver and even fewer components
+                    minimal_components = min(2, X_arr.shape[0] - 1)
+                    minimal_components = max(1, minimal_components)
+                    
+                    logger.info(f"ARPACK recovery attempt 2: Using 'randomized' solver with {minimal_components} components")
+                    recovery_extractor2 = KernelPCA(
+                        n_components=minimal_components,
+                        kernel='linear',  # Switch to linear kernel for stability
+                        eigen_solver='randomized',  # Randomized solver for large matrices
+                        n_jobs=1,
+                        random_state=42
+                    )
+                    
+                    recovery_extractor2.fit(X_arr)
+                    X_transformed = recovery_extractor2.transform(X_arr)
+                    
+                    logger.info(f"ARPACK recovery successful with 'randomized' solver and {minimal_components} components")
+                    result = (recovery_extractor2, X_transformed)
+                    _extractor_cache['ext_reg'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
+                    return result
+                    
+                except Exception as recovery_error2:
+                    logger.warning(f"ARPACK recovery attempt 2 failed: {recovery_error2}")
+                    logger.warning("All KPCA recovery strategies failed - falling back to PCA")
+                    # Fall through to PCA fallback below
+        
         # Special handling for KPCA zero-size array error
-        if "zero-size array to reduction operation maximum" in error_msg and 'KernelPCA' in extractor.__class__.__name__:
+        elif "zero-size array to reduction operation maximum" in error_msg and 'KernelPCA' in extractor.__class__.__name__:
             logger.warning("KPCA encountered zero-size eigenvalue array - falling back to PCA")
             try:
                 # Fall back to regular PCA with CONSISTENT components across all modalities
@@ -3695,8 +3777,65 @@ def cached_fit_transform_extractor_classification(X, y, extractor, n_components,
         error_msg = str(e)
         logger.warning(f"Extractor classification failed for {ds_name}: {error_msg}")
         
+        # Special handling for KPCA ARPACK errors
+        if ("ARPACK error" in error_msg or "No shifts could be applied" in error_msg) and 'KernelPCA' in extractor.__class__.__name__:
+            logger.warning(f"KPCA encountered ARPACK eigenvalue solver error for {ds_name} - trying recovery strategies")
+            try:
+                from sklearn.decomposition import KernelPCA
+                
+                # Strategy 1: Try with 'dense' eigen_solver and reduced components
+                safe_components = min(n_components // 2, X_arr.shape[0] - 1, 4)  # More conservative reduction
+                safe_components = max(1, safe_components)
+                
+                logger.info(f"ARPACK recovery attempt 1: Using 'dense' solver with {safe_components} components")
+                recovery_extractor = KernelPCA(
+                    n_components=safe_components,
+                    kernel=extractor.kernel,
+                    gamma=None,  # Use default gamma for compatibility
+                    eigen_solver='dense',  # Dense solver is more stable than ARPACK
+                    n_jobs=1,  # Single thread to avoid parallelism issues
+                    random_state=42
+                )
+                
+                recovery_extractor.fit(X_arr)
+                X_transformed = recovery_extractor.transform(X_arr)
+                
+                logger.info(f"ARPACK recovery successful with 'dense' solver and {safe_components} components")
+                result = (recovery_extractor, X_transformed)
+                _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
+                return result
+                
+            except Exception as recovery_error1:
+                logger.warning(f"ARPACK recovery attempt 1 failed: {recovery_error1}")
+                try:
+                    # Strategy 2: Try with randomized solver and even fewer components
+                    minimal_components = min(2, X_arr.shape[0] - 1)
+                    minimal_components = max(1, minimal_components)
+                    
+                    logger.info(f"ARPACK recovery attempt 2: Using 'randomized' solver with {minimal_components} components")
+                    recovery_extractor2 = KernelPCA(
+                        n_components=minimal_components,
+                        kernel='linear',  # Switch to linear kernel for stability
+                        eigen_solver='randomized',  # Randomized solver for large matrices
+                        n_jobs=1,
+                        random_state=42
+                    )
+                    
+                    recovery_extractor2.fit(X_arr)
+                    X_transformed = recovery_extractor2.transform(X_arr)
+                    
+                    logger.info(f"ARPACK recovery successful with 'randomized' solver and {minimal_components} components")
+                    result = (recovery_extractor2, X_transformed)
+                    _extractor_cache['ext_clf'].put(key, result, item_size=X_transformed.nbytes if hasattr(X_transformed, 'nbytes') else X_transformed.size * 8)
+                    return result
+                    
+                except Exception as recovery_error2:
+                    logger.warning(f"ARPACK recovery attempt 2 failed: {recovery_error2}")
+                    logger.warning("All KPCA recovery strategies failed - falling back to PCA")
+                    # Fall through to PCA fallback below
+        
         # Special handling for KPCA zero-size array error
-        if "zero-size array to reduction operation maximum" in error_msg and 'KernelPCA' in extractor.__class__.__name__:
+        elif "zero-size array to reduction operation maximum" in error_msg and 'KernelPCA' in extractor.__class__.__name__:
             logger.warning("KPCA encountered zero-size eigenvalue array - falling back to PCA")
             try:
                 # Fall back to regular PCA with CONSISTENT components across all modalities
@@ -4663,8 +4802,8 @@ def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method,
     logger = logging.getLogger(__name__)
     
     # Step 1: Map dataset to source dataset based on user specifications
-    # AML (regression) → source for all regression databases: AML, Sarcoma
-    # Breast (classification) → source for all classification databases: Breast, Colon, Kidney, Liver, Lung, Melanoma, Ovarian
+    # AML (regression)  source for all regression databases: AML, Sarcoma
+    # Breast (classification)  source for all classification databases: Breast, Colon, Kidney, Liver, Lung, Melanoma, Ovarian
     
     regression_datasets = ["AML", "Sarcoma"]
     classification_datasets = ["Breast", "Colon", "Kidney", "Liver", "Lung", "Melanoma", "Ovarian"]
@@ -4680,8 +4819,8 @@ def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method,
         source_dataset = "AML" if is_regression else "Breast"
     
     # Step 2: Map algorithm name to match hyperparameter file naming
-    # elasticnet_regression → ElasticNetFS
-    # f_regression → f_regressionFS
+    # elasticnet_regression  ElasticNetFS
+    # f_regression  f_regressionFS
     # Add more mappings as needed
     algorithm_name_mapping = {
         "elasticnet_regression": "ElasticNetFS",
@@ -4692,8 +4831,8 @@ def load_feature_first_hyperparameters(dataset, algorithm, model, fusion_method,
     source_algorithm = algorithm_name_mapping.get(algorithm, algorithm)
     
     # Step 3: Map fusion technique to source fusion based on user specifications
-    # attention_weighted/learnable_weighted/standard_concat → use attention_weighted params
-    # average/mkl/sum/early_fusion_pca/max → use average params
+    # attention_weighted/learnable_weighted/standard_concat  use attention_weighted params
+    # average/mkl/sum/early_fusion_pca/max  use average params
     if fusion_method in ["attention_weighted", "learnable_weighted", "standard_concat"]:
         source_fusion = "attention_weighted"
     elif fusion_method in ["average", "mkl", "sum", "early_fusion_pca", "max"]:

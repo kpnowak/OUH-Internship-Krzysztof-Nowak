@@ -214,7 +214,7 @@ def validate_predictions(y_pred, y_true=None, task_type='regression'):
    - ✅ Completed in 2.8 seconds
    - ✅ No warnings generated
    - ✅ 100% successful parameter combinations (10/10)
-   - ✅ Conservative halving worked perfectly (5→3→2 candidates)
+   - ✅ Conservative halving worked perfectly (532 candidates)
 
 ### **Main Pipeline Integration**
 - ✅ Safe scoring functions tested and working

@@ -2,7 +2,7 @@
 """
 Coordinated Validation Framework Module.
 Implements Phase 4: Centralizes all validation logic from multiple modules.
-Hierarchical validation (data → preprocessing → fusion → CV) with fail-fast error reporting.
+Hierarchical validation (data  preprocessing  fusion  CV) with fail-fast error reporting.
 """
 
 import numpy as np
@@ -257,7 +257,7 @@ class CoordinatedValidationFramework:
                     
                     if processed_samples != original_samples:
                         self.add_issue(ValidationSeverity.WARNING, 
-                                     f"Sample count changed for {modality_name}: {original_samples} → {processed_samples}")
+                                     f"Sample count changed for {modality_name}: {original_samples}  {processed_samples}")
             
             logger.info("Preprocessing validation completed")
             return True
@@ -324,7 +324,7 @@ class CoordinatedValidationFramework:
             
             if fusion_features > total_input_features:
                 self.add_issue(ValidationSeverity.WARNING, 
-                             f"Fusion increased feature count: {total_input_features} → {fusion_features}")
+                             f"Fusion increased feature count: {total_input_features}  {fusion_features}")
             
             logger.info(f"Fusion validation completed for {fusion_method}")
             return True

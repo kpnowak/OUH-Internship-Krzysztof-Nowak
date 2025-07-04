@@ -435,7 +435,7 @@ def process_regression_datasets(args):
             if args.sequential:
                 # SEQUENTIAL: Process one extractor/selector at a time through all fusion techniques
                 print(f"===> Processing with SEQUENTIAL architecture for dataset {ds_name}")
-                logger.info(f"===> Using SEQUENTIAL architecture: One extractor/selector → All fusion techniques → All models")
+                logger.info(f"===> Using SEQUENTIAL architecture: One extractor/selector  All fusion techniques  All models")
                 
                 from cv import run_sequential_extraction_pipeline, run_sequential_selection_pipeline
                 
@@ -468,7 +468,7 @@ def process_regression_datasets(args):
             elif args.fusion_first:
                 # LEGACY: Fusion-First Architecture
                 print(f"===> Processing with FUSION-FIRST architecture for dataset {ds_name}")
-                logger.info(f"===> Using LEGACY FUSION-FIRST architecture: Fusion → Feature Processing → Model Training")
+                logger.info(f"===> Using LEGACY FUSION-FIRST architecture: Fusion  Feature Processing  Model Training")
                 
                 # First, run extraction pipeline for all n_values
                 print(f"===> Processing EXTRACTION for dataset {ds_name}")
@@ -499,7 +499,7 @@ def process_regression_datasets(args):
             else:
                 # DEFAULT: Feature-First Architecture
                 print(f"===> Processing with FEATURE-FIRST architecture for dataset {ds_name}")
-                logger.info(f"===> Using STANDARD FEATURE-FIRST architecture: Feature Processing → Fusion → Model Training")
+                logger.info(f"===> Using STANDARD FEATURE-FIRST architecture: Feature Processing  Fusion  Model Training")
                 
                 from feature_first_pipeline import run_feature_first_pipeline
                 
@@ -596,7 +596,7 @@ def process_classification_datasets(args):
             if args.sequential:
                 # SEQUENTIAL: Process one extractor/selector at a time through all fusion techniques
                 print(f"===> Processing with SEQUENTIAL architecture for dataset {ds_name}")
-                logger.info(f"===> Using SEQUENTIAL architecture: One extractor/selector → All fusion techniques → All models")
+                logger.info(f"===> Using SEQUENTIAL architecture: One extractor/selector  All fusion techniques  All models")
                 
                 from cv import run_sequential_extraction_pipeline, run_sequential_selection_pipeline
                 
@@ -629,7 +629,7 @@ def process_classification_datasets(args):
             elif args.fusion_first:
                 # LEGACY: Fusion-First Architecture
                 print(f"===> Processing with FUSION-FIRST architecture for dataset {ds_name}")
-                logger.info(f"===> Using LEGACY FUSION-FIRST architecture: Fusion → Feature Processing → Model Training")
+                logger.info(f"===> Using LEGACY FUSION-FIRST architecture: Fusion  Feature Processing  Model Training")
                 
                 # First, run extraction pipeline for all n_values
                 print(f"===> Processing EXTRACTION for dataset {ds_name}")
@@ -660,7 +660,7 @@ def process_classification_datasets(args):
             else:
                 # DEFAULT: Feature-First Architecture
                 print(f"===> Processing with FEATURE-FIRST architecture for dataset {ds_name}")
-                logger.info(f"===> Using STANDARD FEATURE-FIRST architecture: Feature Processing → Fusion → Model Training")
+                logger.info(f"===> Using STANDARD FEATURE-FIRST architecture: Feature Processing  Fusion  Model Training")
                 
                 from feature_first_pipeline import run_feature_first_pipeline
                 

@@ -8,7 +8,7 @@ This document summarizes the successful implementation of **4 major architectura
 
 **Before Implementation:**
 ```
-main.py → cli.py → data_io.py → preprocessing.py → fusion.py → cv.py
+main.py  cli.py  data_io.py  preprocessing.py  fusion.py  cv.py
 ```
 
 **Key Problems Solved:**
@@ -57,8 +57,8 @@ print(f"Quality Score: {quality_report['overall_quality_score']:.3f}")
 **Key Innovation:** **Adaptive preprocessing order based on fusion method**
 
 **Intelligent Order Selection:**
-- **SNF, MKL, Attention-based methods**: Scale → Fuse → Select Features
-- **Simple methods (concatenation, PCA)**: Select Features → Scale → Fuse
+- **SNF, MKL, Attention-based methods**: Scale  Fuse  Select Features
+- **Simple methods (concatenation, PCA)**: Select Features  Scale  Fuse
 
 **Rationale:**
 - Feature-rich fusion methods (SNF, MKL) need **more features during fusion** to build better similarity networks and kernels
@@ -219,8 +219,8 @@ final_data, y_aligned, metadata = run_enhanced_preprocessing_pipeline(
 ### **2. Improved Pipeline Flow**
 ```
 ENHANCED PIPELINE FLOW:
-Data Loading → Orientation Validation → Early Quality Assessment → 
-Missing Data Management → Fusion-Aware Preprocessing → Coordinated Validation → CV
+Data Loading  Orientation Validation  Early Quality Assessment  
+Missing Data Management  Fusion-Aware Preprocessing  Coordinated Validation  CV
 ```
 
 ### **3. Intelligent Adaptivity**

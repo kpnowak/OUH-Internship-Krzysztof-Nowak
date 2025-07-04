@@ -54,9 +54,9 @@ The pipeline implements a **feature-first architecture** where feature extractio
 Raw Multi-Omics Data
     ↓
 Feature Processing (Applied to each modality separately)
-    ├── Gene Expression: PCA/ElasticNet/etc. → Processed Gene Features
-    ├── miRNA: PCA/ElasticNet/etc. → Processed miRNA Features  
-    └── Methylation: PCA/ElasticNet/etc. → Processed Methylation Features
+    ├── Gene Expression: PCA/ElasticNet/etc.  Processed Gene Features
+    ├── miRNA: PCA/ElasticNet/etc.  Processed miRNA Features  
+    └── Methylation: PCA/ElasticNet/etc.  Processed Methylation Features
     ↓
 Fusion (Combine processed features from all modalities)
     ↓ 
@@ -80,21 +80,22 @@ Input: Raw Multi-Omics Data
     └── Methylation (25,000+ features)
     
 Step 1: Feature Processing (Applied separately to each modality)
-    ├── Gene Expression → PCA/ElasticNet → 32 processed features
-    ├── miRNA → PCA/ElasticNet → 32 processed features
-    └── Methylation → PCA/ElasticNet → 32 processed features
+    ├── Gene Expression  PCA/ElasticNet  32 processed features
+    ├── miRNA  PCA/ElasticNet  32 processed features
+    └── Methylation  PCA/ElasticNet  32 processed features
     
 Step 2: Fusion (Combine processed features)
     Input: [gene_32_features, mirna_32_features, methy_32_features]
     ↓
     Apply Fusion Technique:
-    ├── Average: (gene + mirna + methy) / 3 → 32 fused features
-    ├── Sum: gene + mirna + methy → 32 fused features  
-    ├── Attention: weighted combination → 32 fused features
-    ├── MKL: kernel-based combination → 32 fused features
-    ├── Learnable: performance-weighted → 32 fused features
-    ├── Standard Concat: [gene | mirna | methy] → 96 fused features
-    └── Early PCA: concatenate then PCA → configurable fused features
+    ├── Average: (gene + mirna + methy) / 3  32 fused features
+    ├── Sum: gene + mirna + methy  32 fused features  
+    ├── Max: element-wise maximum(gene, mirna, methy)  32 fused features
+    ├── Attention: weighted combination  32 fused features
+    ├── MKL: kernel-based combination  32 fused features
+    ├── Learnable: performance-weighted  32 fused features
+    ├── Standard Concat: [gene | mirna | methy]  96 fused features
+    └── Early PCA: concatenate then PCA  configurable fused features
     
 Step 3: Model Training
     Input: Fused features (typically 32-64 dimensions)
@@ -117,12 +118,13 @@ This approach ensures that fusion techniques work with:
 - **Phase 4 - Coordinated Validation**: Enhanced cross-validation with numerical stability
 
 ### 🧩 **Missing Data-Adaptive Fusion Strategies**
-- **Clean Data (0% missing)**: 7 advanced methods - attention_weighted, learnable_weighted, mkl, average, sum, standard_concat, early_fusion_pca
-- **Missing Data (>0% missing)**: 4 robust methods - mkl, average, sum, early_fusion_pca
+- **Clean Data (0% missing)**: 8 advanced methods - attention_weighted, learnable_weighted, mkl, average, sum, max, standard_concat, early_fusion_pca
+- **Missing Data (>0% missing)**: 5 robust methods - mkl, average, sum, max, early_fusion_pca
 - **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific weighting
 - **Multiple Kernel Learning (MKL)**: RBF kernel-based fusion with automatic kernel weighting
 - **Average Fusion**: Simple averaging of modality features for robust baseline fusion
 - **Sum Fusion**: Simple summation of modality features for additive combination
+- **Max Fusion**: Element-wise maximum of modality features for robust peak signal extraction
 
 ### 🧬 **Enhanced Modality-Specific Preprocessing**
 - **Gene Expression**: Robust biomedical preprocessing with log transformation and robust scaling
@@ -151,7 +153,7 @@ This approach ensures that fusion techniques work with:
 - **ElasticNet Optimization**: Small dataset detection with fallback strategies
   - Small datasets (<200 samples): Fixed alpha ElasticNet with StandardScaler
   - Large datasets: ElasticNetCV with PowerTransformer
-  - Multi-level fallbacks: ElasticNetCV → ElasticNet → LinearRegression
+  - Multi-level fallbacks: ElasticNetCV  ElasticNet  LinearRegression
 - **Numerical Stability**: Safe attribute access with robust error handling
 - **Cross-Validation Compatibility**: Proper sklearn usage without forced adaptations
 
@@ -186,6 +188,7 @@ FUSION_STRATEGIES_CLEAN_DATA = {
     'mkl': 'Multiple Kernel Learning with RBF kernels',
     'average': 'Simple averaging for robust baseline fusion',
     'sum': 'Simple summation for additive combination',
+    'max': 'Element-wise maximum for robust peak signal extraction',
     'standard_concat': 'Standard concatenation of processed features',
     'early_fusion_pca': 'PCA-based early integration'
 }
@@ -194,6 +197,7 @@ FUSION_STRATEGIES_MISSING_DATA = {
     'mkl': 'Multiple Kernel Learning (robust to missing data)',
     'average': 'Simple averaging (handles missing data)',
     'sum': 'Simple summation (handles missing data)',
+    'max': 'Element-wise maximum (robust to missing data)',
     'early_fusion_pca': 'PCA-based early integration (robust)'
 }
 
@@ -202,16 +206,16 @@ for MISSING in [0, 0.20, 0.50]:  # Missing data scenarios first
     # STEP 1: Select fusion strategy based on missing data percentage
     if MISSING == 0:
         INTEGRATIONS = [attention_weighted, learnable_weighted, 
-                       mkl, average, sum, standard_concat, early_fusion_pca]  # 7 methods for clean data
+                       mkl, average, sum, max, standard_concat, early_fusion_pca]  # 8 methods for clean data
     else:  # missing data scenarios
-        INTEGRATIONS = [mkl, average, sum, early_fusion_pca]  # 4 robust methods for missing data
+        INTEGRATIONS = [mkl, average, sum, max, early_fusion_pca]  # 5 robust methods for missing data
             
     for ALGORITHM in EXTRACTORS + SELECTORS:  # Apply feature processing to raw modalities FIRST
         for N_FEATURES in [8, 16, 32]:  # For selection methods only
             for INTEGRATION in INTEGRATIONS:  # Then apply fusion to processed features SECOND
                 for MODEL in TASK_SPECIFIC_MODELS:
                     run_experiment(
-                        # CURRENT ORDER: Feature Processing → Fusion → Model Training
+                        # CURRENT ORDER: Feature Processing  Fusion  Model Training
                         missing_rate=MISSING,           # 1. Missing data scenario
                         algorithm=ALGORITHM,            # 2. Feature processing applied to raw modalities FIRST
                         n_features=N_FEATURES if ALGORITHM in SELECTORS else None,  # Fixed for selectors
@@ -227,7 +231,7 @@ for MISSING in [0, 0.20, 0.50]:  # Missing data scenarios first
 ```
 
 ### Current Experimental Features:
-- **Missing Data-Based Strategy Selection**: 7 fusion methods for clean data (0% missing); 4 robust methods for missing data scenarios
+- **Missing Data-Based Strategy Selection**: 8 fusion methods for clean data (0% missing); 5 robust methods for missing data scenarios
 - **Feature-First Pipeline Order**: Feature processing applied FIRST to raw modalities, then fusion applied to processed features
 - **4-Phase Pipeline Integration**: Early quality assessment, feature-first processing, missing data management, coordinated validation
 - **Enhanced Data Quality Analysis**: Comprehensive data quality assessment with automated reporting
@@ -241,8 +245,8 @@ This comprehensive experimental design ensures systematic evaluation across:
   - **Selection methods**: Fixed at 8, 16, 32 features for systematic comparison
   - **Extraction methods**: Optimal number of components determined through hyperparameter tuning
 - **Missing data scenarios** (0%, 20%, 50% missing modalities)
-- **Missing data-adaptive integration strategies** (7 methods for clean data, 4 methods for missing data scenarios)
-- **Feature-First Pipeline Architecture**: Feature Processing → Fusion → Model Training (current optimal order for multi-modal genomics)
+- **Missing data-adaptive integration strategies** (8 methods for clean data, 5 methods for missing data scenarios)
+- **Feature-First Pipeline Architecture**: Feature Processing  Fusion  Model Training (current optimal order for multi-modal genomics)
 - **Predictive models** with hyperparameter optimization and numerical stability
 
 ## Deliverables
@@ -288,8 +292,8 @@ This comprehensive experimental design ensures systematic evaluation across:
    - **Intelligent Caching**: Cached results for expensive extraction/selection operations
 
 6. **Multi-Modal Fusion** (Applied SECOND - to Processed Features):
-   - **Clean Data (0% missing)**: 7 fusion methods tested - attention_weighted, learnable_weighted, mkl, average, sum, standard_concat, early_fusion_pca
-   - **Missing Data (>0% missing)**: 4 robust fusion methods - mkl, average, sum, early_fusion_pca  
+   - **Clean Data (0% missing)**: 8 fusion methods tested - attention_weighted, learnable_weighted, mkl, average, sum, max, standard_concat, early_fusion_pca
+       - **Missing Data (>0% missing)**: 5 robust fusion methods - mkl, average, sum, max, early_fusion_pca  
    - **Strategy Selection**: Automatic based on missing data percentage, not task type
    - **Processed Feature Fusion**: Fusion applied to already-processed features from each modality
    - **Robust Fallbacks**: Graceful degradation when advanced fusion methods fail
@@ -300,7 +304,7 @@ This comprehensive experimental design ensures systematic evaluation across:
    - **Enhanced Patient Grouping**: GroupKFold and StratifiedGroupKFold for patient-level validation
    - **Hyperparameter Optimization**: Pre-tuned parameters from `hp_best/` including optimal component counts for extraction methods
    - **Systematic Feature Evaluation**: Fixed feature counts (8, 16, 32) for selection methods to enable fair comparison
-   - **Algorithm Robustness**: Multi-level fallbacks (ElasticNetCV → ElasticNet → LinearRegression) for numerical stability
+   - **Algorithm Robustness**: Multi-level fallbacks (ElasticNetCV  ElasticNet  LinearRegression) for numerical stability
    - Comprehensive evaluation metrics with enhanced AUC calculation for imbalanced datasets
 
 8. **Results Analysis & Visualization**:
@@ -339,7 +343,7 @@ This comprehensive experimental design ensures systematic evaluation across:
 
 #### Data Fusion Methods (CURRENT IMPLEMENTATION)
 
-**Clean Data Fusion (0% missing) - 7 methods tested:**
+**Clean Data Fusion (0% missing) - 8 methods tested:**
 - **Attention-Weighted Fusion**: Neural attention mechanisms for sample-specific modality weighting
 - **Learnable Weighted Fusion**: Cross-validation based performance weighting of modalities  
 - **MKL (Multiple Kernel Learning)**: RBF kernel-based fusion with automatic kernel parameter optimization
@@ -606,13 +610,13 @@ Run the complete pipeline with all datasets and algorithms:
 
 #### Feature-First Architecture (DEFAULT - CURRENT IMPLEMENTATION)
 ```bash
-# Use the current Feature Processing → Fusion → Model Training order
+# Use the current Feature Processing  Fusion  Model Training order
 python main.py
 ```
 
 #### Fusion-First Architecture (LEGACY)
 ```bash
-# Use the legacy Fusion → Feature Processing → Model Training order (for comparison/research)
+# Use the legacy Fusion  Feature Processing  Model Training order (for comparison/research)
 python main.py --fusion-first
 ```
 
@@ -748,7 +752,14 @@ cd OUH-Internship-Krzysztof-Nowak
 ```bash
 python install.py
 ```
-This interactive script will guide you through the installation process and automatically run tests.
+This interactive script will guide you through the installation process with multiple options:
+- **Basic Installation** (Core dependencies only)
+- **Visualization Installation** (Core + enhanced plotting)
+- **Development Installation** (Core + dev tools)
+- **Advanced Installation** (Core + experimental fusion libraries)
+- **Full Installation** (All dependencies)
+
+The script automatically handles dependency management, installation verification, and environment setup.
 
 #### Option B: Manual Installation
 ```bash
@@ -773,12 +784,16 @@ This installs the essential dependencies:
 - pandas (≥1.3.0) - Data manipulation
 - scipy (≥1.7.0) - Scientific computing
 - scikit-learn (≥1.0.0) - Machine learning algorithms
+- xgboost (≥1.6.0) - Gradient boosting framework
+- lightgbm (≥3.3.0) - Gradient boosting framework
 - matplotlib (≥3.5.0) - Plotting
 - seaborn (≥0.11.0) - Statistical visualization
 - joblib (≥1.1.0) - Parallel processing
 - threadpoolctl (≥3.0.0) - Thread control
 - psutil (≥5.8.0) - System monitoring
 - boruta (≥0.3.0) - Feature selection
+- scikit-optimize (≥0.9.0) - Hyperparameter optimization
+- imbalanced-learn (≥0.8.0) - Handling class imbalance (optional)
 
 #### Installation with Visualization Support
 ```bash
@@ -802,13 +817,28 @@ Includes development tools:
 - flake8 (≥3.9.0) - Linting
 - mypy (≥0.910) - Type checking
 
+#### Advanced Installation (Experimental Fusion Methods)
+```bash
+cd setup_and_info
+pip install -e ".[advanced]"
+```
+
+Includes experimental fusion libraries:
+- snfpy (≥0.2.2) - Similarity Network Fusion
+- mklaren (≥1.2) - Multiple Kernel Learning
+- oct2py (≥5.0.0) - Octave bridge for advanced computations (requires GNU Octave)
+
+**Note**: Advanced fusion methods require additional system dependencies:
+- GNU Octave must be installed separately for oct2py functionality
+- These libraries are optional and the pipeline works without them
+
 #### Full Installation
 ```bash
 cd setup_and_info
 pip install -e ".[all]"
 ```
 
-Installs all optional dependencies.
+Installs all dependencies (core + visualization + development + advanced).
 
 ### Alternative Installation Methods
 
@@ -1038,23 +1068,23 @@ OUH-Internship-Krzysztof-Nowak/
 ## Recent Pipeline Enhancements
 
 ### Version 4.0 - Feature-First Architecture Implementation (CURRENT)
-- ✅ **CURRENT: Feature-First Architecture**: Complete implementation of Feature Processing → Fusion → Model Training pipeline order
+- ✅ **CURRENT: Feature-First Architecture**: Complete implementation of Feature Processing  Fusion  Model Training pipeline order
 - ✅ **Dual Architecture Support**: Feature-first as default, legacy fusion-first via `--fusion-first` flag
 - ✅ **Modality-Specific Processing**: Apply extractors/selectors to each modality independently before fusion
-- ✅ **Enhanced Experimental Loop**: Algorithm → Features → Fusion → Model order for comprehensive evaluation
+- ✅ **Enhanced Experimental Loop**: Algorithm  Features  Fusion  Model order for comprehensive evaluation
 - ✅ **Backward Compatibility**: Legacy fusion-first architecture remains available for comparison
 
 ### Version 3.1 - Enhanced CV Strategies & Algorithm Robustness
 - ✅ **Task-Appropriate Cross-Validation**: Proper regression (KFold/RepeatedKFold) vs classification (StratifiedKFold) strategies
 - ✅ **Adaptive CV Selection**: Dataset size-based strategy selection for optimal numerical stability
-- ✅ **ElasticNet Robustness**: Small dataset detection with multi-level fallback strategies (ElasticNetCV → ElasticNet → LinearRegression)
+- ✅ **ElasticNet Robustness**: Small dataset detection with multi-level fallback strategies (ElasticNetCV  ElasticNet  LinearRegression)
 - ✅ **Enhanced Error Handling**: Safe attribute access and robust sklearn compatibility
 - ✅ **Numerical Stability**: Comprehensive safeguards throughout the pipeline
 
 ### Version 3.0 - 4-Phase Enhanced Pipeline Architecture
 - ✅ **4-Phase Integration**: Early quality assessment, feature-first processing, centralized missing data, coordinated validation
 - ✅ **Feature-First Pipeline Order**: Feature processing applied FIRST to raw modalities, then fusion applied to processed features
-- ✅ **Missing Data-Adaptive Fusion**: 7 fusion methods for clean data, 4 robust methods for missing data scenarios
+- ✅ **Missing Data-Adaptive Fusion**: 8 fusion methods for clean data, 5 robust methods for missing data scenarios
 - ✅ **Comprehensive Data Quality Analysis**: Automated quality scoring with detailed reporting and preprocessing guidance
 - ✅ **Enhanced Cross-Validation**: Patient-level grouping, numerical stability checks, and robust fold creation
 - ✅ **Pre-Tuned Hyperparameters**: Optimized parameters stored in `hp_best/` for immediate high performance
@@ -1077,7 +1107,7 @@ OUH-Internship-Krzysztof-Nowak/
 
 | Aspect | Feature-First (NEW) | Fusion-First (LEGACY) |
 |--------|---------------------|------------------------|
-| **Pipeline Order** | Raw Data → Feature Processing → Fusion → Model Training | Raw Data → Fusion → Feature Processing → Model Training |
+| **Pipeline Order** | Raw Data  Feature Processing  Fusion  Model Training | Raw Data  Fusion  Feature Processing  Model Training |
 | **Processing Scope** | Each modality processed independently | Fused data processed as single unit |
 | **Feature Quality** | Modality-specific feature optimization | Generic feature processing on fused data |
 | **Computational Efficiency** | Parallel modality processing possible | Sequential processing required |
@@ -1233,7 +1263,7 @@ Dataset (e.g., AML regression)
 
   📊 Processing PCA-8
   🎯 [EXTRACT-REG CV] 1/45 => AML | PCA-8 | Missing: 0%
-    🔗 Fusion techniques for 0% missing: 7 methods
+    🔗 Fusion techniques for 0% missing: 8 methods
 
     🔗 [1/7] Fusion: attention_weighted
       🤖 Training models: ['LinearRegression', 'ElasticNet', 'RandomForestRegressor']
@@ -1336,8 +1366,8 @@ The pipeline supports both regression and classification datasets:
 
 ### Fusion Techniques
 
-- **For clean data (0% missing)**: attention_weighted, learnable_weighted, mkl, average, sum, standard_concat, early_fusion_pca (7 methods)
-- **For missing data (>0% missing)**: mkl, average, sum, early_fusion_pca (4 methods)
+- **For clean data (0% missing)**: attention_weighted, learnable_weighted, mkl, average, sum, max, standard_concat, early_fusion_pca (8 methods)
+- **For missing data (>0% missing)**: mkl, average, sum, max, early_fusion_pca (5 methods)
 
 ### Machine Learning Models
 

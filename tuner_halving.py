@@ -1076,7 +1076,7 @@ def create_multimodal_pipeline(extractor, model, fusion_method="average"):
     Create a multi-modal pipeline that processes each modality separately.
     
     The correct pipeline architecture:
-    1. Extract/Select per modality: PCA on mirna → (n_samples, n_components), PCA on exp → (n_samples, n_components), etc.
+    1. Extract/Select per modality: PCA on mirna  (n_samples, n_components), PCA on exp  (n_samples, n_components), etc.
     2. Fusion: Combine extracted features using fusion method
     3. Model training: Train on fused features
     
@@ -1293,7 +1293,7 @@ def create_multimodal_selector_pipeline(selector, model, fusion_method="average"
     Create a multi-modal selector pipeline that processes each modality separately.
     
     The correct selector pipeline architecture:
-    1. Select per modality: selector(mirna) → (n_samples, n_features), selector(exp) → (n_samples, n_features), etc.
+    1. Select per modality: selector(mirna)  (n_samples, n_features), selector(exp)  (n_samples, n_features), etc.
     2. Fusion: Combine selected features using fusion method
     3. Model training: Train on fused features
     

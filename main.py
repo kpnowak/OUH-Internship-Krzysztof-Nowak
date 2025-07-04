@@ -159,9 +159,9 @@ def setup_environment():
         
         # Set Octave executable path for oct2py
         # laptop 1 - my
-        #os.environ["OCTAVE_EXECUTABLE"] = r"C:\Users\krzys\AppData\Local\Programs\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+        octave_path = os.environ["OCTAVE_EXECUTABLE"] = r"C:\Users\krzys\AppData\Local\Programs\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
         # Laptop 2 - Tata
-        octave_path = r"C:\Program Files\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
+        #octave_path = r"C:\Program Files\GNU Octave\Octave-10.2.0\mingw64\bin\octave-cli.exe"
         if os.path.exists(octave_path):
             os.environ["OCTAVE_EXECUTABLE"] = octave_path
             logger.info(f"Octave executable configured: {octave_path}")

@@ -43,7 +43,7 @@ validated_dict = DataOrientationValidator.validate_modality_consistency(modality
 
 ### **Priority 2: Modality-Specific Scaling (IMMEDIATE)**
 
-**Problem Fixed:** Methylation data was being inappropriately scaled despite being bounded [0,1], causing variance inflation from 49→20 to proper handling.
+**Problem Fixed:** Methylation data was being inappropriately scaled despite being bounded [0,1], causing variance inflation from 4920 to proper handling.
 
 **Implementation:**
 - `ModalityAwareScaler` class in `preprocessing.py`
@@ -90,7 +90,7 @@ if fusion_method == 'fusion_snf':
     target_features = max(50, calculated_target)  # Minimum 50 for SNF
 ```
 
-**Impact:** Prevents over-compression (SNF 5→50+ features) while maintaining appropriate dimensionality for sample size.
+**Impact:** Prevents over-compression (SNF 550+ features) while maintaining appropriate dimensionality for sample size.
 
 ---
 
@@ -216,7 +216,7 @@ processed_dict, y_aligned = enhanced_comprehensive_preprocessing_pipeline(
 | Issue | Before | After |
 |-------|--------|-------|
 | **Data Orientation** | Gene: 5000×200 (wrong) | Gene: 200×5000 (correct) |
-| **Methylation Scaling** | Scaled [0,1]→[-2,2] | Kept [0,1] (no scaling) |
+| **Methylation Scaling** | Scaled [0,1][-2,2] | Kept [0,1] (no scaling) |
 | **SNF Feature Count** | 5 features (over-compressed) | 50+ features (appropriate) |
 | **Sample Alignment** | Silent misalignment | Explicit intersection management |
 | **Validation** | Basic checks | Comprehensive multi-stage validation |

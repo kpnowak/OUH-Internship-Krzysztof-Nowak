@@ -697,7 +697,7 @@ def _process_cv_fold_impl(
                     
                     logger.info(f"Fold {fold_idx}: Removed {n_outliers} extreme outliers (>{outlier_threshold:.2f}) "
                                f"from training set ({outlier_percentage:.1f}% of training data)")
-                    logger.info(f"Training set size: {original_train_size} → {len(final_aligned_y_train)}")
+                    logger.info(f"Training set size: {original_train_size}  {len(final_aligned_y_train)}")
                     
                     # Ensure we still have enough training samples
                     if len(final_aligned_y_train) < MIN_SAMPLES_PER_FOLD:
@@ -717,7 +717,7 @@ def _process_cv_fold_impl(
         
         # CORRECTED PIPELINE ORDER: FUSION FIRST, THEN FEATURE PROCESSING
         # Step 1: Extract RAW modality data (no feature processing)
-        logger.info(f"PIPELINE ORDER: Fusion → Feature Processing (extractors/selectors)")
+        logger.info(f"PIPELINE ORDER: Fusion  Feature Processing (extractors/selectors)")
         logger.debug(f"Extracting raw data from {len(modified_modalities)} modalities with {len(final_common_train)} train and {len(final_common_val)} val samples")
         
         raw_modality_train = []
@@ -2094,7 +2094,7 @@ def create_robust_cv_splitter(idx_temp, y_temp, is_regression=False, sample_ids=
     if min_class_count < optimal_splits:
         logger.error(f"CRITICAL: Class with {min_class_count} samples < {optimal_splits} CV splits detected!")
         logger.error(f"Class distribution: {dict(zip(unique, counts))}")
-        raise ValueError(f"Classification CV impossible: smallest class has {min_class_count} samples but need ≥{optimal_splits} for {optimal_splits}-fold CV")
+        raise ValueError(f"Classification CV impossible: smallest class has {min_class_count} samples but need >={optimal_splits} for {optimal_splits}-fold CV")
     
     # Try stratified split first
     try:

@@ -24,7 +24,7 @@
 - Comprehensive warning suppression
 
 ### cv.py (Main Pipeline)
-- Hyperparameter deserialization (strings → objects)
+- Hyperparameter deserialization (strings  objects)
 - Safe prediction handling with validation
 - Enhanced model error recovery
 
