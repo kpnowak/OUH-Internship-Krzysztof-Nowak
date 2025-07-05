@@ -117,7 +117,7 @@ def test_threshold_optimization():
         print(f"    MCC: {default_mcc:.4f}")
         print(f"    Accuracy: {accuracy_score(y_test, default_predictions):.4f}")
         
-        print(f"  Optimized threshold ({best_threshold:.3f}):")
+        print(f"  Best threshold ({best_threshold:.3f}):")
         print(f"    MCC: {best_mcc:.4f}")
         print(f"    Accuracy: {accuracy_score(y_test, optimized_predictions):.4f}")
         

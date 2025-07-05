@@ -93,7 +93,7 @@ class EnhancedMetrics:
                 logger.warning(f"Could not calculate MCC: {str(e)}")
                 metrics['mcc'] = 0.0
             
-            # Enhanced AUC calculation with proper multi-class handling
+            # AUC calculation with proper multi-class handling
             if y_proba is not None:
                 metrics['auc'] = self._calculate_enhanced_auc(y_true, y_proba)
             else:

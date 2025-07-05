@@ -26,50 +26,48 @@ except ImportError:
     warnings.filterwarnings('ignore', message='.*Objective did not converge.*')
 
 # Constants
-MAX_VARIABLE_FEATURES = None  # DISABLED: Let 4-phase pipeline handle feature selection intelligently
-# OLD: MAX_VARIABLE_FEATURES = 5000  # OPTIMIZED: Reduced from 50000 for faster processing
-MAX_COMPONENTS = 128  # OPTIMIZED: Reduced from 256 for faster processing
-MAX_FEATURES = 512  # OPTIMIZED: Reduced from 1024 for faster processing
-N_JOBS = min(os.cpu_count() or 8, 8)  # Increased to 8 cores for server
+MAX_VARIABLE_FEATURES = None  # Let 4-phase pipeline handle feature selection intelligently
+MAX_COMPONENTS = 128  # Maximum number of components for extractors
+MAX_FEATURES = 512  # Maximum number of features for selectors
+N_JOBS = min(os.cpu_count() or 8, 8)  # Number of parallel jobs
 OMP_BLAS_THREADS = min(4, os.cpu_count() or 4)
 
-# Feature and component selection values - OPTIMIZED FOR SPEED
-N_VALUES_LIST = [8, 16, 32]  # OPTIMIZED: Reduced from [64, 128, 256] for faster processing
+# Feature and component selection values
+N_VALUES_LIST = [8, 16, 32]  # Number of features/components to test
 
 # Enhanced preprocessing parameters with sparsity and skewness handling
-# NEW: Enhanced preprocessing for genomic data quality issues with numerical stability
 PREPROCESSING_CONFIG = {
-    # Legacy parameters (maintained for backward compatibility)
-    "mad_threshold": 1e-6,       # IMPROVED: More aggressive threshold for numerical stability (MAD-based)
-    "correlation_threshold": 0.9,    # OPTIMIZED: Reduced from 0.98 (but correlation filtering is disabled)
-    "missing_threshold": 0.3,         # OPTIMIZED: Reduced from 0.5 for cleaner data
-    "outlier_threshold": 4.0,         # More lenient for biological data
-    "log_transform": True,           # OPTIMIZED: Disabled by default for speed
-    "quantile_transform": True,      # OPTIMIZED: Disabled by default for speed
+    # Basic preprocessing parameters
+    "mad_threshold": 1e-6,       # Threshold for MAD-based feature removal
+    "correlation_threshold": 0.9,    # Threshold for removing highly correlated features
+    "missing_threshold": 0.3,         # Threshold for missing value handling
+    "outlier_threshold": 4.0,         # Standard deviations for outlier detection
+    "log_transform": True,           # Apply log transformation
+    "quantile_transform": True,      # Apply quantile transformation
     "remove_low_mad": True,
-    "remove_highly_correlated": True,  # OPTIMIZED: Disabled for performance (expensive operation)
+    "remove_highly_correlated": True,  # Remove highly correlated features
     "handle_outliers": True,
     "impute_missing": True,
-    "scaling_method": 'robust',       # Robust to outliers in genomic data
-    "handle_missing": 'median',       # Better for genomic data
+    "scaling_method": 'robust',       # Robust scaling for genomic data
+    "handle_missing": 'median',       # Median imputation for genomic data
     "outlier_method": 'iqr',
-    "outlier_std_threshold": 4.0,     # OPTIMIZED: More permissive for speed
+    "outlier_std_threshold": 4.0,     # Standard deviations for outlier threshold
     "normalize": True,
     "min_samples_per_feature": 3,    # Minimum samples required per feature
     "robust_scaling": True,          # Use robust scaling instead of standard scaling
-    "feature_selection_method": "variance",  # Use variance-based selection first
+    "feature_selection_method": "variance",  # Variance-based feature selection
     
-    # NEW: Enhanced sparsity and skewness handling parameters
+    # Enhanced sparsity and skewness handling parameters
     "enhanced_sparsity_handling": True,     # Enable enhanced sparsity handling
     "sparsity_threshold": 0.9,              # Remove features with >90% zeros
     "min_expression_threshold": 0.1,        # Minimum meaningful expression level
     "smart_skewness_correction": True,      # Enable smart skewness correction
-    "target_skewness_threshold": 0.5,       # Target |skewness| ≤ 0.5 (excellent)
+    "target_skewness_threshold": 0.5,       # Target |skewness| ≤ 0.5
     "enable_log_transform": True,           # Enable log1p transformation
     "enable_power_transform": True,         # Enable Yeo-Johnson/Box-Cox transformations
     "enable_quantile_transform": True,      # Enable quantile transformation as fallback
     
-    # NEW: Numerical stability parameters to address NaN issues
+    # Numerical stability parameters
     "numerical_stability_checks": True,     # Enable comprehensive stability checks
     "adaptive_mad_threshold": True,    # Use adaptive MAD threshold selection
     "min_mad_threshold": 1e-10,        # Minimum MAD for numerical stability
@@ -77,40 +75,40 @@ PREPROCESSING_CONFIG = {
     "target_feature_removal_rate": 0.05,    # Target 5% of most problematic features for removal
     "min_samples_per_feature_stability": 3, # Minimum samples required for stable statistics
     "safe_statistical_computation": True,   # Use safe statistical computation methods
-    "nan_handling_strategy": "remove",      # Strategy for NaN-producing features: "remove", "impute", "flag"
+    "nan_handling_strategy": "remove",      # Strategy for NaN-producing features
     "zero_variance_handling": "remove",     # How to handle zero-variance features
     "constant_feature_handling": "remove",  # How to handle constant features
     "auto_remove_problematic_features": True,  # Automatically remove features that cause numerical instability
     
-    # NEW: Advanced sparsity handling parameters (addresses miRNA 43.9% -> 23.7% insufficient reduction)
-    "use_advanced_sparse_preprocessing": False,  # Enable advanced sparse preprocessing (modality-specific)
+    # Advanced sparsity handling parameters
+    "use_advanced_sparse_preprocessing": False,  # Enable advanced sparse preprocessing
     "min_non_zero_percentage": 0.05,        # Minimum percentage of non-zero values required
     "sparse_transform_method": "log1p_offset",  # Specialized transformation for sparse data
     "zero_inflation_handling": True,        # Handle zero-inflated distributions
     "outlier_capping_percentile": 99.0,     # Percentile for outlier capping in sparse data
     "target_sparsity_reduction": 0.10,      # Target percentage sparsity reduction
     
-    # NEW: Aggressive dimensionality reduction parameters (addresses too many features issue)
-    "use_aggressive_dimensionality_reduction": False,  # Enable aggressive feature reduction (modality-specific)
-    "gene_expression_target": 1500,         # Target features for gene expression (from 4987)
-    "mirna_target": 150,                     # Target features for miRNA (from 377, too high for 507 samples)
-    "methylation_target": 2000,             # Target features for methylation (from 3956)
-    "dimensionality_selection_method": "hybrid",  # Selection method: 'variance', 'univariate', 'hybrid'
+    # Aggressive dimensionality reduction parameters
+    "use_aggressive_dimensionality_reduction": False,  # Enable aggressive feature reduction
+    "gene_expression_target": 1500,         # Target features for gene expression
+    "mirna_target": 150,                     # Target features for miRNA
+    "methylation_target": 2000,             # Target features for methylation
+    "dimensionality_selection_method": "hybrid",  # Selection method
     "variance_percentile": 75,               # Keep top 75% by variance in pre-filtering
     "enable_supervised_selection": True,     # Use target variable for feature selection when available
     
-    # NEW: Robust scaling parameters (addresses PCA high variance issues)
-    "use_robust_scaling": True,              # Use RobustScaler instead of StandardScaler for outlier-heavy data
-    "robust_scaling_quantile_range": (25.0, 75.0),  # IQR range for RobustScaler (default)
-    "scaling_method": "robust",              # Options: 'robust', 'standard', 'minmax', 'quantile'
+    # Robust scaling parameters
+    "use_robust_scaling": True,              # Use RobustScaler instead of StandardScaler
+    "robust_scaling_quantile_range": (25.0, 75.0),  # IQR range for RobustScaler
+    "scaling_method": "robust",              # Scaling method options
     "apply_scaling_before_pca": True,        # Apply scaling before PCA/dimensionality reduction
-    "clip_outliers_after_scaling": True,    # Clip extreme outliers after scaling to [-5, 5] range
+    "clip_outliers_after_scaling": True,    # Clip extreme outliers after scaling
     "outlier_clip_range": (-5.0, 5.0),      # Range for outlier clipping after scaling
     
-    # NEW: Final quantile normalization parameters (final preprocessing step)
+    # Final quantile normalization parameters
     "final_quantile_normalization": False,   # Apply quantile normalization as final step
     "quantile_n_quantiles": 1000,           # Number of quantiles for final transformation
-    "quantile_output_distribution": "normal", # Output distribution: 'normal' or 'uniform'
+    "quantile_output_distribution": "normal", # Output distribution
     "handle_missing_values": True,
     "missing_value_threshold": 0.5,
     "variance_threshold": 0.01,
@@ -124,7 +122,7 @@ PREPROCESSING_CONFIG = {
     "use_cache": True,
     "cache_size": "4GB",
     "verbose": True,
-    # NEW: Missing data indicators as features
+    # Missing data indicators as features
     "add_missing_indicators": True,       # Add binary indicators for missing values
     "missing_indicator_threshold": 0.05,  # Only add indicators if >5% missing
     "missing_indicator_prefix": "missing_", # Prefix for indicator feature names
@@ -144,42 +142,42 @@ ENHANCED_PREPROCESSING_CONFIGS = {
         "min_expression_threshold": 0.1,
         "handle_outliers": True,
         "outlier_threshold": 4.0,
-        # Numerical stability for miRNA (high sparsity causes NaN issues)
+        # Numerical stability for miRNA
         "mad_threshold": 1e-8,         # More aggressive for sparse miRNA data
         "adaptive_mad_threshold": True,
         "target_feature_removal_rate": 0.10, # Remove 10% of most problematic features
         "numerical_stability_checks": True,
         "safe_statistical_computation": True,
-        # NEW: Advanced sparsity handling for miRNA (43.9% -> 23.7% insufficient)
+        # Advanced sparsity handling for miRNA
         "use_advanced_sparse_preprocessing": True,
-        "min_non_zero_percentage": 0.1,     # Require >10% non-zero values (aggressive)
+        "min_non_zero_percentage": 0.1,     # Require >10% non-zero values
         "sparse_transform_method": "log1p_offset",  # Specialized sparse transformation
         "zero_inflation_handling": True,    # Handle zero-inflated distributions
         "outlier_capping_percentile": 99.5, # Cap extreme outliers in sparse data
         "target_sparsity_reduction": 0.15,  # Target >15% sparsity reduction
-        # NEW: KNN imputation with biological similarity for miRNA
+        # KNN imputation with biological similarity for miRNA
         "use_biological_knn_imputation": True,  # Enable domain-specific imputation
         "knn_neighbors": 5,                      # Number of neighbors for KNN
         "biological_similarity_weight": 0.7,    # Weight for biological vs distance similarity
         "knn_imputation_strategy": "biological", # Use biological similarity
         "fallback_imputation": "median",        # Fallback if biological KNN fails
-        # NEW: Aggressive dimensionality reduction for miRNA (377 features too high for 507 samples)
+        # Aggressive dimensionality reduction for miRNA
         "use_aggressive_dimensionality_reduction": True,
-        "mirna_target": 150,                 # Target 100-200 features (currently 377)
+        "mirna_target": 150,                 # Target features for miRNA
         "dimensionality_selection_method": "hybrid",
         "enable_supervised_selection": True,
-        # NEW: Robust scaling for miRNA (high variance, outlier-heavy)
+        # Robust scaling for miRNA
         "use_robust_scaling": True,
         "scaling_method": "robust",
         "robust_scaling_quantile_range": (10.0, 90.0),  # Wider range for sparse miRNA data
         "apply_scaling_before_pca": True,
         "clip_outliers_after_scaling": True,
         "outlier_clip_range": (-6.0, 6.0),  # Slightly wider range for miRNA outliers
-        # Final quantile normalization for miRNA (beneficial for high sparsity data)
+        # Final quantile normalization for miRNA
         "final_quantile_normalization": False,   # Optional: can be enabled for miRNA
         "quantile_n_quantiles": 500,            # Fewer quantiles for sparse miRNA data
         "quantile_output_distribution": "normal", # Normal distribution for downstream ML
-        "description": "Optimized for miRNA data - enhanced sparsity handling, biological KNN imputation, numerical stability, aggressive dimensionality reduction, and robust scaling"
+        "description": "Optimized for miRNA data with enhanced sparsity handling and biological KNN imputation"
     },
     "Gene Expression": {
         "enhanced_sparsity_handling": True,
@@ -193,7 +191,7 @@ ENHANCED_PREPROCESSING_CONFIGS = {
         "handle_outliers": True,
         "outlier_threshold": 5.0,
         # Numerical stability for gene expression
-        "mad_threshold": 0.01,         # OPTIMIZED: More aggressive MAD threshold (1e-7  0.01)
+        "mad_threshold": 0.01,         # More aggressive MAD threshold
         "adaptive_mad_threshold": True,
         "target_feature_removal_rate": 0.05, # Remove 5% of most problematic features
         "numerical_stability_checks": True,
@@ -202,23 +200,23 @@ ENHANCED_PREPROCESSING_CONFIGS = {
         "min_variance_threshold": 1e-6,  # More aggressive variance threshold for stability
         # Enhanced sparsity handling for gene expression
         "use_advanced_sparse_preprocessing": True,
-        "min_non_zero_percentage": 0.05,    # Require >5% non-zero values (moderate)
+        "min_non_zero_percentage": 0.05,    # Require >5% non-zero values
         "sparse_transform_method": "log1p_offset",
         "zero_inflation_handling": True,
         "outlier_capping_percentile": 99.0,
         "target_sparsity_reduction": 0.10,  # Target >10% sparsity reduction
-        # NEW: KNN imputation with biological similarity for gene expression
+        # KNN imputation with biological similarity for gene expression
         "use_biological_knn_imputation": True,  # Enable domain-specific imputation
-        "knn_neighbors": 7,                      # More neighbors for gene expression (more features)
+        "knn_neighbors": 7,                      # More neighbors for gene expression
         "biological_similarity_weight": 0.6,    # Slightly less biological weight than miRNA
         "knn_imputation_strategy": "biological", # Use biological similarity
         "fallback_imputation": "median",        # Fallback if biological KNN fails
-        # NEW: Aggressive dimensionality reduction for gene expression (4987 features too many)
+        # Aggressive dimensionality reduction for gene expression
         "use_aggressive_dimensionality_reduction": True,
-        "gene_expression_target": 1500,     # Target 1000-2000 features (currently 4987)
+        "gene_expression_target": 1500,     # Target features for gene expression
         "dimensionality_selection_method": "hybrid",
         "enable_supervised_selection": True,
-        # NEW: Robust scaling for gene expression (moderate outlier handling)
+        # Robust scaling for gene expression
         "use_robust_scaling": True,
         "scaling_method": "robust",
         "robust_scaling_quantile_range": (25.0, 75.0),  # Standard IQR for gene expression
@@ -344,9 +342,9 @@ MODEL_OPTIMIZATIONS = {
         "random_state": 42
     },
     "LogisticRegression": {
-        "penalty": "l2",             # Changed to l2 for better stability
+        "penalty": "l2",             # L2 regularization for stability
         "solver": "liblinear",
-        "C": 1.0,                    # Increased C for less regularization
+        "C": 1.0,                    # Regularization strength
         "max_iter": 500,             # As suggested in the requirements
         "class_weight": "balanced",
         "random_state": 42
@@ -466,17 +464,17 @@ MODEL_OPTIMIZATIONS = {
     }
 }
 
-# Enhanced early stopping configuration - MORE AGGRESSIVE EARLY STOPPING
+# Enhanced early stopping configuration
 EARLY_STOPPING_CONFIG = {
     "enabled": True,  # Enable/disable early stopping globally
-    "patience": 50,  # Much more patience
-    "min_delta": 1e-6,  # Very small improvement threshold
+    "patience": 50,  # Patience for early stopping
+    "min_delta": 1e-6,  # Minimum improvement threshold
     "validation_split": 0.2,  # Fraction of training data to use for early stopping validation
     "restore_best_weights": True,  # Whether to restore best model weights
     "monitor_metric": "auto",  # Metric to monitor: "auto", "neg_mse", "accuracy", "r2"
     "verbose": 0,  # Verbosity level for early stopping (0=silent, 1=progress, 2=detailed)
     "adaptive_patience": True,  # Increase patience for complex models
-    "max_patience": 100,  # Increased maximum patience
+    "max_patience": 100,  # Maximum patience for complex models
 }
 
 # Enhanced shape mismatch handling configuration

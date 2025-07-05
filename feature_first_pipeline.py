@@ -774,7 +774,7 @@ def run_feature_first_pipeline(ds_name: str,
     """
     Run the complete feature-first pipeline for a dataset.
     
-    NEW EXPERIMENTAL LOOP:
+    Feature-first experimental loop:
     for algorithm in algorithms:
         for n_features_components in n_values:
             for fusion_method in fusion_methods:
@@ -829,14 +829,14 @@ def run_feature_first_pipeline(ds_name: str,
         model_names = ["LogisticRegression", "RandomForestClassifier", "SVC"]
         model_objects = {name: build_model(name, "clf") for name in model_names}
     
-    # CRITICAL FIX: Set up cross-validation with ACTUAL data dimensions
-    # Don't use common_ids length which might be stale - use actual y array
+    # Set up cross-validation with actual data dimensions
+    # Use actual y array dimensions rather than common_ids length
     from cv import get_cv_strategy
     logger.info(f"Setting up CV strategy: y.shape={y.shape}, common_ids.length={len(common_ids)}")
     
     # Use actual y dimensions for CV setup
     if len(y) != len(common_ids):
-        logger.warning(f"MISMATCH: y has {len(y)} samples but common_ids has {len(common_ids)} - using y.shape")
+        logger.warning(f"Dimension mismatch: y has {len(y)} samples but common_ids has {len(common_ids)} - using y.shape")
         # Create sample IDs that match the actual data
         actual_sample_ids = [f"sample_{i}" for i in range(len(y))]
     else:
@@ -846,19 +846,19 @@ def run_feature_first_pipeline(ds_name: str,
     
     all_results = []
     
-    # NEW EXPERIMENTAL LOOP: Algorithm  Features  Fusion  Model
+    # Feature-first experimental loop: Algorithm → Features → Fusion → Model
     for algorithm_name, algorithm_obj in algorithms.items():
         logger.info(f"Processing algorithm: {algorithm_name}")
         
-        # OPTIMIZATION: Extractors use hyperparameter tuning so only need one n_value
-        # Selectors should still test multiple n_values for different feature counts
+        # Extractors use hyperparameter tuning so only need one n_value
+        # Selectors test multiple n_values for different feature counts
         extractor_algorithms = ['PCA', 'KPCA', 'PLS', 'KPLS', 'SparsePLS', 'LDA', 'FA', 'PLS-DA']
         is_extractor = any(ext in algorithm_name for ext in extractor_algorithms)
         
         if is_extractor:
             # Extractors: Use only one n_value since components are hyperparameter-tuned
             algorithm_n_values = [32]  # Default value, will be overridden by hyperparameters
-            logger.info(f"  Extractor detected: using single n_value (hyperparameter-tuned components)")
+            logger.info(f"  Extractor detected: using single n_value with hyperparameter tuning")
         else:
             # Selectors: Test multiple n_values for different feature counts
             if isinstance(n_values, dict):
@@ -887,7 +887,7 @@ def run_feature_first_pipeline(ds_name: str,
                     
                     logger.info(f"      Training model: {model_name}")
                     
-                    # CRITICAL FIX: Create fresh algorithm object for each model
+                    # Create fresh algorithm object for each model
                     # This ensures each model gets its own extractor with model-specific hyperparameters
                     from models import build_model
                     fresh_algorithm_obj = algorithms[algorithm_name]

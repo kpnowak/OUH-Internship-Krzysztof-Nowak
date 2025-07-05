@@ -1382,7 +1382,7 @@ def safe_convert_to_numeric(X: Any) -> np.ndarray:
 def process_with_missing_modalities(data_modalities: Dict[str, pd.DataFrame], 
                                    all_ids: List[str],
                                    missing_percentage: float,
-                                   random_state: Optional[int] = 42,  # Fixed default for reproducibility
+                                   random_state: Optional[int] = 42,  # Default for reproducibility
                                    min_overlap_ratio: float = 0.3) -> Dict[str, pd.DataFrame]:
     """
     Process modalities by randomly marking some samples as missing.
@@ -1668,7 +1668,7 @@ def advanced_feature_filtering(df: pd.DataFrame,
         df = df[missing_ratio <= missing_threshold]
     
     # 2. Remove low-MAD features (more robust than variance)
-    mad_threshold = config.get("mad_threshold", 0.05)  # OPTIMIZED: More aggressive (0.01  0.05)
+    mad_threshold = config.get("mad_threshold", 0.05)  # MAD threshold for feature removal
     if mad_threshold > 0:
         # Calculate MAD for each feature (row)
         mad_values = []
@@ -1689,7 +1689,7 @@ def advanced_feature_filtering(df: pd.DataFrame,
     
     # 3. Remove highly correlated features (RE-ENABLED with optimizations)
     if config.get("remove_highly_correlated", False):
-        correlation_threshold = config.get("correlation_threshold", 0.90)  # OPTIMIZED: More aggressive (0.95  0.90)
+        correlation_threshold = config.get("correlation_threshold", 0.90)  # Correlation threshold for feature removal
         if df.shape[0] > 1:  # Only if we have more than 1 feature
             try:
                 # OPTIMIZATION: Use sample of features if too many for correlation analysis

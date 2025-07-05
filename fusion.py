@@ -1413,7 +1413,7 @@ def merge_modalities(*arrays: np.ndarray,
                     logger.debug(f"Fallback concatenation applied after max failure")
         
         elif strategy == "weighted_concat":
-            # Enhanced weighted concatenation with optional learnable weights
+            # Weighted concatenation with optional learnable weights
             # RESTRICTION: Only use weighted_concat with 0% missing data
             if has_missing_values:
                 logger.error(f"weighted_concat strategy is only allowed with 0% missing data. "
@@ -1574,7 +1574,7 @@ def merge_modalities(*arrays: np.ndarray,
             logger.warning("Merged variable was not initialized, using fallback concatenation")
             merged = np.column_stack(processed_arrays)
 
-        # Enhanced imputation handling with automatic strategy selection
+        # Imputation handling with automatic strategy selection
         if not (strategy == "early_fusion_pca" and is_train):
             if imputer is not None:
                 # Use provided imputer
@@ -1774,7 +1774,7 @@ def handle_missing_modalities_with_late_fusion(modalities: List[np.ndarray],
     return late_fusion
 
 
-# Enhanced fusion strategies with missing data handling
+    # Fusion strategies with missing data handling
 ENHANCED_FUSION_STRATEGIES = {
     'attention_weighted': {
         'description': 'OPTIMIZED: Attention-weighted fusion with sample-specific weights (replaces weighted_concat for 0% missing)',
@@ -1861,16 +1861,16 @@ def get_recommended_fusion_strategy(missing_percentage: float,
         if has_targets and n_modalities >= 2:
             return 'attention_weighted'    # Attention fusion works well for both tasks
         else:
-            return 'attention_weighted'    # OPTIMIZED: Use attention_weighted instead of weighted_concat
+            return 'attention_weighted'    # Use attention_weighted for most cases
     
     # For very clean data (0% missing), use attention_weighted
     else:
         if has_targets and n_modalities >= 3:
             return 'late_fusion_stacking'  # For many modalities, stacking captures complex interactions
         elif has_targets:
-            return 'attention_weighted'    # OPTIMIZED: Sample-specific adaptation for clean data
+            return 'attention_weighted'    # Sample-specific adaptation for clean data
         else:
-            return 'attention_weighted'    # OPTIMIZED: Use attention_weighted instead of weighted_concat for 0% missing
+            return 'attention_weighted'    # Use attention_weighted for most cases with 0% missing
 
 
 class AttentionFuser:

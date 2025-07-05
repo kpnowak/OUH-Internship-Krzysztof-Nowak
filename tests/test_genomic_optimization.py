@@ -275,7 +275,7 @@ def compare_old_vs_new_approach():
     X, y = create_genomic_like_data(n_samples=80, n_features=2000, task='regression')
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
     
-    # Old approach: 8 features, high regularization
+    # Traditional approach: 8 features, high regularization
     logger.info("\n--- Old Approach (8 features, high regularization) ---")
     from sklearn.feature_selection import SelectKBest, f_regression
     from sklearn.linear_model import ElasticNet
@@ -284,26 +284,26 @@ def compare_old_vs_new_approach():
     X_train_old = old_selector.fit_transform(X_train, y_train)
     X_test_old = old_selector.transform(X_test)
     
-    old_model = ElasticNet(alpha=0.1, l1_ratio=0.5)  # Old high regularization
+    old_model = ElasticNet(alpha=0.1, l1_ratio=0.5)  # Traditional high regularization
     old_model.fit(X_train_old, y_train)
     y_pred_old = old_model.predict(X_test_old)
     
     r2_old = r2_score(y_test, y_pred_old)
-    logger.info(f"Old approach R²: {r2_old:.4f}")
+    logger.info(f"Traditional approach R²: {r2_old:.4f}")
     
-    # New approach: 256 features, minimal regularization
+    # Optimized approach: 256 features, minimal regularization
     logger.info("\n--- New Approach (256 features, minimal regularization) ---")
     
     new_selector = GenomicFeatureSelector(method='genomic_ensemble', n_features=256)
     X_train_new = new_selector.fit_transform(X_train, y_train, is_regression=True)
     X_test_new = new_selector.transform(X_test)
     
-    new_model = ElasticNet(alpha=0.001, l1_ratio=0.1)  # New minimal regularization
+    new_model = ElasticNet(alpha=0.001, l1_ratio=0.1)  # Optimized minimal regularization
     new_model.fit(X_train_new, y_train)
     y_pred_new = new_model.predict(X_test_new)
     
     r2_new = r2_score(y_test, y_pred_new)
-    logger.info(f"New approach R²: {r2_new:.4f}")
+    logger.info(f"Optimized approach R²: {r2_new:.4f}")
     
     improvement = r2_new - r2_old
     logger.info(f"\nImprovement: {improvement:.4f} ({improvement/abs(r2_old)*100:.1f}% relative)")
@@ -365,8 +365,8 @@ def main():
                 logger.info(f"  {model}:  {result}")
         
         logger.info(f"\n🔄 Approach Comparison:")
-        logger.info(f"  Old approach R²: {r2_old:.4f}")
-        logger.info(f"  New approach R²: {r2_new:.4f}")
+        logger.info(f"  Traditional approach R²: {r2_old:.4f}")
+        logger.info(f"  Optimized approach R²: {r2_new:.4f}")
         logger.info(f"  Improvement: {r2_new - r2_old:.4f}")
         
         # Overall assessment

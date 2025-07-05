@@ -1512,10 +1512,10 @@ def train_classification_model(X_train, y_train, X_val, y_val, model_name, out_d
         if model_name == 'LogisticRegression':
             from sklearn.linear_model import LogisticRegression
             model = LogisticRegression(max_iter=1000, solver='lbfgs')  # Removed multi_class parameter
-        elif model_name == 'RandomForestClassifier':  # Fixed model name
+        elif model_name == 'RandomForestClassifier':
             from sklearn.ensemble import RandomForestClassifier
             model = RandomForestClassifier(n_estimators=100, random_state=42)
-        elif model_name == 'SVC':  # Fixed model name
+        elif model_name == 'SVC':
             from sklearn.svm import SVC
             model = SVC(probability=True, random_state=42)
         else:
@@ -3123,7 +3123,7 @@ def cross_validate_model(X, y, model_name, n_splits=5, random_state=42, out_dir=
         return None
 
 # ============================================================================
-# ENHANCED CROSS-VALIDATION STRATEGIES
+# Cross-validation strategies
 # ============================================================================
 
 def extract_patient_ids_from_samples(sample_ids: List[str]) -> List[str]:

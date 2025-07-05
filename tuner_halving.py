@@ -25,7 +25,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import make_scorer, r2_score, matthews_corrcoef, mean_absolute_error
 from data_io import load_dataset_for_tuner
 
-# Optimized loader for already processed data
+# Loader for already processed data
 def load_dataset_for_tuner_optimized(dataset_name, task=None):
     """
     Load dataset with FULL 4-phase preprocessing for tuner_halving.py in FEATURE-FIRST format.
@@ -446,8 +446,8 @@ def log_error_with_context(logger, error, context=None):
     logger.error(traceback.format_exc())
     logger.error("=" * 80)
 
-# Fixed feature counts for main pipeline integration
-FEATURE_COUNTS = [8, 16, 32]  # Fixed feature selection counts from main pipeline
+# Feature counts for main pipeline integration
+FEATURE_COUNTS = [8, 16, 32]  # Feature selection counts from main pipeline
 
 # Available datasets and their tasks (from config.py)
 DATASET_INFO = {
@@ -640,7 +640,7 @@ def _add_model_parameters(p, mdl, n_samples):
     # Model parameters for traditional feature extraction pipeline (higher dimensional features)
     
     if mdl == "RandomForestRegressor":
-        # Optimized RandomForest for faster tuning while maintaining performance
+        # RandomForest configuration for faster tuning
         # Removed slowest combinations: n_estimators=500, max_depth=None/20
         if n_samples < 50:
             p.update({
@@ -662,7 +662,7 @@ def _add_model_parameters(p, mdl, n_samples):
             })
     
     if mdl == "RandomForestClassifier":
-        # Optimized RandomForest classification for faster tuning while maintaining performance
+        # RandomForest classification configuration for faster tuning
         # Removed slowest combinations: n_estimators=500, max_depth=None
         if n_samples < 50:
             p.update({
@@ -732,7 +732,7 @@ def _add_model_parameters_for_selectors(p, selector, mdl, n_samples, n_features)
     # - f_regressionFS/LogisticL1: Linearly predictive features
     
     if mdl == "RandomForestRegressor":
-        # Optimized RandomForest for faster tuning with selected features
+        # RandomForest configuration for faster tuning with selected features
         # Reduced n_estimators and removed max_depth=None for performance
         base_params = {
             "model__n_estimators": [100, 200, 300] if n_samples >= 50 else [50, 100, 200],  # Reduced
@@ -777,7 +777,7 @@ def _add_model_parameters_for_selectors(p, selector, mdl, n_samples, n_features)
         p.update(base_params)
     
     if mdl == "RandomForestClassifier":
-        # Optimized RandomForest classification for faster tuning with selected features
+        # RandomForest classification configuration for faster tuning with selected features
         # Reduced n_estimators and removed max_depth=None for performance
         base_params = {
             "model__n_estimators": [100, 200, 300] if n_samples >= 50 else [50, 100, 200],  # Reduced
@@ -2121,7 +2121,7 @@ def _tune_internal(dataset, task, extractor, model, fusion_method="average", n_f
             primary_scoring = make_scorer(safe_mcc_score, greater_is_better=True)
             logger.info("Using scorer for feature-first simulation: Matthews correlation coefficient")
 
-        # Enhanced cross-validation strategy with stratified regression and grouped CV
+        # Cross-validation strategy with stratified regression and grouped CV
         n_samples = len(y)
         
         # Use enhanced CV splitter with real sample IDs
@@ -2908,7 +2908,7 @@ def tune_all_selectors(dataset, task, use_subprocess=True):
     # Both fusion methods to test
     fusion_methods = ["average", "attention_weighted"]
     
-    # Fixed feature counts to test
+    # Feature counts to test
     feature_counts = FEATURE_COUNTS  # [8, 16, 32]
     
     total_combinations = len(selectors) * len(models) * len(fusion_methods) * len(feature_counts)

@@ -902,7 +902,7 @@ def load_modality(base_path: Union[str, Path],
             logger.info(f"Using cached data for {modality_name}: {cached_data.shape}")
             return cached_data.copy()
     
-    # OPTIMIZED: Try standard loading first with common delimiters
+    # Try standard loading first with common delimiters
     df = None
     encodings_to_try = ['utf-8', 'latin1']  # Reduced encoding attempts
     delimiters_to_try = [',', '\t']  # Most common delimiters first
@@ -921,12 +921,12 @@ def load_modality(base_path: Union[str, Path],
         if df is not None and not df.empty:
             break
     
-    # OPTIMIZED: Only attempt repair if standard loading completely failed
+            # Only attempt repair if standard loading completely failed
     if df is None or df.empty:
         logger.info(f"Standard loading failed for {modality_name}, attempting repair")
         df = fix_malformed_data_file(valid_path, modality_name)
     
-    # OPTIMIZED: Quick malformed structure check only if needed
+            # Quick malformed structure check only if needed
     elif df.shape[1] == 1:
         # Check if the single column contains multiple sample IDs (malformed)
         if len(parse_malformed_header(df.columns[0])) > 5:
@@ -937,14 +937,14 @@ def load_modality(base_path: Union[str, Path],
         logger.warning(f"Warning: Could not load modality {modality_name}")
         return None
     
-    # OPTIMIZED: Simplified data quality validation
+            # Simplified data quality validation
     if df.isnull().all().all():
         logger.warning(f"Data quality issue in {modality_name}: All values are null")
         return None
     
     logger.info(f"Loaded {modality_name} data: shape={df.shape}")
     
-    # ENHANCED: Use sophisticated orientation validation (moved from preprocessing.py)
+    # Use sophisticated orientation validation
     try:
         df = DataOrientationValidator.validate_dataframe_orientation(df, modality_name)
     except DataOrientationValidationError as e:
@@ -959,7 +959,7 @@ def load_modality(base_path: Union[str, Path],
     logger.info(f"Applying robust sample ID standardization for {modality_name}")
     df = apply_sample_id_standardization(df, target_format='hyphen', modality_name=modality_name)
     
-    # OPTIMIZED: Handle duplicates only if they exist
+    # Handle duplicates only if they exist
     if df.index.duplicated().any():
         logger.warning(f"Found duplicate feature names in {modality_name}, making them unique")
         df.index = pd.Index([f"{idx}_{i}" if i > 0 else idx 
@@ -1212,7 +1212,7 @@ def enhanced_sample_recovery(modalities: Dict[str, pd.DataFrame],
     if not missing_samples:
         return current_common_ids, modalities
     
-    # Enhanced ID standardization strategies
+    # ID standardization strategies
     recovered_samples = set(current_common_ids)
     enhanced_modalities = {}
     
@@ -1559,7 +1559,7 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
     """
     # Ensure deterministic behavior for consistent sample counts
     import numpy as np
-    np.random.seed(42)  # Fixed seed for reproducible sample recovery and processing
+    np.random.seed(42)  # Set seed for reproducible sample recovery and processing
     
     # Print to both logger and console for better visibility
     dataset_info = f"=== LOADING DATASET: {ds_name.upper()} ==="
@@ -1980,7 +1980,7 @@ def load_dataset(ds_name: str, modalities: List[str], outcome_col: Optional[str]
                 sample_non_numeric = [str(val)[:50] + "..." if len(str(val)) > 50 else str(val) for val in sample_non_numeric]
                 logger.info(f"Sample pipe-separated values: {sample_non_numeric}")
             
-            # Enhanced extraction function with better error handling
+            # Extraction function with error handling
             def extract_max_numeric(value):
                 if pd.isna(value):
                     return np.nan

@@ -395,7 +395,7 @@ def process_regression_datasets(args):
     print(f"{regression_block_info}")
     reg_extractors = get_regression_extractors()
     reg_selectors = get_regression_selectors()
-    reg_models = get_regression_models()  # CURRENT IMPLEMENTATION: Use getter function
+    reg_models = get_regression_models()  # Get regression models
     n_shared_list = N_VALUES_LIST.copy()  # Shared list for both extraction and selection
     
     # Check if a specific n_val is requested via command line
@@ -466,9 +466,9 @@ def process_regression_datasets(args):
                 logger.info(f"===> COMPLETED SEQUENTIAL SELECTION for dataset {ds_name}")
                 
             elif args.fusion_first:
-                # LEGACY: Fusion-First Architecture
+                # Fusion-First Architecture
                 print(f"===> Processing with FUSION-FIRST architecture for dataset {ds_name}")
-                logger.info(f"===> Using LEGACY FUSION-FIRST architecture: Fusion  Feature Processing  Model Training")
+                logger.info(f"===> Using FUSION-FIRST architecture: Fusion → Feature Processing → Model Training")
                 
                 # First, run extraction pipeline for all n_values
                 print(f"===> Processing EXTRACTION for dataset {ds_name}")
@@ -506,7 +506,7 @@ def process_regression_datasets(args):
                 # Combine extractors and selectors
                 all_algorithms = {**reg_extractors, **reg_selectors}
                 
-                # FIXED: Loop over all configured missing percentages
+                # Loop over all configured missing percentages
                 for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
                     print(f"===> Processing missing percentage: {missing_percentage*100:.0f}%")
                     logger.info(f"===> Processing missing percentage: {missing_percentage*100:.0f}%")
@@ -522,7 +522,7 @@ def process_regression_datasets(args):
                         n_values=n_shared_list,
                         models=list(reg_models.keys()),
                         is_regression=True,
-                        missing_percentage=missing_percentage  # FIXED: Use actual missing percentage
+                        missing_percentage=missing_percentage  # Use actual missing percentage
                     )
                     
                     print(f"===> COMPLETED missing percentage {missing_percentage*100:.0f}% for dataset {ds_name}")
@@ -627,9 +627,9 @@ def process_classification_datasets(args):
                 logger.info(f"===> COMPLETED SEQUENTIAL SELECTION for dataset {ds_name}")
                 
             elif args.fusion_first:
-                # LEGACY: Fusion-First Architecture
+                # Fusion-First Architecture
                 print(f"===> Processing with FUSION-FIRST architecture for dataset {ds_name}")
-                logger.info(f"===> Using LEGACY FUSION-FIRST architecture: Fusion  Feature Processing  Model Training")
+                logger.info(f"===> Using FUSION-FIRST architecture: Fusion → Feature Processing → Model Training")
                 
                 # First, run extraction pipeline for all n_values
                 print(f"===> Processing EXTRACTION for dataset {ds_name}")
@@ -667,7 +667,7 @@ def process_classification_datasets(args):
                 # Combine extractors and selectors
                 all_algorithms = {**clf_extractors, **clf_selectors}
                 
-                # FIXED: Loop over all configured missing percentages
+                # Loop over all configured missing percentages
                 for missing_percentage in MISSING_MODALITIES_CONFIG["missing_percentages"]:
                     print(f"===> Processing missing percentage: {missing_percentage*100:.0f}%")
                     logger.info(f"===> Processing missing percentage: {missing_percentage*100:.0f}%")
@@ -683,7 +683,7 @@ def process_classification_datasets(args):
                         n_values=n_shared_list,
                         models=list(clf_models.keys()),
                         is_regression=False,
-                        missing_percentage=missing_percentage  # FIXED: Use actual missing percentage
+                        missing_percentage=missing_percentage  # Use actual missing percentage
                     )
                     
                     print(f"===> COMPLETED missing percentage {missing_percentage*100:.0f}% for dataset {ds_name}")

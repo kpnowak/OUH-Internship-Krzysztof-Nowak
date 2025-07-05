@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Regression Results Analyzer
+Classification Results Analyzer
 
-This script analyzes results from regression experiments on AML and Sarcoma datasets,
-generating comprehensive CSV rankings based on test R² performance across different
-missing data percentages.
+This script analyzes results from classification experiments on cancer datasets
+(Colon, Breast, Kidney, Liver, Lung, Melanoma, Ovarian), generating comprehensive 
+CSV rankings based on MCC (Matthews Correlation Coefficient) performance across 
+different missing data percentages.
 """
 
 import json
@@ -18,23 +19,23 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-class RegressionResultsAnalyzer:
-    """Analyzes regression experiment results and generates comprehensive rankings."""
+class ClassificationResultsAnalyzer:
+    """Analyzes classification experiment results and generates comprehensive rankings."""
     
     def __init__(self, datasets: List[str] = None):
         """
         Initialize the analyzer.
         
         Args:
-            datasets: List of dataset names to analyze (default: ['AML', 'Sarcoma'])
+            datasets: List of dataset names to analyze (default: classification datasets)
         """
-        self.datasets = datasets or ['AML', 'Sarcoma']
+        self.datasets = datasets or ['Colon', 'Breast', 'Kidney', 'Liver', 'Lung', 'Melanoma', 'Ovarian']
         self.missing_percentages = [0, 20, 50]
         self.data = []
         
-        # Define extractors and selectors based on algorithm types
-        self.extractors = ['PCA', 'KPCA', 'FA', 'PLS', 'KPLS', 'SparsePLS']
-        self.selectors = ['f_regressionFS', 'VarianceFTest', 'LASSO', 'RFImportance', 'ElasticNetFS']
+        # Define extractors and selectors based on algorithm types for classification
+        self.extractors = ['PCA', 'KPCA', 'FA', 'PLS-DA', 'LDA', 'SparsePLS']
+        self.selectors = ['f_classifFS', 'VarianceFTest', 'LASSO', 'RFImportance', 'ElasticNetFS', 'LogisticL1']
         
     def load_data(self, base_path: str = "output") -> None:
         """
@@ -43,7 +44,7 @@ class RegressionResultsAnalyzer:
         Args:
             base_path: Base directory containing the result files
         """
-        print("Loading data...")
+        print("Loading classification data...")
         
         for dataset in self.datasets:
             for missing_pct in self.missing_percentages:
@@ -64,10 +65,18 @@ class RegressionResultsAnalyzer:
                             'algorithm': exp.get('algorithm', exp.get('algorithm_name', 'Unknown')),
                             'fusion_method': exp.get('fusion_method', 'Unknown'),
                             'model': exp.get('model', exp.get('model_name', 'Unknown')),
-                            'test_r2': exp.get('mean_scores', {}).get('test_r2', np.nan),
-                            'test_mse': exp.get('mean_scores', {}).get('test_mse', np.nan),
-                            'test_mae': exp.get('mean_scores', {}).get('test_mae', np.nan),
+                            'test_mcc': exp.get('mean_scores', {}).get('test_mcc', np.nan),
+                            'std_test_mcc': exp.get('std_scores', {}).get('test_mcc', np.nan),
+                            'test_accuracy': exp.get('mean_scores', {}).get('test_accuracy', np.nan),
+                            'std_test_accuracy': exp.get('std_scores', {}).get('test_accuracy', np.nan),
+                            'test_f1': exp.get('mean_scores', {}).get('test_f1', np.nan),
+                            'std_test_f1': exp.get('std_scores', {}).get('test_f1', np.nan),
+                            'test_precision': exp.get('mean_scores', {}).get('test_precision', np.nan),
+                            'std_test_precision': exp.get('std_scores', {}).get('test_precision', np.nan),
+                            'test_recall': exp.get('mean_scores', {}).get('test_recall', np.nan),
+                            'std_test_recall': exp.get('std_scores', {}).get('test_recall', np.nan),
                             'fit_time': exp.get('mean_scores', {}).get('fit_time', np.nan),
+                            'std_fit_time': exp.get('std_scores', {}).get('fit_time', np.nan),
                             'n_features': exp.get('n_features', 0),
                             'n_samples': exp.get('n_samples', 0),
                             'n_value': exp.get('n_value', exp.get('n_features_components', 0))
@@ -115,27 +124,30 @@ class RegressionResultsAnalyzer:
         # Filter by dataset if specified
         data = self.df if dataset is None else self.df[self.df['dataset'] == dataset]
         
-        # Filter valid R² scores
-        valid_data = data[~data['test_r2'].isna() & 
-                         (data['test_r2'] != np.inf) & 
-                         (data['test_r2'] != -np.inf)]
+        # Filter valid MCC scores
+        valid_data = data[~data['test_mcc'].isna() & 
+                         (data['test_mcc'] != np.inf) & 
+                         (data['test_mcc'] != -np.inf)]
         
-        # Sort by test_r2 descending and take top N
-        top_combinations = valid_data.nlargest(top_n, 'test_r2').copy()
+        # Sort by test_mcc descending and take top N
+        top_combinations = valid_data.nlargest(top_n, 'test_mcc').copy()
         
         # Create output dataframe
         result = top_combinations[[
             'dataset', 'missing_pct_display', 'algorithm', 'fusion_method', 
-            'model', 'combination', 'test_r2', 'test_mse', 'test_mae', 'fit_time',
-            'n_features', 'n_samples'
+            'model', 'combination', 'test_mcc', 'std_test_mcc', 'test_accuracy', 'std_test_accuracy',
+            'test_f1', 'std_test_f1', 'test_precision', 'std_test_precision', 'test_recall', 'std_test_recall',
+            'fit_time', 'std_fit_time', 'n_features', 'n_samples'
         ]].copy()
         
         result['rank'] = range(1, len(result) + 1)
         
         # Reorder columns
         result = result[['rank', 'dataset', 'missing_pct_display', 'algorithm', 
-                        'fusion_method', 'model', 'combination', 'test_r2', 
-                        'test_mse', 'test_mae', 'fit_time', 'n_features', 'n_samples']]
+                        'fusion_method', 'model', 'combination', 'test_mcc', 'std_test_mcc',
+                        'test_accuracy', 'std_test_accuracy', 'test_f1', 'std_test_f1', 
+                        'test_precision', 'std_test_precision', 'test_recall', 'std_test_recall',
+                        'fit_time', 'std_fit_time', 'n_features', 'n_samples']]
         
         return result
         
@@ -147,28 +159,31 @@ class RegressionResultsAnalyzer:
         # Filter by dataset if specified
         data = self.df if dataset is None else self.df[self.df['dataset'] == dataset]
         
-        # Filter valid R² scores and only include R² >= -1.0
-        valid_data = data[~data['test_r2'].isna() & 
-                         (data['test_r2'] != np.inf) & 
-                         (data['test_r2'] != -np.inf) &
-                         (data['test_r2'] >= -1.0)]
+        # Filter valid MCC scores and only include MCC >= -1.0
+        valid_data = data[~data['test_mcc'].isna() & 
+                         (data['test_mcc'] != np.inf) & 
+                         (data['test_mcc'] != -np.inf) &
+                         (data['test_mcc'] >= -1.0)]
         
-        # Sort by test_r2 ascending and take worst N
-        worst_combinations = valid_data.nsmallest(worst_n, 'test_r2').copy()
+        # Sort by test_mcc ascending and take worst N
+        worst_combinations = valid_data.nsmallest(worst_n, 'test_mcc').copy()
         
         # Create output dataframe
         result = worst_combinations[[
             'dataset', 'missing_pct_display', 'algorithm', 'fusion_method', 
-            'model', 'combination', 'test_r2', 'test_mse', 'test_mae',
-            'n_features', 'n_samples'
+            'model', 'combination', 'test_mcc', 'std_test_mcc', 'test_accuracy', 'std_test_accuracy',
+            'test_f1', 'std_test_f1', 'test_precision', 'std_test_precision', 'test_recall', 'std_test_recall',
+            'fit_time', 'std_fit_time', 'n_features', 'n_samples'
         ]].copy()
         
         result['rank'] = range(1, len(result) + 1)
         
         # Reorder columns
         result = result[['rank', 'dataset', 'missing_pct_display', 'algorithm', 
-                        'fusion_method', 'model', 'combination', 'test_r2', 
-                        'test_mse', 'test_mae', 'n_features', 'n_samples']]
+                        'fusion_method', 'model', 'combination', 'test_mcc', 'std_test_mcc',
+                        'test_accuracy', 'std_test_accuracy', 'test_f1', 'std_test_f1', 
+                        'test_precision', 'std_test_precision', 'test_recall', 'std_test_recall',
+                        'fit_time', 'std_fit_time', 'n_features', 'n_samples']]
         
         return result
         
@@ -185,19 +200,22 @@ class RegressionResultsAnalyzer:
         for missing_pct in sorted(data['missing_pct_display'].unique()):
             subset = data[data['missing_pct_display'] == missing_pct]
             
-            # Filter valid R² scores and only include R² >= -1.0
-            valid_data = subset[~subset['test_r2'].isna() & 
-                              (subset['test_r2'] != np.inf) & 
-                              (subset['test_r2'] != -np.inf) &
-                              (subset['test_r2'] >= -1.0)]
+            # Filter valid MCC scores and only include MCC >= -1.0
+            valid_data = subset[~subset['test_mcc'].isna() & 
+                              (subset['test_mcc'] != np.inf) & 
+                              (subset['test_mcc'] != -np.inf) &
+                              (subset['test_mcc'] >= -1.0)]
             
-            # Sort by test_r2 ascending and take worst N
-            worst_combinations = valid_data.nsmallest(worst_n, 'test_r2').copy()
+            # Sort by test_mcc ascending and take worst N
+            worst_combinations = valid_data.nsmallest(worst_n, 'test_mcc').copy()
             
             # Create output dataframe
             result = worst_combinations[[
                 'dataset', 'algorithm', 'fusion_method', 'model', 'combination',
-                'test_r2', 'test_mse', 'test_mae', 'n_features', 'n_samples'
+                'test_mcc', 'std_test_mcc', 'test_accuracy', 'std_test_accuracy',
+                'test_f1', 'std_test_f1', 'test_precision', 'std_test_precision',
+                'test_recall', 'std_test_recall', 'fit_time', 'std_fit_time',
+                'n_features', 'n_samples'
             ]].copy()
             
             result['rank'] = range(1, len(result) + 1)
@@ -205,8 +223,10 @@ class RegressionResultsAnalyzer:
             
             # Reorder columns
             result = result[['rank', 'missing_percentage', 'dataset', 'algorithm', 
-                            'fusion_method', 'model', 'combination', 'test_r2', 
-                            'test_mse', 'test_mae', 'n_features', 'n_samples']]
+                            'fusion_method', 'model', 'combination', 'test_mcc', 'std_test_mcc',
+                            'test_accuracy', 'std_test_accuracy', 'test_f1', 'std_test_f1', 
+                            'test_precision', 'std_test_precision', 'test_recall', 'std_test_recall',
+                            'fit_time', 'std_fit_time', 'n_features', 'n_samples']]
             
             results[missing_pct] = result
             
@@ -225,18 +245,20 @@ class RegressionResultsAnalyzer:
         for missing_pct in sorted(data['missing_pct_display'].unique()):
             subset = data[data['missing_pct_display'] == missing_pct]
             
-            # Filter valid R² scores
-            valid_data = subset[~subset['test_r2'].isna() & 
-                              (subset['test_r2'] != np.inf) & 
-                              (subset['test_r2'] != -np.inf)]
+            # Filter valid MCC scores
+            valid_data = subset[~subset['test_mcc'].isna() & 
+                              (subset['test_mcc'] != np.inf) & 
+                              (subset['test_mcc'] != -np.inf)]
             
-            # Sort by test_r2 descending and take top N
-            top_combinations = valid_data.nlargest(top_n, 'test_r2').copy()
+            # Sort by test_mcc descending and take top N
+            top_combinations = valid_data.nlargest(top_n, 'test_mcc').copy()
             
             # Create output dataframe
             result = top_combinations[[
-                'dataset', 'missing_pct_display', 'algorithm', 'fusion_method', 
-                'model', 'combination', 'test_r2', 'test_mse', 'test_mae', 'fit_time',
+                'dataset', 'algorithm', 'fusion_method', 'model', 'combination',
+                'test_mcc', 'std_test_mcc', 'test_accuracy', 'std_test_accuracy',
+                'test_f1', 'std_test_f1', 'test_precision', 'std_test_precision',
+                'test_recall', 'std_test_recall', 'fit_time', 'std_fit_time',
                 'n_features', 'n_samples'
             ]].copy()
             
@@ -245,8 +267,10 @@ class RegressionResultsAnalyzer:
             
             # Reorder columns
             result = result[['rank', 'missing_percentage', 'dataset', 'algorithm', 
-                            'fusion_method', 'model', 'combination', 'test_r2', 
-                            'test_mse', 'test_mae', 'fit_time', 'n_features', 'n_samples']]
+                            'fusion_method', 'model', 'combination', 'test_mcc', 'std_test_mcc',
+                            'test_accuracy', 'std_test_accuracy', 'test_f1', 'std_test_f1', 
+                            'test_precision', 'std_test_precision', 'test_recall', 'std_test_recall',
+                            'fit_time', 'std_fit_time', 'n_features', 'n_samples']]
             
             results[missing_pct] = result
             
@@ -260,14 +284,16 @@ class RegressionResultsAnalyzer:
         # Filter by dataset if specified
         data = self.df if dataset is None else self.df[self.df['dataset'] == dataset]
         
-        # Filter out R² values lower than -1 before calculating averages
-        filtered_df = data[data['test_r2'] >= -1.0].copy()
+        # Filter out MCC values lower than -1 before calculating averages
+        filtered_df = data[data['test_mcc'] >= -1.0].copy()
         
         # Group by fusion method and missing percentage
         fusion_stats = filtered_df.groupby(['fusion_method', 'missing_pct_display']).agg({
-            'test_r2': ['mean', 'std', 'count'],
-            'test_mse': 'mean',
-            'test_mae': 'mean',
+            'test_mcc': ['mean', 'std', 'count'],
+            'test_accuracy': 'mean',
+            'test_f1': 'mean',
+            'test_precision': 'mean',
+            'test_recall': 'mean',
             'fit_time': 'mean'
         }).round(4)
         
@@ -277,11 +303,13 @@ class RegressionResultsAnalyzer:
         
         # Rename columns for clarity
         fusion_stats.rename(columns={
-            'test_r2_mean': 'avg_test_r2',
-            'test_r2_std': 'std_test_r2',
-            'test_r2_count': 'n_experiments',
-            'test_mse_mean': 'avg_test_mse',
-            'test_mae_mean': 'avg_test_mae',
+            'test_mcc_mean': 'avg_test_mcc',
+            'test_mcc_std': 'std_test_mcc',
+            'test_mcc_count': 'n_experiments',
+            'test_accuracy_mean': 'avg_test_accuracy',
+            'test_f1_mean': 'avg_test_f1',
+            'test_precision_mean': 'avg_test_precision',
+            'test_recall_mean': 'avg_test_recall',
             'fit_time_mean': 'avg_fit_time'
         }, inplace=True)
         
@@ -289,7 +317,7 @@ class RegressionResultsAnalyzer:
         results = []
         for missing_pct in sorted(fusion_stats['missing_pct_display'].unique()):
             subset = fusion_stats[fusion_stats['missing_pct_display'] == missing_pct].copy()
-            subset['rank'] = subset['avg_test_r2'].rank(method='dense', ascending=False)
+            subset['rank'] = subset['avg_test_mcc'].rank(method='dense', ascending=False)
             subset = subset.sort_values('rank')
             results.append(subset)
         
@@ -297,8 +325,9 @@ class RegressionResultsAnalyzer:
         
         # Reorder columns
         result_df = result_df[['missing_pct_display', 'rank', 'fusion_method', 
-                              'avg_test_r2', 'std_test_r2', 'n_experiments',
-                              'avg_test_mse', 'avg_test_mae', 'avg_fit_time']]
+                              'avg_test_mcc', 'std_test_mcc', 'n_experiments',
+                              'avg_test_accuracy', 'avg_test_f1', 'avg_test_precision',
+                              'avg_test_recall', 'avg_fit_time']]
         
         return result_df
         
@@ -310,14 +339,16 @@ class RegressionResultsAnalyzer:
         # Filter by dataset if specified
         data = self.df if dataset is None else self.df[self.df['dataset'] == dataset]
         
-        # Filter out R² values lower than -1 before calculating averages
-        filtered_df = data[data['test_r2'] >= -1.0].copy()
+        # Filter out MCC values lower than -1 before calculating averages
+        filtered_df = data[data['test_mcc'] >= -1.0].copy()
         
         # Group by algorithm and missing percentage
         algo_stats = filtered_df.groupby(['algorithm', 'missing_pct_display']).agg({
-            'test_r2': ['mean', 'std', 'count'],
-            'test_mse': 'mean',
-            'test_mae': 'mean',
+            'test_mcc': ['mean', 'std', 'count'],
+            'test_accuracy': 'mean',
+            'test_f1': 'mean',
+            'test_precision': 'mean',
+            'test_recall': 'mean',
             'fit_time': 'mean'
         }).round(4)
         
@@ -327,11 +358,13 @@ class RegressionResultsAnalyzer:
         
         # Rename columns for clarity
         algo_stats.rename(columns={
-            'test_r2_mean': 'avg_test_r2',
-            'test_r2_std': 'std_test_r2',
-            'test_r2_count': 'n_experiments',
-            'test_mse_mean': 'avg_test_mse',
-            'test_mae_mean': 'avg_test_mae',
+            'test_mcc_mean': 'avg_test_mcc',
+            'test_mcc_std': 'std_test_mcc',
+            'test_mcc_count': 'n_experiments',
+            'test_accuracy_mean': 'avg_test_accuracy',
+            'test_f1_mean': 'avg_test_f1',
+            'test_precision_mean': 'avg_test_precision',
+            'test_recall_mean': 'avg_test_recall',
             'fit_time_mean': 'avg_fit_time'
         }, inplace=True)
         
@@ -339,7 +372,7 @@ class RegressionResultsAnalyzer:
         results = []
         for missing_pct in sorted(algo_stats['missing_pct_display'].unique()):
             subset = algo_stats[algo_stats['missing_pct_display'] == missing_pct].copy()
-            subset['rank'] = subset['avg_test_r2'].rank(method='dense', ascending=False)
+            subset['rank'] = subset['avg_test_mcc'].rank(method='dense', ascending=False)
             subset = subset.sort_values('rank')
             results.append(subset)
         
@@ -347,8 +380,9 @@ class RegressionResultsAnalyzer:
         
         # Reorder columns
         result_df = result_df[['missing_pct_display', 'rank', 'algorithm', 
-                              'avg_test_r2', 'std_test_r2', 'n_experiments',
-                              'avg_test_mse', 'avg_test_mae', 'avg_fit_time']]
+                              'avg_test_mcc', 'std_test_mcc', 'n_experiments',
+                              'avg_test_accuracy', 'avg_test_f1', 'avg_test_precision',
+                              'avg_test_recall', 'avg_fit_time']]
         
         return result_df
         
@@ -360,15 +394,17 @@ class RegressionResultsAnalyzer:
         # Filter by dataset if specified
         data = self.df if dataset is None else self.df[self.df['dataset'] == dataset]
         
-        # Filter out R² values lower than -1 and keep only extractor algorithms
-        filtered_df = data[(data['test_r2'] >= -1.0) & 
+        # Filter out MCC values lower than -1 and keep only extractor algorithms
+        filtered_df = data[(data['test_mcc'] >= -1.0) & 
                           (data['algorithm'].isin(self.extractors))].copy()
         
         # Group by extractor algorithm and missing percentage
         extractor_stats = filtered_df.groupby(['algorithm', 'missing_pct_display']).agg({
-            'test_r2': ['mean', 'std', 'count'],
-            'test_mse': 'mean',
-            'test_mae': 'mean',
+            'test_mcc': ['mean', 'std', 'count'],
+            'test_accuracy': 'mean',
+            'test_f1': 'mean',
+            'test_precision': 'mean',
+            'test_recall': 'mean',
             'fit_time': 'mean'
         }).round(4)
         
@@ -378,11 +414,13 @@ class RegressionResultsAnalyzer:
         
         # Rename columns for clarity
         extractor_stats.rename(columns={
-            'test_r2_mean': 'avg_test_r2',
-            'test_r2_std': 'std_test_r2',
-            'test_r2_count': 'n_experiments',
-            'test_mse_mean': 'avg_test_mse',
-            'test_mae_mean': 'avg_test_mae',
+            'test_mcc_mean': 'avg_test_mcc',
+            'test_mcc_std': 'std_test_mcc',
+            'test_mcc_count': 'n_experiments',
+            'test_accuracy_mean': 'avg_test_accuracy',
+            'test_f1_mean': 'avg_test_f1',
+            'test_precision_mean': 'avg_test_precision',
+            'test_recall_mean': 'avg_test_recall',
             'fit_time_mean': 'avg_fit_time'
         }, inplace=True)
         
@@ -390,7 +428,7 @@ class RegressionResultsAnalyzer:
         results = []
         for missing_pct in sorted(extractor_stats['missing_pct_display'].unique()):
             subset = extractor_stats[extractor_stats['missing_pct_display'] == missing_pct].copy()
-            subset['rank'] = subset['avg_test_r2'].rank(method='dense', ascending=False)
+            subset['rank'] = subset['avg_test_mcc'].rank(method='dense', ascending=False)
             subset = subset.sort_values('rank')
             results.append(subset)
         
@@ -398,8 +436,9 @@ class RegressionResultsAnalyzer:
         
         # Reorder columns
         result_df = result_df[['missing_pct_display', 'rank', 'algorithm', 
-                              'avg_test_r2', 'std_test_r2', 'n_experiments',
-                              'avg_test_mse', 'avg_test_mae', 'avg_fit_time']]
+                              'avg_test_mcc', 'std_test_mcc', 'n_experiments',
+                              'avg_test_accuracy', 'avg_test_f1', 'avg_test_precision',
+                              'avg_test_recall', 'avg_fit_time']]
         
         return result_df
         
@@ -411,15 +450,17 @@ class RegressionResultsAnalyzer:
         # Filter by dataset if specified
         data = self.df if dataset is None else self.df[self.df['dataset'] == dataset]
         
-        # Filter out R² values lower than -1 and keep only selector algorithms
-        filtered_df = data[(data['test_r2'] >= -1.0) & 
+        # Filter out MCC values lower than -1 and keep only selector algorithms
+        filtered_df = data[(data['test_mcc'] >= -1.0) & 
                           (data['algorithm'].isin(self.selectors))].copy()
         
         # Group by selector algorithm and missing percentage
         selector_stats = filtered_df.groupby(['algorithm', 'missing_pct_display']).agg({
-            'test_r2': ['mean', 'std', 'count'],
-            'test_mse': 'mean',
-            'test_mae': 'mean',
+            'test_mcc': ['mean', 'std', 'count'],
+            'test_accuracy': 'mean',
+            'test_f1': 'mean',
+            'test_precision': 'mean',
+            'test_recall': 'mean',
             'fit_time': 'mean'
         }).round(4)
         
@@ -429,11 +470,13 @@ class RegressionResultsAnalyzer:
         
         # Rename columns for clarity
         selector_stats.rename(columns={
-            'test_r2_mean': 'avg_test_r2',
-            'test_r2_std': 'std_test_r2',
-            'test_r2_count': 'n_experiments',
-            'test_mse_mean': 'avg_test_mse',
-            'test_mae_mean': 'avg_test_mae',
+            'test_mcc_mean': 'avg_test_mcc',
+            'test_mcc_std': 'std_test_mcc',
+            'test_mcc_count': 'n_experiments',
+            'test_accuracy_mean': 'avg_test_accuracy',
+            'test_f1_mean': 'avg_test_f1',
+            'test_precision_mean': 'avg_test_precision',
+            'test_recall_mean': 'avg_test_recall',
             'fit_time_mean': 'avg_fit_time'
         }, inplace=True)
         
@@ -441,7 +484,7 @@ class RegressionResultsAnalyzer:
         results = []
         for missing_pct in sorted(selector_stats['missing_pct_display'].unique()):
             subset = selector_stats[selector_stats['missing_pct_display'] == missing_pct].copy()
-            subset['rank'] = subset['avg_test_r2'].rank(method='dense', ascending=False)
+            subset['rank'] = subset['avg_test_mcc'].rank(method='dense', ascending=False)
             subset = subset.sort_values('rank')
             results.append(subset)
         
@@ -449,8 +492,9 @@ class RegressionResultsAnalyzer:
         
         # Reorder columns
         result_df = result_df[['missing_pct_display', 'rank', 'algorithm', 
-                              'avg_test_r2', 'std_test_r2', 'n_experiments',
-                              'avg_test_mse', 'avg_test_mae', 'avg_fit_time']]
+                              'avg_test_mcc', 'std_test_mcc', 'n_experiments',
+                              'avg_test_accuracy', 'avg_test_f1', 'avg_test_precision',
+                              'avg_test_recall', 'avg_fit_time']]
         
         return result_df
         
@@ -462,14 +506,16 @@ class RegressionResultsAnalyzer:
         # Filter by dataset if specified
         data = self.df if dataset is None else self.df[self.df['dataset'] == dataset]
         
-        # Filter out R² values lower than -1 before calculating averages
-        filtered_df = data[data['test_r2'] >= -1.0].copy()
+        # Filter out MCC values lower than -1 before calculating averages
+        filtered_df = data[data['test_mcc'] >= -1.0].copy()
         
         # Group by model and missing percentage
         model_stats = filtered_df.groupby(['model', 'missing_pct_display']).agg({
-            'test_r2': ['mean', 'std', 'count'],
-            'test_mse': 'mean',
-            'test_mae': 'mean',
+            'test_mcc': ['mean', 'std', 'count'],
+            'test_accuracy': 'mean',
+            'test_f1': 'mean',
+            'test_precision': 'mean',
+            'test_recall': 'mean',
             'fit_time': 'mean'
         }).round(4)
         
@@ -479,11 +525,13 @@ class RegressionResultsAnalyzer:
         
         # Rename columns for clarity
         model_stats.rename(columns={
-            'test_r2_mean': 'avg_test_r2',
-            'test_r2_std': 'std_test_r2',
-            'test_r2_count': 'n_experiments',
-            'test_mse_mean': 'avg_test_mse',
-            'test_mae_mean': 'avg_test_mae',
+            'test_mcc_mean': 'avg_test_mcc',
+            'test_mcc_std': 'std_test_mcc',
+            'test_mcc_count': 'n_experiments',
+            'test_accuracy_mean': 'avg_test_accuracy',
+            'test_f1_mean': 'avg_test_f1',
+            'test_precision_mean': 'avg_test_precision',
+            'test_recall_mean': 'avg_test_recall',
             'fit_time_mean': 'avg_fit_time'
         }, inplace=True)
         
@@ -491,7 +539,7 @@ class RegressionResultsAnalyzer:
         results = []
         for missing_pct in sorted(model_stats['missing_pct_display'].unique()):
             subset = model_stats[model_stats['missing_pct_display'] == missing_pct].copy()
-            subset['rank'] = subset['avg_test_r2'].rank(method='dense', ascending=False)
+            subset['rank'] = subset['avg_test_mcc'].rank(method='dense', ascending=False)
             subset = subset.sort_values('rank')
             results.append(subset)
         
@@ -499,25 +547,26 @@ class RegressionResultsAnalyzer:
         
         # Reorder columns
         result_df = result_df[['missing_pct_display', 'rank', 'model', 
-                              'avg_test_r2', 'std_test_r2', 'n_experiments',
-                              'avg_test_mse', 'avg_test_mae', 'avg_fit_time']]
+                              'avg_test_mcc', 'std_test_mcc', 'n_experiments',
+                              'avg_test_accuracy', 'avg_test_f1', 'avg_test_precision',
+                              'avg_test_recall', 'avg_fit_time']]
         
         return result_df
         
     def save_results(self, output_dir: str = "results") -> None:
         """Save all analysis results to CSV files, organized by dataset."""
-        print(f"Saving regression results to {output_dir}...")
+        print(f"Saving classification results to {output_dir}...")
         
-        # Create main output directory and regression subdirectory
-        regression_dir = f"{output_dir}/regression"
-        Path(regression_dir).mkdir(parents=True, exist_ok=True)
+        # Create main output directory and classification subdirectory
+        classification_dir = f"{output_dir}/classification"
+        Path(classification_dir).mkdir(parents=True, exist_ok=True)
         
         # Analyze each dataset separately
         for dataset in self.datasets:
-            dataset_dir = f"{regression_dir}/{dataset}"
+            dataset_dir = f"{classification_dir}/{dataset}"
             Path(dataset_dir).mkdir(exist_ok=True)
             
-            print(f"\n=== ANALYZING {dataset} DATASET ===")
+            print(f"\n=== ANALYZING {dataset} CLASSIFICATION DATASET ===")
             
             # 1. Top 50 combinations overall for this dataset
             top_overall = self.create_top_combinations_overall(50, dataset)
@@ -559,21 +608,24 @@ class RegressionResultsAnalyzer:
             
             # Print dataset-specific statistics
             dataset_df = self.df[self.df['dataset'] == dataset]
-            filtered_dataset_df = dataset_df[dataset_df['test_r2'] >= -1.0]
+            filtered_dataset_df = dataset_df[dataset_df['test_mcc'] >= -1.0]
             
             print(f"Results saved to {dataset_dir}/")
             print(f"Total experiments: {len(dataset_df)}")
             print(f"Experiments included in averages: {len(filtered_dataset_df)} ({100*len(filtered_dataset_df)/len(dataset_df):.1f}%)")
-            print(f"Best R² score: {dataset_df['test_r2'].max():.4f}")
-            print(f"Mean R² score (filtered): {filtered_dataset_df['test_r2'].mean():.4f}")
+            if len(dataset_df) > 0:
+                print(f"Best MCC score: {dataset_df['test_mcc'].max():.4f}")
+            if len(filtered_dataset_df) > 0:
+                print(f"Mean MCC score (filtered): {filtered_dataset_df['test_mcc'].mean():.4f}")
             
             # Show top combination for this dataset
-            best_combination = dataset_df.loc[dataset_df['test_r2'].idxmax()]
-            print(f"Best combination: {best_combination['algorithm']} + {best_combination['fusion_method']} + {best_combination['model']} (R²={best_combination['test_r2']:.4f})")
+            if len(dataset_df) > 0:
+                best_combination = dataset_df.loc[dataset_df['test_mcc'].idxmax()]
+                print(f"Best combination: {best_combination['algorithm']} + {best_combination['fusion_method']} + {best_combination['model']} (MCC={best_combination['test_mcc']:.4f})")
         
-        # Create combined rankings across all regression datasets
-        print(f"\n=== CREATING COMBINED REGRESSION RANKINGS ===")
-        combined_dir = f"{regression_dir}/combined"
+        # Create combined rankings across all classification datasets
+        print(f"\n=== CREATING COMBINED CLASSIFICATION RANKINGS ===")
+        combined_dir = f"{classification_dir}/combined"
         Path(combined_dir).mkdir(exist_ok=True)
         
         # 1. Combined top 50 combinations overall
@@ -614,12 +666,12 @@ class RegressionResultsAnalyzer:
         combined_model_rankings = self.create_model_rankings()
         combined_model_rankings.to_csv(f"{combined_dir}/model_rankings.csv", index=False)
         
-        print(f"Combined regression rankings saved to {combined_dir}/")
+        print(f"Combined classification rankings saved to {combined_dir}/")
         
-        print("\n=== ALL REGRESSION RESULTS SAVED SUCCESSFULLY! ===")
+        print("\n=== ALL CLASSIFICATION RESULTS SAVED SUCCESSFULLY! ===")
         
         # Print overall summary
-        print(f"\n=== OVERALL REGRESSION SUMMARY ===")
+        print(f"\n=== OVERALL CLASSIFICATION SUMMARY ===")
         print(f"Total experiments analyzed: {len(self.df)}")
         print(f"Datasets analyzed: {', '.join(self.datasets)}")
         print(f"Missing percentages: {', '.join(map(str, sorted(self.df['missing_pct_display'].unique())))}")
@@ -631,18 +683,19 @@ class RegressionResultsAnalyzer:
         print(f"Models ({len(self.df['model'].unique())}): {', '.join(sorted(self.df['model'].unique()))}")
         
         # Show overall best combination
-        best_combination = self.df.loc[self.df['test_r2'].idxmax()]
-        print(f"\nOverall best regression combination:")
-        print(f"  Dataset: {best_combination['dataset']}")
-        print(f"  Missing %: {best_combination['missing_pct_display']}")
-        print(f"  Algorithm: {best_combination['algorithm']}")
-        print(f"  Fusion: {best_combination['fusion_method']}")
-        print(f"  Model: {best_combination['model']}")
-        print(f"  R² Score: {best_combination['test_r2']:.4f}")
+        if len(self.df) > 0:
+            best_combination = self.df.loc[self.df['test_mcc'].idxmax()]
+            print(f"\nOverall best classification combination:")
+            print(f"  Dataset: {best_combination['dataset']}")
+            print(f"  Missing %: {best_combination['missing_pct_display']}")
+            print(f"  Algorithm: {best_combination['algorithm']}")
+            print(f"  Fusion: {best_combination['fusion_method']}")
+            print(f"  Model: {best_combination['model']}")
+            print(f"  MCC Score: {best_combination['test_mcc']:.4f}")
         
         print(f"\nResults structure:")
-        print(f"  - Individual dataset rankings: {regression_dir}/[dataset]/")
-        print(f"  - Combined regression rankings: {regression_dir}/combined/")
+        print(f"  - Individual dataset rankings: {classification_dir}/[dataset]/")
+        print(f"  - Combined classification rankings: {classification_dir}/combined/")
         print(f"\nRanking files generated for each dataset:")
         for dataset in self.datasets:
             print(f"  {dataset}:")
@@ -652,10 +705,11 @@ class RegressionResultsAnalyzer:
 
 
 def main():
-    """Main function to run the analysis."""
-    parser = argparse.ArgumentParser(description='Analyze regression results from AML and Sarcoma datasets')
-    parser.add_argument('--datasets', nargs='+', default=['AML', 'Sarcoma'],
-                        help='Datasets to analyze (default: AML Sarcoma)')
+    """Main function to run the classification analysis."""
+    parser = argparse.ArgumentParser(description='Analyze classification results from cancer datasets')
+    parser.add_argument('--datasets', nargs='+', 
+                        default=['Colon', 'Breast', 'Kidney', 'Liver', 'Lung', 'Melanoma', 'Ovarian'],
+                        help='Datasets to analyze (default: all classification datasets)')
     parser.add_argument('--input-dir', default='output',
                         help='Input directory containing result files (default: output)')
     parser.add_argument('--output-dir', default='results',
@@ -664,7 +718,7 @@ def main():
     args = parser.parse_args()
     
     # Create analyzer and run analysis
-    analyzer = RegressionResultsAnalyzer(datasets=args.datasets)
+    analyzer = ClassificationResultsAnalyzer(datasets=args.datasets)
     analyzer.load_data(args.input_dir)
     analyzer.save_results(args.output_dir)
     

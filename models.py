@@ -370,7 +370,7 @@ def _sanitize_extractor_hyperparameters(extractor, extractor_class_name, hyperpa
             validated_params['gamma'] = None
             logger.debug("KPCA: Using default gamma (None)")
         
-        # Enhanced eigen_solver configuration to prevent ARPACK errors
+        # Eigen solver configuration to prevent ARPACK errors
         if eigen_solver == 'arpack' or eigen_solver == 'auto':
             # Replace ARPACK solver with more stable alternatives for problematic datasets
             validated_params['eigen_solver'] = 'dense'
@@ -1297,7 +1297,7 @@ class SparsePLS:
                 if w_norm > tolerance:
                     w = w / w_norm
                 else:
-                    # Enhanced recovery mechanism with multiple fallback strategies
+                    # Recovery mechanism with multiple fallback strategies
                     recovered = False
                     
                     # Strategy 1: Try with progressively reduced sparsity
@@ -1886,7 +1886,7 @@ class KernelPLSRegression:
         This prevents extreme gamma values that can cause numerical instability.
         """
         if self.gamma == "auto":
-            # Improved median heuristic with numerical stability
+            # Median heuristic with numerical stability
             n_samples = min(500, X.shape[0])  # Reduced sample size for efficiency
             if X.shape[0] > n_samples:
                 indices = np.random.RandomState(self.random_state).choice(
@@ -2214,7 +2214,7 @@ class KernelPLSRegression:
         return self
 
 # ============================================================================
-# ENHANCED REGRESSION MODELS WITH AUTOMATIC PARAMETER SELECTION
+# Regression models with automatic parameter selection
 # ============================================================================
 
 class SelectionByCyclicCoordinateDescent(BaseEstimator, RegressorMixin):
@@ -2640,7 +2640,7 @@ from config import CACHE_CONFIG
 # Add at the top of the file, after logger definition
 _feature_mismatch_logged = set()
 
-# Improved caching with LRU + size limits - replace existing cache implementation
+        # Caching with LRU + size limits
 class SizedLRUCache:
     """
     Memory-aware LRU Cache implementation that tracks both item count and total memory usage.
@@ -4473,7 +4473,7 @@ def build_model(name, task):
     from sklearn.preprocessing import PowerTransformer
     
     _MODEL = {
-        # CURRENT IMPLEMENTATION - Regression models (3)
+        # Regression models
         "LinearRegression": lambda: RobustLinearRegressor(
             method='huber',
             random_state=42
@@ -4482,7 +4482,7 @@ def build_model(name, task):
             l1_ratio=0.5,
             cv=5,
             random_state=42,
-            task_type="regression"  # Always regression for ElasticNet
+            task_type="regression"
         ),
         "RandomForestRegressor": lambda: OptimizedExtraTreesRegressor(
             n_estimators=200,
@@ -4491,7 +4491,7 @@ def build_model(name, task):
             random_state=42
         ),
 
-        # CURRENT IMPLEMENTATION - Classification models (2)
+        # Classification models
         "LogisticRegression": lambda: LogisticRegression(
             max_iter=2000,
             random_state=42
@@ -4543,7 +4543,7 @@ def get_regression_models() -> Dict[str, str]:
     """
     Get dictionary of regression models.
     
-    CURRENT IMPLEMENTATION - 3 models as specified:
+    Available regression models:
     1. LinearRegression - Linear regression with robust implementation
     2. ElasticNet - ElasticNet with automatic parameter selection
     3. RandomForestRegressor - Optimized random forest regressor
@@ -4554,7 +4554,6 @@ def get_regression_models() -> Dict[str, str]:
         Dictionary mapping model names to model names (for consistency with selectors)
     """
     return {
-        # SPECIFIED 3 ALGORITHMS FOR REGRESSION MODELS
         "LinearRegression": "LinearRegression",
         "ElasticNet": "ElasticNet", 
         "RandomForestRegressor": "RandomForestRegressor"
@@ -4564,7 +4563,7 @@ def get_classification_models() -> Dict[str, str]:
     """
     Get dictionary of classification models.
     
-    CURRENT IMPLEMENTATION - 3 models as specified:
+    Available classification models:
     1. LogisticRegression - Logistic regression with regularization
     2. RandomForestClassifier - Random forest classifier
     3. SVC - Support Vector Classifier with probability estimates
@@ -4575,7 +4574,6 @@ def get_classification_models() -> Dict[str, str]:
         Dictionary mapping model names to model names (for consistency with selectors)
     """
     return {
-        # SPECIFIED 3 ALGORITHMS FOR CLASSIFICATION MODELS
         "LogisticRegression": "LogisticRegression",
         "RandomForestClassifier": "RandomForestClassifier",
         "SVC": "SVC"
