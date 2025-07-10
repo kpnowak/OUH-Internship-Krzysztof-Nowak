@@ -1,4 +1,4 @@
-# Multi-Omics Data Fusion Optimization Pipeline
+# Robust Multi-Omics Integration: Comparative Analysis of Feature Engineering and Intermediate Fusion Techniques for Cancer Prediction
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -6,29 +6,31 @@
 
 ## Project Overview
 
-This repository contains a comprehensive machine learning pipeline for **multi-omics data fusion optimization** using intermediate integration techniques. This project is part of a Bachelor's Thesis in Artificial Intelligence at VU Amsterdam, contributing to a larger research initiative focused on developing advanced machine learning models for early and accurate cancer detection.
+This repository contains a comprehensive machine learning pipeline for **robust multi-omics integration** using intermediate fusion techniques. This project is part of a Bachelor's Thesis in Artificial Intelligence at VU Amsterdam, focusing on comparative analysis of feature engineering and intermediate fusion techniques for cancer prediction. It contributes to a larger research initiative focused on developing advanced machine learning models for early 
+and accurate cancer detection.
 
-The pipeline investigates **feature extraction** and **selection algorithms** for multi-omics cancer data, implementing a novel **feature-first architecture** where feature processing is applied to each modality separately **before** fusion occurs.
+The pipeline investigates **fusion techniques** and **feature engineering algorithms** for multi-omics cancer data, implementing an **intermediate integration approach** where feature processing is applied to each modality separately **before** fusion occurs.
 
 ### Research Context & Objectives
 
-**Primary Goal**: Develop specialized feature extraction and selection algorithms optimized for cancer detection using multi-modal omics data.
+**Primary Goal**: Test fusion techniques and feature engineering algorithms (with emphasis on fusion techniques) and analyze how they interact with different models, missing data percentages, and feature/component numbers.
 
 **Research Objectives**:
-1. **Survey** state-of-the-art extraction and selection algorithms
-2. **Evaluate** algorithms on benchmark cancer datasets using comprehensive experiments
-3. **Analyze** results to determine optimal methods and explain their effectiveness
-4. **Design** purpose-built algorithms for multi-omics cancer data *(Future Work)*
+1. **Evaluate** fusion techniques and feature engineering algorithms across diverse scenarios
+2. **Analyze** interactions between fusion methods, models, and data conditions
+3. **Investigate** performance under different missing data percentages (0%, 20%, 50%)
+4. **Study** impact of feature/component numbers on algorithm performance
+5. **Determine** optimal combinations for multi-omics cancer data analysis
 
-### Key Innovation: Feature-First Architecture
+### Processing Approach: Intermediate Integration
 
-The pipeline implements a **feature-first processing paradigm** that represents the current state-of-the-art for multi-omics data analysis:
+The pipeline implements an **intermediate integration approach** for multi-omics data analysis:
 
 ```
 🧬 Raw Multi-Omics Data → 🔧 Feature Processing (per modality) → 🔗 Fusion → 🤖 Model Training
 ```
 
-**Why Feature-First?**
+**Why Intermediate Integration?**
 - **Modality-Specific Optimization**: Each data type gets specialized preprocessing
 - **Better Feature Quality**: Fusion works with clean, optimized features rather than noisy raw data
 - **Improved Interpretability**: Clear understanding of individual modality contributions
@@ -54,7 +56,7 @@ The pipeline implements a **feature-first processing paradigm** that represents 
 
 ## Pipeline Architecture
 
-### 🏗️ Feature-First Processing Workflow
+### 🏗️ Intermediate Integration Processing Workflow
 
 ```mermaid
 flowchart TD
@@ -76,7 +78,7 @@ flowchart TD
         B4[Phase 4: Coordinated Validation]
     end
     
-    subgraph "Feature Processing"
+    subgraph "Feature Engineering"
         C1[Extractors: PCA, KPCA, FA, LDA, PLS]
         C2[Selectors: ElasticNetFS, LASSO, RFImportance]
     end
@@ -120,26 +122,47 @@ flowchart TD
 
 ## Algorithm Portfolio
 
-### 🧮 Feature Extraction Methods (6 types)
+### 🧮 Feature Engineering Methods (6 types per task)
 
+**Regression Extractors (6):**
+| Algorithm | Description | Use Case |
+|-----------|-------------|----------|
+| **PCA** | Principal Component Analysis | Linear dimensionality reduction |
+| **KPCA** | Kernel PCA with RBF kernel | Non-linear dimensionality reduction |
+| **FA** | Factor Analysis | Latent factor modeling |
+| **PLS** | Partial Least Squares | Supervised reduction for regression |
+| **KPLS** | Kernel PLS | Non-linear supervised reduction |
+| **SparsePLS** | Sparse Partial Least Squares | Sparse feature discovery |
+
+**Classification Extractors (6):**
 | Algorithm | Description | Use Case |
 |-----------|-------------|----------|
 | **PCA** | Principal Component Analysis | Linear dimensionality reduction |
 | **KPCA** | Kernel PCA with RBF kernel | Non-linear dimensionality reduction |
 | **FA** | Factor Analysis | Latent factor modeling |
 | **LDA** | Linear Discriminant Analysis | Supervised classification reduction |
-| **PLS/PLS-DA** | Partial Least Squares | Supervised reduction for regression/classification |
+| **PLS-DA** | Partial Least Squares Discriminant Analysis | Supervised classification reduction |
 | **SparsePLS** | Sparse Partial Least Squares | Sparse feature discovery |
 
-### 🎯 Feature Selection Methods (5 types)
+### 🎯 Feature Selection Methods (5 types per task)
 
+**Regression Selectors (5):**
 | Algorithm | Description | Strength |
 |-----------|-------------|-----------|
 | **ElasticNetFS** | ElasticNet-based selection | L1/L2 regularization balance |
-| **LASSO** | L1-regularized selection | Automatic feature pruning |
 | **RFImportance** | Random Forest importance | Tree-based feature ranking |
 | **VarianceFTest** | F-test based selection | Statistical significance |
+| **LASSO** | L1-regularized selection | Automatic feature pruning |
 | **f_regressionFS** | F-statistic regression selection | Regression-specific statistics |
+
+**Classification Selectors (5):**
+| Algorithm | Description | Strength |
+|-----------|-------------|-----------|
+| **ElasticNetFS** | ElasticNet-based selection | L1/L2 regularization balance |
+| **RFImportance** | Random Forest importance | Tree-based feature ranking |
+| **VarianceFTest** | F-test based selection | Statistical significance |
+| **LASSO** | L1-regularized selection | Automatic feature pruning |
+| **LogisticL1** | Logistic regression with L1 penalty | Classification-specific selection |
 
 ### 🔗 Fusion Strategies
 
@@ -156,10 +179,17 @@ flowchart TD
 - **Average/Sum/Max**: Handle missing modalities gracefully
 - **Early Fusion PCA**: Simple and robust with imputation
 
-### 🤖 Machine Learning Models
+### 🤖 Machine Learning Models (3 per task)
 
-**Regression**: LinearRegression, ElasticNet, RandomForestRegressor
-**Classification**: LogisticRegression, RandomForestClassifier, SVC
+**Regression Models (3):**
+- **LinearRegression**: Linear baseline model
+- **ElasticNet**: L1/L2 regularized regression
+- **RandomForestRegressor**: Ensemble tree-based regression
+
+**Classification Models (3):**
+- **LogisticRegression**: Linear classification baseline
+- **RandomForestClassifier**: Ensemble tree-based classification
+- **SVC**: Support Vector Classification
 
 *All models use pre-tuned hyperparameters stored in `hp_best/` directory*
 
@@ -167,12 +197,12 @@ flowchart TD
 
 ### 🔬 Comprehensive Evaluation Framework
 
-The pipeline implements a **4-level nested experimental loop**:
+The pipeline implements a **4-level nested experimental loop** to test interactions between fusion techniques, feature engineering algorithms, models, and data conditions:
 
-  ```python
+```python
 for missing_percentage in [0%, 20%, 50%]:           # Missing data scenarios
-    for algorithm in [extractors + selectors]:      # 11 feature processing algorithms  
-        for n_features in [8, 16, 32]:             # Feature counts (selectors only)
+    for algorithm in [extractors + selectors]:      # 14 feature engineering algorithms  
+        for n_features in [8, 16, 32]:             # Feature/component counts
             for fusion_method in fusion_methods:    # 8 methods (clean) / 5 methods (missing)
                 for model in models:                # 3 models per task
                     # Run complete experiment with 5-fold CV
@@ -180,6 +210,10 @@ for missing_percentage in [0%, 20%, 50%]:           # Missing data scenarios
 
 **Experimental Scope**:
 - **Total Combinations**: ~2,640 experiments per dataset
+- **Fusion Techniques**: 8 methods for clean data, 5 methods for missing data
+- **Feature Engineering**: 6 extractors + 5 selectors per task type
+- **Models**: 3 models per task (regression/classification)
+- **Missing Data**: 3 scenarios (0%, 20%, 50%)
 - **Cross-Validation**: 5-fold stratified (classification) / standard (regression)
 - **Evaluation Metrics**: 
   - Regression: R², MSE, MAE
@@ -201,30 +235,47 @@ for missing_percentage in [0%, 20%, 50%]:           # Missing data scenarios
 # Clone the repository
 git clone https://github.com/kpnowak/OUH-Internship-Krzysztof-Nowak.git
 cd OUH-Internship-Krzysztof-Nowak
-
-# Activate the conda environment for this project
-conda activate OUH_final_project
-
-# Install using convenience script (recommended)
-python install.py
-
-# Or install manually
-cd setup_and_info
-pip install -e .
 ```
 
 ### 📦 Installation Options
 
-**Environment Setup**:
-This project uses a dedicated conda environment called `OUH_final_project` that contains all required dependencies and configurations optimized for the multi-omics pipeline.
+You have **2 installation options**:
 
+#### **Option 1: Conda Environment (Recommended)**
+
+**Step 1: Create and activate conda environment**
 ```bash
-# Always activate the project environment before running
+# Create environment from environment.yml
+conda env create -f environment.yml
+
+# Activate the environment
 conda activate OUH_final_project
 ```
 
-**Installation Modes**:
-The `install.py` script provides multiple installation modes:
+**Step 2: Verify installation**
+```bash
+# Test installation
+python setup_and_info/test_installation.py
+
+# Quick functionality test
+python main.py --help
+```
+
+**To deactivate conda environment:**
+```bash
+conda deactivate
+```
+
+#### **Option 2: Direct Installation with install.py**
+
+**Step 1: Run interactive installer**
+```bash
+# Run the interactive installation script
+python install.py
+```
+
+**Step 2: Choose installation type**
+The script will prompt you to choose from 5 installation modes:
 
 1. **Basic Installation**: Core dependencies only
 2. **Visualization**: Core + enhanced plotting capabilities  
@@ -232,10 +283,13 @@ The `install.py` script provides multiple installation modes:
 4. **Advanced**: Core + experimental fusion libraries (SNF, MKL)
 5. **Full Installation**: All dependencies
 
+**Step 3: Automatic verification**
+The `install.py` script automatically runs `test_installation.py` to verify the installation.
+
 ### ✅ Verify Installation
 
 ```bash
-# Test installation
+# Test installation (if not using install.py)
 python setup_and_info/test_installation.py
 
 # Quick functionality test
@@ -247,13 +301,13 @@ python main.py --help
 ### 🎮 Basic Execution
 
 ```bash
-# Default: Feature-first architecture (RECOMMENDED)
+# Default: Intermediate integration approach (RECOMMENDED)
 python main.py
 
 # Memory-optimized sequential processing
 python main.py --sequential
 
-# Legacy fusion-first architecture (for comparison)
+# Legacy fusion-first approach (for comparison)
 python main.py --fusion-first
 ```
 
@@ -278,7 +332,7 @@ python main.py --skip-mad                       # Skip statistical analysis
 
 | Architecture | Command | Order | Best For |
 |-------------|---------|-------|----------|
-| **Feature-First** (Default) | `python main.py` | Raw → Feature → Fusion → Model | Standard analysis |
+| **Intermediate Integration** (Default) | `python main.py` | Raw → Feature → Fusion → Model | Standard analysis |
 | **Sequential** (Memory-friendly) | `python main.py --sequential` | One algorithm at a time | Large datasets |
 | **Fusion-First** (Legacy) | `python main.py --fusion-first` | Raw → Fusion → Feature → Model | Research comparison |
 
@@ -286,16 +340,37 @@ python main.py --skip-mad                       # Skip statistical analysis
 
 ### 📁 Output Structure
 
+The pipeline generates results in **two separate folders**:
+
+#### **📊 Raw Results (`output/`)**
+Contains all experimental results from **10,206 combinations tested**:
+```
+output/
+├── classification/
+│   ├── [Dataset]/                         # Raw experimental results per dataset
+│   │   ├── extractor_rankings.csv        # Algorithm performance rankings
+│   │   ├── fusion_technique_rankings.csv # Fusion method rankings
+│   │   ├── top_50_combinations_*.csv     # Best combinations by scenario
+│   │   └── detailed_results/              # Individual experiment results
+│   └── combined/                          # Cross-dataset analysis
+└── regression/
+    └── [Similar structure for regression tasks]
+```
+
+#### **📈 Analyzed Results (`results/`)**
+Contains **analyzed and processed results** from the `output/` folder:
 ```
 results/
 ├── classification/
-│   ├── combined/                           # Cross-dataset rankings
-│   │   ├── extractor_rankings.csv         # Algorithm performance rankings
-│   │   ├── fusion_technique_rankings.csv  # Fusion method rankings
+│   ├── combined/                          # Cross-dataset rankings
+│   │   ├── extractor_rankings.csv        # Analyzed algorithm rankings
+│   │   ├── fusion_technique_rankings.csv # Analyzed fusion rankings
 │   │   └── top_50_combinations_*.csv     # Best combinations by scenario
-│   └── [Dataset]/                        # Per-dataset detailed results
-└── regression/
-    └── [Similar structure for regression tasks]
+│   └── [Dataset]/                        # Per-dataset analyzed results
+├── regression/
+│   └── [Similar structure for regression tasks]
+├── combined_analysis_plots_grid.png       # Combined visualization
+└── numbered_classification_plots.png      # Numbered plot legend
 ```
 
 ### 📈 Key Performance Metrics
@@ -407,10 +482,10 @@ OUH-Internship-Krzysztof-Nowak/
 
 ## Recent Enhancements
 
-### 🆕 Version 4.0 - Feature-First Implementation
-- ✅ **Feature-First Architecture**: Complete implementation as default
+### 🆕 Version 4.0 - Intermediate Integration Implementation
+- ✅ **Intermediate Integration Approach**: Complete implementation as default
 - ✅ **Enhanced Experimental Loop**: Systematic algorithm→features→fusion→model evaluation
-- ✅ **Dual Architecture Support**: Feature-first + legacy fusion-first available
+- ✅ **Dual Architecture Support**: Intermediate integration + legacy fusion-first available
 - ✅ **Memory Optimization**: Sequential processing for large datasets
 
 ### 🔧 Version 3.1 - Robustness & Stability
@@ -472,7 +547,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 <div align="center">
 
-**🧬 Advancing Cancer Detection through Multi-Omics Data Fusion 🧬**
+**🧬 Robust Multi-Omics Integration for Cancer Prediction 🧬**
 
 *VU Amsterdam • Bachelor's Thesis in Artificial Intelligence • 2025*
 

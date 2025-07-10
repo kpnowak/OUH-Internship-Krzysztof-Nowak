@@ -1,0 +1,7 @@
+name: OUH_final_project
+channels:
+  - defaults
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+  - https://repo.anaconda.com/pkgs/msys2
+prefix: C:\Users\krzys\anaconda3\envs\OUH_final_project

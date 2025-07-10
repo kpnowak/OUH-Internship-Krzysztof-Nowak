@@ -1,0 +1,389 @@
+{
+  "analysis": {
+    "overall_summary": {
+      "total_experiments": 10206,
+      "valid_fit_time_experiments": 10206,
+      "min_fit_time": 0.0008002281188964844,
+      "max_fit_time": 42.593051481246945,
+      "mean_fit_time": 0.1477421124682762,
+      "median_fit_time": 0.06280777454376221,
+      "std_fit_time": 0.4585605906813154
+    },
+    "by_algorithm_type": {
+      "extractor": {
+        "count": 2916,
+        "min_fit_time": 0.0008002281188964844,
+        "max_fit_time": 42.593051481246945,
+        "mean_fit_time": 0.10540987992319388,
+        "median_fit_time": 0.042179656028747556,
+        "std_fit_time": 0.7956735495041263
+      },
+      "selector": {
+        "count": 7290,
+        "min_fit_time": 0.0009044170379638672,
+        "max_fit_time": 1.3610144138336182,
+        "mean_fit_time": 0.16467500548630912,
+        "median_fit_time": 0.07750473022460938,
+        "std_fit_time": 0.2005252305929609
+      }
+    },
+    "by_fusion_method": {
+      "average": {
+        "count": 1701,
+        "min_fit_time": 0.0008002281188964844,
+        "max_fit_time": 0.7719882011413575,
+        "mean_fit_time": 0.12435934878601038,
+        "median_fit_time": 0.0443453311920166,
+        "std_fit_time": 0.16439408480106552
+      },
+      "attention_weighted": {
+        "count": 567,
+        "min_fit_time": 0.001199817657470703,
+        "max_fit_time": 2.0605565547943114,
+        "mean_fit_time": 0.1534684957440358,
+        "median_fit_time": 0.05235500335693359,
+        "std_fit_time": 0.21708174566502053
+      },
+      "mkl": {
+        "count": 1701,
+        "min_fit_time": 0.0008011817932128906,
+        "max_fit_time": 1.2992969036102295,
+        "mean_fit_time": 0.1614595647001182,
+        "median_fit_time": 0.08306913375854492,
+        "std_fit_time": 0.20010769913567908
+      },
+      "learnable_weighted": {
+        "count": 567,
+        "min_fit_time": 0.001399850845336914,
+        "max_fit_time": 1.8717594146728516,
+        "mean_fit_time": 0.15351101624692348,
+        "median_fit_time": 0.05315465927124023,
+        "std_fit_time": 0.21459254670909544
+      },
+      "standard_concat": {
+        "count": 567,
+        "min_fit_time": 0.0010004520416259765,
+        "max_fit_time": 1.8237980842590331,
+        "mean_fit_time": 0.17079438608159464,
+        "median_fit_time": 0.08703198432922363,
+        "std_fit_time": 0.21745041275878688
+      },
+      "early_fusion_pca": {
+        "count": 1701,
+        "min_fit_time": 0.0008012294769287109,
+        "max_fit_time": 0.7670567989349365,
+        "mean_fit_time": 0.13452722915546253,
+        "median_fit_time": 0.06096768379211426,
+        "std_fit_time": 0.16547030242938665
+      },
+      "sum": {
+        "count": 1701,
+        "min_fit_time": 0.0008002758026123047,
+        "max_fit_time": 42.593051481246945,
+        "mean_fit_time": 0.17751188987426939,
+        "median_fit_time": 0.08045821189880371,
+        "std_fit_time": 1.0451233869036713
+      },
+      "max": {
+        "count": 1701,
+        "min_fit_time": 0.0008009910583496094,
+        "max_fit_time": 0.7863600254058838,
+        "mean_fit_time": 0.12933667626961198,
+        "median_fit_time": 0.04959845542907715,
+        "std_fit_time": 0.1626463043769884
+      }
+    },
+    "by_model": {
+      "LinearRegression": {
+        "count": 756,
+        "min_fit_time": 0.0034863948822021484,
+        "max_fit_time": 0.8953616142272949,
+        "mean_fit_time": 0.12664066546808475,
+        "median_fit_time": 0.08647282123565674,
+        "std_fit_time": 0.18455997940937377
+      },
+      "ElasticNet": {
+        "count": 756,
+        "min_fit_time": 0.03187088966369629,
+        "max_fit_time": 0.23105125427246093,
+        "mean_fit_time": 0.050084095215671275,
+        "median_fit_time": 0.03973498344421387,
+        "std_fit_time": 0.031112496537123488
+      },
+      "RandomForestRegressor": {
+        "count": 756,
+        "min_fit_time": 0.10498414039611817,
+        "max_fit_time": 0.6732851505279541,
+        "mean_fit_time": 0.2552105744679769,
+        "median_fit_time": 0.28616580963134763,
+        "std_fit_time": 0.0995154314208864
+      },
+      "LogisticRegression": {
+        "count": 2646,
+        "min_fit_time": 0.0008002281188964844,
+        "max_fit_time": 2.0605565547943114,
+        "mean_fit_time": 0.012785747748653905,
+        "median_fit_time": 0.006433510780334472,
+        "std_fit_time": 0.07108778660145545
+      },
+      "RandomForestClassifier": {
+        "count": 2646,
+        "min_fit_time": 0.077885103225708,
+        "max_fit_time": 42.593051481246945,
+        "mean_fit_time": 0.3493144548939469,
+        "median_fit_time": 0.2496814489364624,
+        "std_fit_time": 0.8425342687990901
+      },
+      "SVC": {
+        "count": 2646,
+        "min_fit_time": 0.0026025772094726562,
+        "max_fit_time": 0.8851759910583497,
+        "mean_fit_time": 0.08435213540596938,
+        "median_fit_time": 0.046445250511169434,
+        "std_fit_time": 0.12047498632269425
+      }
+    },
+    "by_task_type": {
+      "regression": {
+        "count": 2268,
+        "min_fit_time": 0.0034863948822021484,
+        "max_fit_time": 0.8953616142272949,
+        "mean_fit_time": 0.14397844505057764,
+        "median_fit_time": 0.09031486511230469,
+        "std_fit_time": 0.14876476545702697
+      },
+      "classification": {
+        "count": 7938,
+        "min_fit_time": 0.0008002281188964844,
+        "max_fit_time": 42.593051481246945,
+        "mean_fit_time": 0.14881744601619007,
+        "median_fit_time": 0.04816415309906005,
+        "std_fit_time": 0.5138466872581271
+      }
+    },
+    "by_missing_percentage": {
+      "0%": {
+        "count": 4536,
+        "min_fit_time": 0.0008004188537597656,
+        "max_fit_time": 2.0605565547943114,
+        "mean_fit_time": 0.14728834661646917,
+        "median_fit_time": 0.061857414245605466,
+        "std_fit_time": 0.19222500926787553
+      },
+      "20%": {
+        "count": 2835,
+        "min_fit_time": 0.00080108642578125,
+        "max_fit_time": 1.2219189167022706,
+        "mean_fit_time": 0.14197402775813245,
+        "median_fit_time": 0.06389684677124023,
+        "std_fit_time": 0.17840659670572206
+      },
+      "50%": {
+        "count": 2835,
+        "min_fit_time": 0.0008002281188964844,
+        "max_fit_time": 42.593051481246945,
+        "mean_fit_time": 0.15423622254131122,
+        "median_fit_time": 0.06283197402954102,
+        "std_fit_time": 0.8161861226095427
+      }
+    },
+    "extreme_cases": {
+      "fastest": {
+        "fit_time": 0.0008002281188964844,
+        "dataset": "Ovarian",
+        "algorithm": "LDA",
+        "fusion_method": "average",
+        "model": "LogisticRegression",
+        "task_type": "classification"
+      },
+      "slowest": {
+        "fit_time": 42.593051481246945,
+        "dataset": "Melanoma",
+        "algorithm": "SparsePLS",
+        "fusion_method": "sum",
+        "model": "RandomForestClassifier",
+        "task_type": "classification"
+      }
+    }
+  },
+  "algorithm_analysis": {
+    "PCA": {
+      "type": "extractor",
+      "count": 486,
+      "min_fit_time": 0.0010015010833740235,
+      "max_fit_time": 0.3666827201843262,
+      "mean_fit_time": 0.08209410547719571,
+      "median_fit_time": 0.04644563198089599,
+      "std_fit_time": 0.08440261649217179,
+      "regression_count": 108,
+      "classification_count": 378
+    },
+    "KPCA": {
+      "type": "extractor",
+      "count": 486,
+      "min_fit_time": 0.0013014316558837891,
+      "max_fit_time": 0.5210527420043946,
+      "mean_fit_time": 0.07404342158831687,
+      "median_fit_time": 0.03443465232849121,
+      "std_fit_time": 0.08545797286636544,
+      "regression_count": 108,
+      "classification_count": 378
+    },
+    "FA": {
+      "type": "extractor",
+      "count": 486,
+      "min_fit_time": 0.00080108642578125,
+      "max_fit_time": 0.3612091064453125,
+      "mean_fit_time": 0.09590169225700597,
+      "median_fit_time": 0.05047011375427246,
+      "std_fit_time": 0.10057295591694525,
+      "regression_count": 108,
+      "classification_count": 378
+    },
+    "PLS": {
+      "type": "extractor",
+      "count": 108,
+      "min_fit_time": 0.0034863948822021484,
+      "max_fit_time": 0.5007742881774903,
+      "mean_fit_time": 0.15972646298231902,
+      "median_fit_time": 0.04170455932617187,
+      "std_fit_time": 0.18881312227196687,
+      "regression_count": 108,
+      "classification_count": 0
+    },
+    "KPLS": {
+      "type": "extractor",
+      "count": 108,
+      "min_fit_time": 0.009967660903930664,
+      "max_fit_time": 0.34424777030944825,
+      "mean_fit_time": 0.12663552231258815,
+      "median_fit_time": 0.04811091423034668,
+      "std_fit_time": 0.12307595644328251,
+      "regression_count": 108,
+      "classification_count": 0
+    },
+    "SparsePLS": {
+      "type": "extractor",
+      "count": 486,
+      "min_fit_time": 0.0010007381439208984,
+      "max_fit_time": 42.593051481246945,
+      "mean_fit_time": 0.20691883122479476,
+      "median_fit_time": 0.06553413867950439,
+      "std_fit_time": 1.935160478421719,
+      "regression_count": 108,
+      "classification_count": 378
+    },
+    "LDA": {
+      "type": "extractor",
+      "count": 378,
+      "min_fit_time": 0.0008002281188964844,
+      "max_fit_time": 0.25287561416625975,
+      "mean_fit_time": 0.06680175047072154,
+      "median_fit_time": 0.01990675926208496,
+      "std_fit_time": 0.07993682641661981,
+      "regression_count": 0,
+      "classification_count": 378
+    },
+    "PLS-DA": {
+      "type": "extractor",
+      "count": 378,
+      "min_fit_time": 0.0008002758026123047,
+      "max_fit_time": 0.2384714126586914,
+      "mean_fit_time": 0.07445354814882632,
+      "median_fit_time": 0.03768963813781738,
+      "std_fit_time": 0.07964549207067209,
+      "regression_count": 0,
+      "classification_count": 378
+    },
+    "ElasticNetFS": {
+      "type": "selector",
+      "count": 1458,
+      "min_fit_time": 0.002367401123046875,
+      "max_fit_time": 0.8577211856842041,
+      "mean_fit_time": 0.10335858963808077,
+      "median_fit_time": 0.07856476306915283,
+      "std_fit_time": 0.12075095966733554,
+      "regression_count": 324,
+      "classification_count": 1134
+    },
+    "RFImportance": {
+      "type": "selector",
+      "count": 1458,
+      "min_fit_time": 0.0009044170379638672,
+      "max_fit_time": 1.087550115585327,
+      "mean_fit_time": 0.1591466114517756,
+      "median_fit_time": 0.07781176567077636,
+      "std_fit_time": 0.18333072912152018,
+      "regression_count": 324,
+      "classification_count": 1134
+    },
+    "VarianceFTest": {
+      "type": "selector",
+      "count": 1458,
+      "min_fit_time": 0.001000690460205078,
+      "max_fit_time": 1.3610144138336182,
+      "mean_fit_time": 0.1911668718924084,
+      "median_fit_time": 0.07652420997619629,
+      "std_fit_time": 0.23577286060016617,
+      "regression_count": 324,
+      "classification_count": 1134
+    },
+    "LASSO": {
+      "type": "selector",
+      "count": 1458,
+      "min_fit_time": 0.0020022869110107424,
+      "max_fit_time": 0.8474807262420654,
+      "mean_fit_time": 0.18312169508024825,
+      "median_fit_time": 0.07877087593078613,
+      "std_fit_time": 0.2135833268913033,
+      "regression_count": 324,
+      "classification_count": 1134
+    },
+    "f_regressionFS": {
+      "type": "selector",
+      "count": 324,
+      "min_fit_time": 0.03187088966369629,
+      "max_fit_time": 0.8540023803710938,
+      "mean_fit_time": 0.16987932684980792,
+      "median_fit_time": 0.09142615795135497,
+      "std_fit_time": 0.15863962358360578,
+      "regression_count": 324,
+      "classification_count": 0
+    },
+    "LogisticL1": {
+      "type": "selector",
+      "count": 1134,
+      "min_fit_time": 0.0020148754119873047,
+      "max_fit_time": 0.8482154369354248,
+      "mean_fit_time": 0.191353240088811,
+      "median_fit_time": 0.05423972606658936,
+      "std_fit_time": 0.22902913640257744,
+      "regression_count": 0,
+      "classification_count": 1134
+    }
+  },
+  "summary": {
+    "total_experiments": 10206,
+    "valid_fit_time_experiments": 10206,
+    "datasets_analyzed": [
+      "AML",
+      "Sarcoma",
+      "Breast",
+      "Colon",
+      "Kidney",
+      "Liver",
+      "Lung",
+      "Melanoma",
+      "Ovarian"
+    ],
+    "task_types": [
+      "regression",
+      "classification"
+    ],
+    "missing_percentages": [
+      0.0,
+      0.2,
+      0.5
+    ]
+  }
+}
