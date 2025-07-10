@@ -84,7 +84,7 @@ flowchart TD
     end
     
     subgraph "Fusion Strategies"
-        D1[Attention Weighted]
+        D1[Attention Weighted, Learnable Weighted, Standard Concatenation]
         D2[Multiple Kernel Learning]
         D3[Element-wise: Average, Sum, Max]
         D4[Early Fusion PCA]
