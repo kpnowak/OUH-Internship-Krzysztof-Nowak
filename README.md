@@ -9,18 +9,26 @@
 This repository contains a comprehensive machine learning pipeline for **robust multi-omics integration** using intermediate fusion techniques. This project is part of a Bachelor's Thesis in Artificial Intelligence at VU Amsterdam, focusing on comparative analysis of feature engineering and intermediate fusion techniques for cancer prediction. It contributes to a larger research initiative focused on developing advanced machine learning models for early 
 and accurate cancer detection.
 
+**Main Problem**: The central problem addressed by this thesis is the lack of a standardised framework for benchmarking multi-omics integration pipelines, which hinders both the identification of optimal configurations and the development of clinically viable predictive models. The literature reveals two primary gaps: first, a notable absence of systematic evaluations focused specifically on intermediate fusion methods that merge data after initial feature processing; second, the robustness of these computational pipelines to missing data, a common challenge in real-world clinical settings, is rarely assessed in a controlled manner.
+
+**Primary Research Goal**: Create maximally predictive models from complex, multi-view patient data to diagnose cancer more accurately and rapidly. However, clinical translation is hindered by high data dimensionality, heterogeneity, and missing values. While many studies apply feature engineering to individual data types, a critical unresolved question is how to best combine these processed features in an intermediate step for optimal predictive performance. This thesis directly confronts this challenge through rigorous comparative analysis of intermediate fusion techniques.
+
 The pipeline investigates **fusion techniques** and **feature engineering algorithms** for multi-omics cancer data, implementing an **intermediate integration approach** where feature processing is applied to each modality separately **before** fusion occurs.
 
-### Research Context & Objectives
+### Research Questions and Objectives
 
-**Primary Goal**: Test fusion techniques and feature engineering algorithms (with emphasis on fusion techniques) and analyze how they interact with different models, missing data percentages, and feature/component numbers.
+To address the identified gaps, the primary research question guiding this thesis is:
 
-**Research Objectives**:
-1. **Evaluate** fusion techniques and feature engineering algorithms across diverse scenarios
-2. **Analyze** interactions between fusion methods, models, and data conditions
-3. **Investigate** performance under different missing data percentages (0%, 20%, 50%)
-4. **Study** impact of feature/component numbers on algorithm performance
-5. **Determine** optimal combinations for multi-omics cancer data analysis
+> How do different intermediate fusion strategies and feature engineering methods compare in terms of predictive performance, computational efficiency, and robustness to missing data for multi-omics cancer prediction?
+
+This study is structured around two primary, interconnected objectives, designed to answer this question comprehensively:
+
+1. **To develop and present a modular, extensible framework** for the systematic benchmarking of multi-omics integration pipelines.
+
+2. **To deploy this framework in a large-scale comparative analysis** aimed at identifying the most robust, performant, and efficient pipeline configurations for cancer prediction. This primary objective is achieved through the following goals:
+   - **To benchmark eight intermediate fusion strategies** across nine distinct cancer datasets, utilising Matthew's Correlation Coefficient (MCC) for classification tasks and the Coefficient of Determination (R²) for regression tasks as the primary performance metrics.
+   - **To evaluate how the application of various combinations** of feature selection and extraction algorithms, fusion techniques, and models influences the predictive performance and computational cost of the overall pipeline.
+   - **To systematically assess the robustness** of each configuration under clinically relevant scenarios of simulated missing data in modalities (0%, 20%, and 50%).
 
 ### Processing Approach: Intermediate Integration
 
@@ -56,46 +64,7 @@ The pipeline implements an **intermediate integration approach** for multi-omics
 
 ## Pipeline Architecture
 
-### 🏗️ Intermediate Integration Processing Workflow
 
-```mermaid
-flowchart TD
-    A[Raw Multi-Modal Data] --> B[4-Phase Enhanced Preprocessing]
-    B --> C[Feature Processing per Modality]
-    C --> D[Fusion of Processed Features]
-    D --> E[Model Training & Evaluation]
-    
-    subgraph "Multi-Modal Data"
-        A1[Gene Expression<br/>~20,000 features]
-        A2[miRNA<br/>~1,800 features]
-        A3[DNA Methylation<br/>~27,000 features]
-    end
-    
-    subgraph "4-Phase Preprocessing"
-        B1[Phase 1: Data Quality Assessment]
-        B2[Phase 2: Fusion-Aware Processing]
-        B3[Phase 3: Missing Data Management]
-        B4[Phase 4: Coordinated Validation]
-    end
-    
-    subgraph "Feature Engineering"
-        C1[Extractors: PCA, KPCA, FA, LDA, PLS]
-        C2[Selectors: ElasticNetFS, LASSO, RFImportance]
-    end
-    
-    subgraph "Fusion Strategies"
-        D1[Attention Weighted, Learnable Weighted, Standard Concatenation]
-        D2[Multiple Kernel Learning]
-        D3[Element-wise: Average, Sum, Max]
-        D4[Early Fusion PCA]
-    end
-    
-    style A fill:#e1f5fe
-    style B fill:#f3e5f5
-    style C fill:#fff3e0
-    style D fill:#fce4ec
-    style E fill:#e0f2f1
-```
 
 ### 🔄 4-Phase Enhanced Preprocessing
 
@@ -209,7 +178,7 @@ for missing_percentage in [0%, 20%, 50%]:           # Missing data scenarios
 ```
 
 **Experimental Scope**:
-- **Total Combinations**: ~2,640 experiments per dataset
+- **Total Combinations**: 10,206 experiments
 - **Fusion Techniques**: 8 methods for clean data, 5 methods for missing data
 - **Feature Engineering**: 6 extractors + 5 selectors per task type
 - **Models**: 3 models per task (regression/classification)
